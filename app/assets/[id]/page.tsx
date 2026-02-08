@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
+import type { Database } from "@/db/types";
 import { getSupabaseClient } from "@/lib/supabaseClient";
 
 export const dynamic = "force-dynamic";
@@ -189,7 +190,7 @@ export default function EditAssetPage() {
 
     const { error } = await supabase
       .from("assets")
-      .update(payload)
+      .update(payload as Database["public"]["Tables"]["assets"]["Update"])
       .eq("id", assetId);
 
     if (error) {
