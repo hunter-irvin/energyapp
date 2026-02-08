@@ -6,6 +6,9 @@ export default function HomePage() {
         Project scaffold initialized. Use the README to configure Supabase and
         begin building assets, scenarios, forecasts, and optimization runs.
       </p>
+      <p>
+        <a href="/assets">Go to Asset Builder →</a>
+      </p>
     </main>
   );
 }
