@@ -1,6 +1,7 @@
 import { createClient } from "@supabase/supabase-js";
+import type { Database } from "@/db/types";
 
-let cachedClient: ReturnType<typeof createClient> | null = null;
+let cachedClient: ReturnType<typeof createClient<Database>> | null = null;
 
 export const getSupabaseClient = () => {
   if (cachedClient) return cachedClient;
@@ -12,6 +13,6 @@ export const getSupabaseClient = () => {
     return null;
   }
 
-  cachedClient = createClient(supabaseUrl, supabaseAnonKey);
+  cachedClient = createClient<Database>(supabaseUrl, supabaseAnonKey);
   return cachedClient;
 };
