@@ -28,6 +28,27 @@ type AssetFormState = {
   poi_limit_mw: string;
 };
 
+type AssetRecord = {
+  name: string | null;
+  zone_id: string | null;
+  lat: number | null;
+  lon: number | null;
+  energy_mwh: number | null;
+  duration_hours: number | null;
+  power_mw: number | null;
+  solar_mw: number | null;
+  wind_mw: number | null;
+  max_charge_mw: number | null;
+  max_discharge_mw: number | null;
+  round_trip_efficiency: number | null;
+  charge_efficiency: number | null;
+  discharge_efficiency: number | null;
+  min_soc_frac: number | null;
+  max_soc_frac: number | null;
+  initial_soc_frac: number | null;
+  poi_limit_mw: number | null;
+};
+
 const DEFAULT_DURATION = 2;
 
 const toNumber = (value: string) =>
@@ -67,25 +88,26 @@ export default function EditAssetPage() {
         setError(error.message);
         setForm(null);
       } else if (data) {
+        const asset = data as AssetRecord;
         setForm({
-          name: data.name ?? "",
-          zone_id: data.zone_id ?? "",
-          lat: data.lat?.toString() ?? "",
-          lon: data.lon?.toString() ?? "",
-          energy_mwh: data.energy_mwh?.toString() ?? "",
-          duration_hours: data.duration_hours?.toString() ?? "",
-          power_mw: data.power_mw?.toString() ?? "",
-          solar_mw: data.solar_mw?.toString() ?? "0",
-          wind_mw: data.wind_mw?.toString() ?? "0",
-          max_charge_mw: data.max_charge_mw?.toString() ?? "",
-          max_discharge_mw: data.max_discharge_mw?.toString() ?? "",
-          round_trip_efficiency: data.round_trip_efficiency?.toString() ?? "0.9",
-          charge_efficiency: data.charge_efficiency?.toString() ?? "0.95",
-          discharge_efficiency: data.discharge_efficiency?.toString() ?? "0.95",
-          min_soc_frac: data.min_soc_frac?.toString() ?? "0.1",
-          max_soc_frac: data.max_soc_frac?.toString() ?? "0.9",
-          initial_soc_frac: data.initial_soc_frac?.toString() ?? "0.5",
-          poi_limit_mw: data.poi_limit_mw?.toString() ?? "",
+          name: asset.name ?? "",
+          zone_id: asset.zone_id ?? "",
+          lat: asset.lat?.toString() ?? "",
+          lon: asset.lon?.toString() ?? "",
+          energy_mwh: asset.energy_mwh?.toString() ?? "",
+          duration_hours: asset.duration_hours?.toString() ?? "",
+          power_mw: asset.power_mw?.toString() ?? "",
+          solar_mw: asset.solar_mw?.toString() ?? "0",
+          wind_mw: asset.wind_mw?.toString() ?? "0",
+          max_charge_mw: asset.max_charge_mw?.toString() ?? "",
+          max_discharge_mw: asset.max_discharge_mw?.toString() ?? "",
+          round_trip_efficiency: asset.round_trip_efficiency?.toString() ?? "0.9",
+          charge_efficiency: asset.charge_efficiency?.toString() ?? "0.95",
+          discharge_efficiency: asset.discharge_efficiency?.toString() ?? "0.95",
+          min_soc_frac: asset.min_soc_frac?.toString() ?? "0.1",
+          max_soc_frac: asset.max_soc_frac?.toString() ?? "0.9",
+          initial_soc_frac: asset.initial_soc_frac?.toString() ?? "0.5",
+          poi_limit_mw: asset.poi_limit_mw?.toString() ?? "",
         });
       }
       setLoading(false);
