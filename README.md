@@ -58,3 +58,6 @@ These are required by the Supabase client in `lib/supabaseClient.ts`.
 - Build asset and scenario pages under `app/`.
 - Add synthetic forecasting services and the MILP optimizer under `lib/`.
 - Create results visualizations and CSV export.
+
+## Supabase schema (step 2)
+Run the SQL in `db/schema.sql` inside the Supabase SQL editor to create the core tables for assets, scenarios, timeseries, and optimization runs/results.
