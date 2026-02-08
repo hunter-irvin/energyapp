@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useEffect, useState } from "react";
-import { supabase } from "@/lib/supabaseClient";
+import { getSupabaseClient } from "@/lib/supabaseClient";
 
 type Asset = {
   id: string;
@@ -22,6 +22,16 @@ export default function AssetsPage() {
   const loadAssets = async () => {
     setLoading(true);
     setError(null);
+    const supabase = getSupabaseClient();
+    if (!supabase) {
+      setError(
+        "Missing Supabase env vars. Set NEXT_PUBLIC_SUPABASE_URL and NEXT_PUBLIC_SUPABASE_ANON_KEY."
+      );
+      setAssets([]);
+      setLoading(false);
+      return;
+    }
+
     const { data, error } = await supabase
       .from("assets")
       .select("id,name,zone_id,energy_mwh,power_mw,solar_mw,wind_mw")
@@ -45,6 +55,14 @@ export default function AssetsPage() {
       "Delete this asset? This cannot be undone."
     );
     if (!confirmed) return;
+
+    const supabase = getSupabaseClient();
+    if (!supabase) {
+      setError(
+        "Missing Supabase env vars. Set NEXT_PUBLIC_SUPABASE_URL and NEXT_PUBLIC_SUPABASE_ANON_KEY."
+      );
+      return;
+    }
 
     const { error } = await supabase.from("assets").delete().eq("id", id);
     if (error) {

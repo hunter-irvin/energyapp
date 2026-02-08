@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
-import { supabase } from "@/lib/supabaseClient";
+import { getSupabaseClient } from "@/lib/supabaseClient";
 
 type AssetFormState = {
   name: string;
@@ -45,6 +45,16 @@ export default function EditAssetPage() {
     const loadAsset = async () => {
       setLoading(true);
       setError(null);
+      const supabase = getSupabaseClient();
+      if (!supabase) {
+        setError(
+          "Missing Supabase env vars. Set NEXT_PUBLIC_SUPABASE_URL and NEXT_PUBLIC_SUPABASE_ANON_KEY."
+        );
+        setForm(null);
+        setLoading(false);
+        return;
+      }
+
       const { data, error } = await supabase
         .from("assets")
         .select("*")
@@ -123,6 +133,15 @@ export default function EditAssetPage() {
     setSaving(true);
     setError(null);
 
+    const supabase = getSupabaseClient();
+    if (!supabase) {
+      setError(
+        "Missing Supabase env vars. Set NEXT_PUBLIC_SUPABASE_URL and NEXT_PUBLIC_SUPABASE_ANON_KEY."
+      );
+      setSaving(false);
+      return;
+    }
+
     const payload = {
       name: form.name,
       zone_id: form.zone_id,
@@ -163,6 +182,14 @@ export default function EditAssetPage() {
       "Delete this asset? This cannot be undone."
     );
     if (!confirmed) return;
+
+    const supabase = getSupabaseClient();
+    if (!supabase) {
+      setError(
+        "Missing Supabase env vars. Set NEXT_PUBLIC_SUPABASE_URL and NEXT_PUBLIC_SUPABASE_ANON_KEY."
+      );
+      return;
+    }
 
     const { error } = await supabase.from("assets").delete().eq("id", assetId);
     if (error) {

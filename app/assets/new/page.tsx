@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useMemo, useState } from "react";
-import { supabase } from "@/lib/supabaseClient";
+import { getSupabaseClient } from "@/lib/supabaseClient";
 
 type AssetFormState = {
   name: string;
@@ -91,6 +91,15 @@ export default function NewAssetPage() {
     event.preventDefault();
     setSubmitting(true);
     setError(null);
+
+    const supabase = getSupabaseClient();
+    if (!supabase) {
+      setError(
+        "Missing Supabase env vars. Set NEXT_PUBLIC_SUPABASE_URL and NEXT_PUBLIC_SUPABASE_ANON_KEY."
+      );
+      setSubmitting(false);
+      return;
+    }
 
     const payload = {
       name: form.name,
