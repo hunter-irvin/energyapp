@@ -189,8 +189,8 @@ export default function EditAssetPage() {
     };
 
     const { error } = await supabase
-      .from("assets")
-      .update(payload as Database["public"]["Tables"]["assets"]["Update"])
+      .from<Database["public"]["Tables"]["assets"]["Row"]>("assets")
+      .update(payload)
       .eq("id", assetId);
 
     if (error) {
