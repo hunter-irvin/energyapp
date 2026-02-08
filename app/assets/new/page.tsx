@@ -5,6 +5,8 @@ import { useRouter } from "next/navigation";
 import { useMemo, useState } from "react";
 import { getSupabaseClient } from "@/lib/supabaseClient";
 
+export const dynamic = "force-dynamic";
+
 type AssetFormState = {
   name: string;
   zone_id: string;
