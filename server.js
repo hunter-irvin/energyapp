@@ -6,7 +6,7 @@ const path = require("path");
 
 const API_KEY = "Courz8adc7n8ydX9QySvsL29qfViI8jafqzOwqju";
 const CONTACT_EMAIL = "hunter.irvin@jacobs.com";
-const SOLAR_YEAR = "2024";
+const SOLAR_YEAR = "2014";
 const WIND_YEAR = "2014";
 const SOLAR_ENDPOINT =
   "https://developer.nrel.gov/api/nsrdb/v2/solar/nsrdb-GOES-conus-v4-0-0-download.csv";

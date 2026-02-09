@@ -17,7 +17,7 @@ const dataStore = {
   daily: { solar: [], wind: [] },
 };
 
-const SOLAR_YEAR = "2024";
+const SOLAR_YEAR = "2014";
 const WIND_YEAR = "2014";
 const PROXY_ENDPOINT = "/api/nrel-proxy";
 const DEFAULT_DATE = { month: 2, day: 9 };
@@ -148,11 +148,6 @@ const toDailyAggregation = (records, metrics) => {
     return daily;
   });
 };
-
-const normalizeRecordYear = (record, year = "2024") => ({
-  ...record,
-  Year: year,
-});
 
 const buildKey = (record) =>
   `${record.Year}-${record.Month.padStart(2, "0")}-${record.Day.padStart(2, "0")}` +
@@ -383,8 +378,8 @@ const fetchDataset = async ({ lat, lng }) => {
     windResponse.text(),
   ]);
 
-  const solarRecords = parseCsv(solarCsv).map((record) => normalizeRecordYear(record, SOLAR_YEAR));
-  const windRecords = parseCsv(windCsv).map((record) => normalizeRecordYear(record, SOLAR_YEAR));
+  const solarRecords = parseCsv(solarCsv);
+  const windRecords = parseCsv(windCsv);
 
   dataStore.raw15.solar = solarRecords;
   dataStore.raw15.wind = windRecords;
