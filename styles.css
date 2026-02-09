@@ -285,6 +285,13 @@ body {
   overflow: hidden;
 }
 
+.table-actions {
+  display: flex;
+  justify-content: center;
+  padding: 12px 0 4px;
+  background: rgba(8, 26, 66, 0.65);
+}
+
 .data-table {
   width: 100%;
   border-collapse: collapse;

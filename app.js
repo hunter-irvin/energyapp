@@ -10,6 +10,7 @@ const chartAxis = document.getElementById("chart-axis");
 const chartDisplay = document.getElementById("chart-display");
 const tablePanel = document.getElementById("table-panel");
 const tableBody = document.getElementById("table-body");
+const tableLoadMore = document.getElementById("table-load-more");
 const datePickerButton = document.getElementById("date-picker-button");
 const datePickerInput = document.getElementById("date-picker");
 
@@ -28,6 +29,11 @@ const viewState = {
   period: "day",
   view: "chart",
 };
+const tableState = {
+  pageSize: 100,
+  page: 1,
+};
+let currentSeries = null;
 
 const map = L.map("map", {
   zoomControl: false,
@@ -69,13 +75,12 @@ const formatNumber = (value) => {
   return numeric.toFixed(2);
 };
 
-const formatDateLabel = (date) => {
-  return date.toLocaleDateString("en-US", {
+const formatDateLabel = (date) =>
+  date.toLocaleDateString("en-US", {
     month: "long",
     day: "numeric",
     year: "numeric",
   });
-};
 
 const pad2 = (value) => String(value).padStart(2, "0");
 
@@ -88,6 +93,12 @@ const recordDateKey = (record) =>
 const buildRecordKey = (record) =>
   `${record.year}-${pad2(record.month)}-${pad2(record.day)}` +
   `-${pad2(record.hour ?? "00")}-${pad2(record.minute ?? "00")}`;
+
+const buildRecordKeyFromDate = (date) =>
+  `${formatDateKey(date)}-${pad2(date.getHours())}-${pad2(date.getMinutes())}`;
+
+const buildHourlyKeyFromDate = (date) =>
+  `${formatDateKey(date)}T${pad2(date.getHours())}:00`;
 
 const toTimestampDate = (timestamp) => new Date(timestamp);
 
@@ -109,7 +120,7 @@ const getWeekEnd = (weekStart) => {
 
 const parseCsv = (csvText) => {
   const lines = csvText.split(/\r?\n/).filter(Boolean);
-  const headerIndex = lines.findIndex((line) => line.startsWith("Year,Month"));
+  const headerIndex = lines.findIndex((line) => line.toLowerCase().startsWith("year,month"));
   if (headerIndex === -1) {
     return [];
   }
@@ -178,92 +189,102 @@ const toDailyAggregation = (records, metrics) => {
 };
 
 const buildSeries = (solarRecords, windRecords, period, date) => {
-  if (!solarRecords.length || !windRecords.length) {
+  if (!solarRecords.length && !windRecords.length) {
     return buildMockSeries(period);
   }
 
   if (period === "day") {
-    const dateKey = formatDateKey(date);
-    const solarDay = solarRecords.filter((record) => recordDateKey(record) === dateKey);
-    const windDay = windRecords.filter((record) => recordDateKey(record) === dateKey);
-    const windMap = new Map(windDay.map((record) => [buildRecordKey(record), record]));
-    const base = solarDay.length ? solarDay : windDay;
-    base.sort(
-      (a, b) =>
-        Number(a.hour || 0) - Number(b.hour || 0) ||
-        Number(a.minute || 0) - Number(b.minute || 0)
-    );
-    const labels = base.map(
-      (record) => `${pad2(record.hour)}:${pad2(record.minute)}`
-    );
+    const start = new Date(date);
+    start.setHours(0, 0, 0, 0);
+    const end = new Date(date);
+    end.setHours(23, 45, 0, 0);
+    const solarMap = new Map(solarRecords.map((record) => [buildRecordKey(record), record]));
+    const windMap = new Map(windRecords.map((record) => [buildRecordKey(record), record]));
+    const labels = [];
+    const solar = [];
+    const wind = [];
+    const windDirection = [];
+    for (let cursor = new Date(start); cursor <= end; cursor.setMinutes(cursor.getMinutes() + 15)) {
+      const key = buildRecordKeyFromDate(cursor);
+      const solarRecord = solarMap.get(key);
+      const windRecord = windMap.get(key);
+      labels.push(`${pad2(cursor.getHours())}:${pad2(cursor.getMinutes())}`);
+      solar.push(solarRecord ? Number(solarRecord.ghi) || 0 : 0);
+      wind.push(windRecord ? Number(windRecord.windspeed_100m) || 0 : 0);
+      windDirection.push(windRecord ? Number(windRecord.winddirection_100m) || 0 : 0);
+    }
     return {
       labels,
-      solar: base.map((record) => Number(record.ghi) || 0),
-      wind: base.map((record) => {
-        const windRecord = windMap.get(buildRecordKey(record));
-        return windRecord ? Number(windRecord.windspeed_100m) : 0;
-      }),
-      windDirection: base.map((record) => {
-        const windRecord = windMap.get(buildRecordKey(record));
-        return windRecord ? Number(windRecord.winddirection_100m) : 0;
-      }),
+      solar,
+      wind,
+      windDirection,
     };
   }
 
   if (period === "week") {
     const weekStart = getWeekStart(date);
     const weekEnd = getWeekEnd(weekStart);
-    const solarHourly = dataStore.hourly.solar.filter((record) => {
-      const recordDate = toTimestampDate(record.timestamp);
-      return recordDate >= weekStart && recordDate <= weekEnd;
-    });
-    const windMap = new Map(dataStore.hourly.wind.map((record) => [record.timestamp, record]));
-    const labels = solarHourly.map((record) => {
-      const recordDate = toTimestampDate(record.timestamp);
-      return recordDate.toLocaleString("en-US", {
-        weekday: "short",
-        hour: "2-digit",
-        minute: "2-digit",
-      });
-    });
+    const solarMap = new Map(
+      dataStore.hourly.solar.map((record) => [record.timestamp, record])
+    );
+    const windMap = new Map(
+      dataStore.hourly.wind.map((record) => [record.timestamp, record])
+    );
+    const labels = [];
+    const solar = [];
+    const wind = [];
+    const windDirection = [];
+    for (let cursor = new Date(weekStart); cursor <= weekEnd; cursor.setHours(cursor.getHours() + 1)) {
+      const key = buildHourlyKeyFromDate(cursor);
+      const solarRecord = solarMap.get(key);
+      const windRecord = windMap.get(key);
+      labels.push(
+        cursor.toLocaleString("en-US", {
+          weekday: "short",
+          hour: "2-digit",
+          minute: "2-digit",
+        })
+      );
+      solar.push(solarRecord ? Number(solarRecord.ghi) || 0 : 0);
+      wind.push(windRecord ? Number(windRecord.windspeed_100m) || 0 : 0);
+      windDirection.push(windRecord ? Number(windRecord.winddirection_100m) || 0 : 0);
+    }
     return {
       labels,
-      solar: solarHourly.map((record) => Number(record.ghi)),
-      wind: solarHourly.map((record) => {
-        const windRecord = windMap.get(record.timestamp);
-        return windRecord ? Number(windRecord.windspeed_100m) : 0;
-      }),
-      windDirection: solarHourly.map((record) => {
-        const windRecord = windMap.get(record.timestamp);
-        return windRecord ? Number(windRecord.winddirection_100m) : 0;
-      }),
+      solar,
+      wind,
+      windDirection,
     };
   }
 
-  const solarDaily = dataStore.daily.solar;
+  const solarMap = new Map(dataStore.daily.solar.map((record) => [record.date, record]));
   const windMap = new Map(dataStore.daily.wind.map((record) => [record.date, record]));
-  const filtered = solarDaily.filter((record) => {
-    const recordDate = new Date(record.date);
-    if (period === "month") {
-      return (
-        recordDate.getFullYear() === date.getFullYear() &&
-        recordDate.getMonth() === date.getMonth()
-      );
-    }
-    return recordDate.getFullYear() === date.getFullYear();
-  });
-  const labels = filtered.map((record) => record.date);
+  const start =
+    period === "month"
+      ? new Date(date.getFullYear(), date.getMonth(), 1)
+      : new Date(date.getFullYear(), 0, 1);
+  const end =
+    period === "month"
+      ? new Date(date.getFullYear(), date.getMonth() + 1, 0)
+      : new Date(date.getFullYear(), 11, 31);
+  const labels = [];
+  const solar = [];
+  const wind = [];
+  const windDirection = [];
+  for (let cursor = new Date(start); cursor <= end; cursor.setDate(cursor.getDate() + 1)) {
+    const key = formatDateKey(cursor);
+    const solarRecord = solarMap.get(key);
+    const windRecord = windMap.get(key);
+    labels.push(key);
+    solar.push(solarRecord ? Number(solarRecord.ghi) || 0 : 0);
+    wind.push(windRecord ? Number(windRecord.windspeed_100m) || 0 : 0);
+    windDirection.push(windRecord ? Number(windRecord.winddirection_100m) || 0 : 0);
+  }
   return {
     labels,
-    solar: filtered.map((record) => Number(record.ghi)),
-    wind: filtered.map((record) => {
-      const windRecord = windMap.get(record.date);
-      return windRecord ? Number(windRecord.windspeed_100m) : 0;
-    }),
-    windDirection: filtered.map((record) => {
-      const windRecord = windMap.get(record.date);
-      return windRecord ? Number(windRecord.winddirection_100m) : 0;
-    }),
+    solar,
+    wind,
+    windDirection,
   };
 };
 
@@ -343,7 +364,8 @@ const renderChart = (series) => {
 
 const renderTable = (series) => {
   tableBody.innerHTML = "";
-  series.labels.forEach((label, index) => {
+  const maxRows = tableState.pageSize * tableState.page;
+  series.labels.slice(0, maxRows).forEach((label, index) => {
     const row = document.createElement("tr");
     row.innerHTML = `
       <td>${label}</td>
@@ -353,6 +375,9 @@ const renderTable = (series) => {
     `;
     tableBody.appendChild(row);
   });
+  if (tableLoadMore) {
+    tableLoadMore.hidden = series.labels.length <= maxRows;
+  }
 };
 
 const updateView = () => {
@@ -363,6 +388,8 @@ const updateView = () => {
     viewState.period,
     selectedDate
   );
+  currentSeries = series;
+  tableState.page = 1;
   renderChart(series);
   renderTable(series);
   chartDisplay.hidden = viewState.view !== "chart";
@@ -503,6 +530,16 @@ if (datePickerInput) {
     }
     selectedDate = nextDate;
     updateView();
+  });
+}
+
+if (tableLoadMore) {
+  tableLoadMore.addEventListener("click", () => {
+    if (!currentSeries) {
+      return;
+    }
+    tableState.page += 1;
+    renderTable(currentSeries);
   });
 }
 
