@@ -32,6 +32,17 @@ const fetchFromNrel = (targetUrl) =>
       .on("error", reject);
   });
 
+const fetchWithRedirects = async (targetUrl, maxRedirects = 3) => {
+  const response = await fetchFromNrel(targetUrl);
+  if (response.statusCode >= 300 && response.statusCode < 400 && maxRedirects > 0) {
+    const location = response.headers.location;
+    if (location) {
+      return fetchWithRedirects(location, maxRedirects - 1);
+    }
+  }
+  return response;
+};
+
 const sendJsonError = (res, status, message) => {
   res.status(status).json({ errors: [message] });
 };
@@ -78,7 +89,7 @@ module.exports = async (req, res) => {
   targetUrl.searchParams.set("attributes", attributes);
 
   try {
-    const upstream = await fetchFromNrel(targetUrl.toString());
+    const upstream = await fetchWithRedirects(targetUrl.toString());
     if (upstream.statusCode < 200 || upstream.statusCode >= 300) {
       sendJsonError(res, upstream.statusCode || 502, upstream.body.toString());
       return;

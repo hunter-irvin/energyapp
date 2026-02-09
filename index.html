@@ -22,7 +22,17 @@
             <div class="field">
               <label>Location</label>
               <button class="btn btn--primary" id="select-map">Select on Map</button>
-              <div class="status status--loading" id="loading-status" hidden>Loading data for 2024…</div>
+              <div class="status status--loading" id="loading-status" hidden>
+                <span class="status__text" id="loading-text">Loading data for 2024…</span>
+                <div class="loading-bars">
+                  <div class="loading-bar loading-bar--step">
+                    <span class="loading-bar__fill"></span>
+                  </div>
+                  <div class="loading-bar loading-bar--overall">
+                    <span class="loading-bar__fill"></span>
+                  </div>
+                </div>
+              </div>
               <div class="status status--success" id="success-status" hidden>Data ready for 2024.</div>
               <div class="status status--error" id="error-status" hidden>Unable to load data.</div>
               <p class="location" id="location-value">No location selected</p>

@@ -1,6 +1,7 @@
 const mapButton = document.getElementById("select-map");
 const locationValue = document.getElementById("location-value");
 const loadingStatus = document.getElementById("loading-status");
+const loadingText = document.getElementById("loading-text");
 const successStatus = document.getElementById("success-status");
 const errorStatus = document.getElementById("error-status");
 
@@ -30,10 +31,13 @@ const updateLocation = (latlng) => {
   locationValue.textContent = `${lat.toFixed(4)}, ${lng.toFixed(4)}`;
 };
 
-const setStatus = ({ loading = false, success = "", error = "" }) => {
+const setStatus = ({ loading = false, loadingMessage = "", success = "", error = "" }) => {
   loadingStatus.hidden = !loading;
   successStatus.hidden = !success;
   errorStatus.hidden = !error;
+  if (loading && loadingMessage) {
+    loadingText.textContent = loadingMessage;
+  }
   if (success) {
     successStatus.textContent = success;
   }
@@ -214,7 +218,7 @@ map.on("click", (event) => {
     hoverMarker = null;
   }
 
-  setStatus({ loading: true });
+  setStatus({ loading: true, loadingMessage: "Fetching 2024 solar and 2014 wind data…" });
   mapButton.disabled = true;
   fetchDataset(event.latlng)
     .then(({ solarCount, windCount }) => {
