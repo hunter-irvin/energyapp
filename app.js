@@ -149,6 +149,11 @@ const toDailyAggregation = (records, metrics) => {
   });
 };
 
+const normalizeRecordYear = (record, year = "2024") => ({
+  ...record,
+  Year: year,
+});
+
 const buildKey = (record) =>
   `${record.Year}-${record.Month.padStart(2, "0")}-${record.Day.padStart(2, "0")}` +
   `-${record.Hour?.padStart?.(2, "0") ?? "00"}-${record.Minute?.padStart?.(2, "0") ?? "00"}`;
@@ -168,15 +173,20 @@ const buildSeries = (solarRecords, windRecords, period) => {
         Number(record.Month) === DEFAULT_DATE.month && Number(record.Day) === DEFAULT_DATE.day
     );
     const windMap = new Map(windDay.map((record) => [buildKey(record), record]));
-    const labels = solarDay.map(
+    const base = solarDay.length ? solarDay : windDay;
+    const labels = base.map(
       (record) => `${record.Hour.padStart(2, "0")}:${record.Minute.padStart(2, "0")}`
     );
     return {
       labels,
-      solar: solarDay.map((record) => Number(record.ghi)),
-      wind: solarDay.map((record) => {
+      solar: base.map((record) => Number(record.ghi) || 0),
+      wind: base.map((record) => {
         const windRecord = windMap.get(buildKey(record));
         return windRecord ? Number(windRecord.windspeed_100m) : 0;
+      }),
+      windDirection: base.map((record) => {
+        const windRecord = windMap.get(buildKey(record));
+        return windRecord ? Number(windRecord.winddirection_100m) : 0;
       }),
     };
   }
@@ -195,6 +205,10 @@ const buildSeries = (solarRecords, windRecords, period) => {
         const windRecord = windMap.get(record.timestamp);
         return windRecord ? Number(windRecord.windspeed_100m) : 0;
       }),
+      windDirection: weekSlice.map((record) => {
+        const windRecord = windMap.get(record.timestamp);
+        return windRecord ? Number(windRecord.winddirection_100m) : 0;
+      }),
     };
   }
 
@@ -212,6 +226,10 @@ const buildSeries = (solarRecords, windRecords, period) => {
       const windRecord = windMap.get(record.date);
       return windRecord ? Number(windRecord.windspeed_100m) : 0;
     }),
+    windDirection: filtered.map((record) => {
+      const windRecord = windMap.get(record.date);
+      return windRecord ? Number(windRecord.winddirection_100m) : 0;
+    }),
   };
 };
 
@@ -224,7 +242,7 @@ const buildMockSeries = (period) => {
   const wind = labels.map(
     (_, index) => 30 + Math.cos((index / points) * Math.PI * 2) * 12
   );
-  return { labels, solar, wind };
+  return { labels, solar, wind, windDirection: wind.map((value) => value * 5) };
 };
 
 const renderAxis = (labels) => {
@@ -244,6 +262,15 @@ const renderAxis = (labels) => {
 };
 
 const buildAreaPath = (values, height, width) => {
+  if (!values.length) {
+    return `M 0 ${height} L ${width} ${height} Z`;
+  }
+  if (values.length === 1) {
+    const value = values[0];
+    const max = Math.max(value, 1);
+    const y = height - (value / max) * (height * 0.85) - 10;
+    return `M 0 ${height} L 0 ${y} L ${width} ${y} L ${width} ${height} Z`;
+  }
   const max = Math.max(...values, 1);
   const points = values.map((value, index) => {
     const x = (index / (values.length - 1)) * width;
@@ -289,6 +316,7 @@ const renderTable = (series) => {
       <td>${label}</td>
       <td>${formatNumber(series.solar[index])}</td>
       <td>${formatNumber(series.wind[index])}</td>
+      <td>${formatNumber(series.windDirection[index])}</td>
     `;
     tableBody.appendChild(row);
   });
@@ -355,8 +383,8 @@ const fetchDataset = async ({ lat, lng }) => {
     windResponse.text(),
   ]);
 
-  const solarRecords = parseCsv(solarCsv);
-  const windRecords = parseCsv(windCsv);
+  const solarRecords = parseCsv(solarCsv).map((record) => normalizeRecordYear(record, SOLAR_YEAR));
+  const windRecords = parseCsv(windCsv).map((record) => normalizeRecordYear(record, SOLAR_YEAR));
 
   dataStore.raw15.solar = solarRecords;
   dataStore.raw15.wind = windRecords;

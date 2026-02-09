@@ -64,7 +64,7 @@
             </div>
             <p class="chart-panel__date" id="chart-date">February 9, 2024</p>
           </header>
-          <div class="chart-display" id="chart-display">
+          <div class="chart-display" id="chart-display" title="Solar/wind values for each time bucket.">
             <svg class="chart-svg" id="chart-svg" viewBox="0 0 600 220" preserveAspectRatio="none"></svg>
             <div class="chart-axis" id="chart-axis"></div>
           </div>
@@ -72,9 +72,10 @@
             <table class="data-table">
               <thead>
                 <tr>
-                  <th>Timestamp</th>
-                  <th>Solar (GHI)</th>
-                  <th>Wind Speed</th>
+                  <th title="Local time bucket for this reading.">Timestamp</th>
+                  <th title="Solar irradiance in watts per square meter.">Solar (GHI)</th>
+                  <th title="Wind speed in meters per second.">Wind Speed</th>
+                  <th title="Wind direction in degrees from north.">Wind Direction</th>
                 </tr>
               </thead>
               <tbody id="table-body"></tbody>
