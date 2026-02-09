@@ -9,14 +9,9 @@ const dataStore = {
   daily: { solar: [], wind: [] },
 };
 
-const API_KEY = "Courz8adc7n8ydX9QySvsL29qfViI8jafqzOwqju";
-const CONTACT_EMAIL = "hunter.irvin@jacobs.com";
 const SOLAR_YEAR = "2024";
 const WIND_YEAR = "2014";
-const SOLAR_ENDPOINT =
-  "https://developer.nrel.gov/api/nsrdb/v2/solar/nsrdb-GOES-conus-v4-0-0-download.csv";
-const WIND_ENDPOINT =
-  "https://developer.nrel.gov/api/wind-toolkit/v2/wind/wtk-download.csv";
+const PROXY_ENDPOINT = "/api/nrel-proxy";
 
 const map = L.map("map", {
   zoomControl: false,
@@ -93,7 +88,7 @@ const toDailyAggregation = (records, metrics) => {
 };
 
 const buildUrl = (base, params) => {
-  const url = new URL(base);
+  const url = new URL(base, window.location.origin);
   Object.entries(params).forEach(([key, value]) => {
     url.searchParams.set(key, value);
   });
@@ -122,24 +117,15 @@ const parseError = async (responses) => {
 
 const fetchDataset = async ({ lat, lng }) => {
   const wkt = `POINT(${lng} ${lat})`;
-  const sharedParams = {
-    api_key: API_KEY,
+  const solarUrl = buildUrl(PROXY_ENDPOINT, {
+    dataset: "solar",
     wkt,
-    names: SOLAR_YEAR,
-    utc: "true",
-    leap_day: "false",
-    email: CONTACT_EMAIL,
     interval: "15",
-  };
-
-  const solarUrl = buildUrl(SOLAR_ENDPOINT, {
-    ...sharedParams,
-    attributes: "ghi,dni,dhi,air_temperature,wind_speed",
   });
-  const windUrl = buildUrl(WIND_ENDPOINT, {
-    ...sharedParams,
-    names: WIND_YEAR,
-    attributes: "windspeed_100m,winddirection_100m,temperature_100m,pressure_100m",
+  const windUrl = buildUrl(PROXY_ENDPOINT, {
+    dataset: "wind",
+    wkt,
+    interval: "15",
   });
 
   const [solarResponse, windResponse] = await Promise.all([fetch(solarUrl), fetch(windUrl)]);
