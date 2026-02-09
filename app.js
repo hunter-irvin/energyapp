@@ -8,6 +8,8 @@ const chartDate = document.getElementById("chart-date");
 const chartSvg = document.getElementById("chart-svg");
 const chartAxis = document.getElementById("chart-axis");
 const chartDisplay = document.getElementById("chart-display");
+const chartTooltip = document.getElementById("chart-tooltip");
+const chartHoverLine = document.getElementById("chart-hover-line");
 const tablePanel = document.getElementById("table-panel");
 const tableBody = document.getElementById("table-body");
 const tableLoadMore = document.getElementById("table-load-more");
@@ -497,17 +499,17 @@ const renderAxis = (labels) => {
   });
 };
 
-const buildAreaPath = (values, height, width) => {
+const buildAreaPath = (values, height, width, maxValue) => {
   if (!values.length) {
     return `M 0 ${height} L ${width} ${height} Z`;
   }
   if (values.length === 1) {
     const value = values[0];
-    const max = Math.max(value, 1);
+    const max = Math.max(maxValue || 0, value, 1);
     const y = height - (value / max) * (height * 0.85) - 10;
     return `M 0 ${height} L 0 ${y} L ${width} ${y} L ${width} ${height} Z`;
   }
-  const max = Math.max(...values, 1);
+  const max = Math.max(maxValue || 0, ...values, 1);
   const points = values.map((value, index) => {
     const x = (index / (values.length - 1)) * width;
     const y = height - (value / max) * (height * 0.85) - 10;
@@ -519,11 +521,22 @@ const buildAreaPath = (values, height, width) => {
   return path.join(" ");
 };
 
-const renderChart = (series) => {
+const getAnnualMaxValue = (records, metric) =>
+  records.reduce((max, record) => {
+    const value = Number(record[metric]);
+    if (!Number.isFinite(value)) {
+      return max;
+    }
+    return Math.max(max, value);
+  }, 0);
+
+const renderChart = (series, maxValues = {}) => {
   const width = 600;
   const height = 220;
-  const solarPath = buildAreaPath(series.solar, height, width);
-  const windPath = buildAreaPath(series.wind, height, width);
+  const solarMax = Math.max(maxValues.solar || 0, ...series.solar, 1);
+  const windMax = Math.max(maxValues.wind || 0, ...series.wind, 1);
+  const solarPath = buildAreaPath(series.solar, height, width, solarMax);
+  const windPath = buildAreaPath(series.wind, height, width, windMax);
   chartSvg.innerHTML = `
     <defs>
       <linearGradient id="solar-gradient" x1="0" x2="1" y1="0" y2="0">
@@ -549,17 +562,77 @@ const renderTable = (series) => {
   series.labels.slice(0, maxRows).forEach((label, index) => {
     const windDigits = viewState.period === "day" ? 2 : 0;
     const row = document.createElement("tr");
+    const direction = Number(series.windDirection[index]) || 0;
+    const directionLabel = Number.isFinite(direction) ? `${Math.round(direction)}°` : "-";
     row.innerHTML = `
       <td>${label}</td>
       <td>${formatNumber(series.solar[index])}</td>
       <td>${formatNumber(series.wind[index], windDigits)}</td>
-      <td>${formatNumber(series.windDirection[index], windDigits)}</td>
+      <td>
+        <span class="wind-direction" style="transform: rotate(${direction}deg)" title="${directionLabel}"
+          aria-label="Wind direction ${directionLabel}">
+          ➤
+        </span>
+      </td>
     `;
     tableBody.appendChild(row);
   });
   if (tableLoadMore) {
     tableLoadMore.hidden = series.labels.length <= maxRows;
   }
+};
+
+const updateChartTooltip = (event) => {
+  if (!chartDisplay || !chartTooltip || !chartHoverLine || !currentSeries) {
+    return;
+  }
+  const { labels, solar, wind } = currentSeries;
+  if (!labels.length) {
+    return;
+  }
+  const rect = chartDisplay.getBoundingClientRect();
+  const relativeX = Math.min(Math.max(event.clientX - rect.left, 0), rect.width);
+  const pointCount = labels.length;
+  const index = pointCount === 1 ? 0 : Math.round((relativeX / rect.width) * (pointCount - 1));
+  const label = labels[index];
+  const solarValue = formatNumber(solar[index]);
+  const windValue = formatNumber(wind[index], viewState.period === "day" ? 2 : 0);
+
+  chartHoverLine.hidden = false;
+  chartHoverLine.style.left =
+    pointCount === 1 ? "50%" : `${(index / (pointCount - 1)) * 100}%`;
+
+  chartTooltip.hidden = false;
+  chartTooltip.innerHTML = `
+    <div class="chart-tooltip__label">${label}</div>
+    <div class="chart-tooltip__row">
+      <span class="chart-tooltip__swatch chart-tooltip__swatch--solar"></span>
+      Solar: ${solarValue}
+    </div>
+    <div class="chart-tooltip__row">
+      <span class="chart-tooltip__swatch chart-tooltip__swatch--wind"></span>
+      Wind: ${windValue}
+    </div>
+  `;
+
+  const tooltipWidth = chartTooltip.offsetWidth || 0;
+  const tooltipPadding = 16;
+  const lineX = (index / Math.max(pointCount - 1, 1)) * rect.width;
+  let left = lineX + tooltipPadding;
+  if (left + tooltipWidth > rect.width) {
+    left = lineX - tooltipWidth - tooltipPadding;
+  }
+  left = Math.max(left, 8);
+  chartTooltip.style.left = `${left}px`;
+  chartTooltip.style.top = "12px";
+};
+
+const hideChartTooltip = () => {
+  if (!chartTooltip || !chartHoverLine) {
+    return;
+  }
+  chartTooltip.hidden = true;
+  chartHoverLine.hidden = true;
 };
 
 const updateView = () => {
@@ -572,7 +645,9 @@ const updateView = () => {
   );
   currentSeries = series;
   tableState.page = 1;
-  renderChart(series);
+  const solarMax = getAnnualMaxValue(dataStore.raw15.solar, "ghi");
+  const windMax = getAnnualMaxValue(dataStore.raw15.wind, windMetricState.speed);
+  renderChart(series, { solar: solarMax, wind: windMax });
   renderTable(series);
   chartDisplay.hidden = viewState.view !== "chart";
   tablePanel.hidden = viewState.view !== "table";
@@ -749,6 +824,11 @@ if (tableLoadMore) {
     tableState.page += 1;
     renderTable(currentSeries);
   });
+}
+
+if (chartDisplay) {
+  chartDisplay.addEventListener("mousemove", updateChartTooltip);
+  chartDisplay.addEventListener("mouseleave", hideChartTooltip);
 }
 
 mapButton.addEventListener("click", () => {

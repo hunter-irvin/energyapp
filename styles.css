@@ -278,6 +278,75 @@ body {
   text-align: center;
 }
 
+.chart-axis-title {
+  position: absolute;
+  top: 12px;
+  font-size: 11px;
+  color: #c7d7f4;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  pointer-events: none;
+}
+
+.chart-axis-title--left {
+  left: 12px;
+}
+
+.chart-axis-title--right {
+  right: 12px;
+}
+
+.chart-hover-line {
+  position: absolute;
+  top: 8px;
+  bottom: 24px;
+  width: 1px;
+  background: rgba(214, 227, 255, 0.8);
+  pointer-events: none;
+}
+
+.chart-tooltip {
+  position: absolute;
+  z-index: 2;
+  min-width: 150px;
+  padding: 10px 12px;
+  background: rgba(6, 20, 54, 0.95);
+  border: 1px solid rgba(120, 155, 234, 0.45);
+  border-radius: 10px;
+  font-size: 11px;
+  color: #e3edff;
+  pointer-events: none;
+  box-shadow: 0 12px 24px rgba(2, 8, 24, 0.4);
+}
+
+.chart-tooltip__label {
+  font-weight: 600;
+  margin-bottom: 6px;
+  color: #f5f8ff;
+}
+
+.chart-tooltip__row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: #c9d8f8;
+}
+
+.chart-tooltip__swatch {
+  width: 10px;
+  height: 6px;
+  border-radius: 999px;
+  flex-shrink: 0;
+}
+
+.chart-tooltip__swatch--solar {
+  background: linear-gradient(90deg, #f2c94c, #f7d77d);
+}
+
+.chart-tooltip__swatch--wind {
+  background: linear-gradient(90deg, #5cd3e8, #9be7f4);
+}
+
 .table-panel {
   margin-top: 18px;
   border-radius: 12px;
@@ -338,6 +407,19 @@ body {
 
 .data-table tbody tr:nth-child(odd) {
   background: rgba(6, 18, 46, 0.3);
+}
+
+.wind-direction {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: rgba(10, 30, 74, 0.6);
+  color: #d8e6ff;
+  font-size: 12px;
+  line-height: 1;
 }
 
 @media (max-width: 860px) {
