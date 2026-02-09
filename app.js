@@ -343,8 +343,7 @@ const renderChart = (series) => {
 
 const renderTable = (series) => {
   tableBody.innerHTML = "";
-  const rows = series.labels.slice(0, 24);
-  rows.forEach((label, index) => {
+  series.labels.forEach((label, index) => {
     const row = document.createElement("tr");
     row.innerHTML = `
       <td>${label}</td>
