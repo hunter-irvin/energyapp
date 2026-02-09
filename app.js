@@ -11,6 +11,7 @@ L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
 
 let selectionMode = false;
 let marker = null;
+let hoverMarker = null;
 
 const updateLocation = (latlng) => {
   const { lat, lng } = latlng;
@@ -21,6 +22,23 @@ mapButton.addEventListener("click", () => {
   selectionMode = !selectionMode;
   mapButton.classList.toggle("is-active", selectionMode);
   mapButton.textContent = selectionMode ? "Click on map" : "Select on Map";
+
+  if (selectionMode && !hoverMarker) {
+    hoverMarker = L.marker(map.getCenter(), { opacity: 0.6 }).addTo(map);
+  }
+
+  if (!selectionMode && hoverMarker) {
+    map.removeLayer(hoverMarker);
+    hoverMarker = null;
+  }
+});
+
+map.on("mousemove", (event) => {
+  if (!selectionMode || !hoverMarker) {
+    return;
+  }
+
+  hoverMarker.setLatLng(event.latlng);
 });
 
 map.on("click", (event) => {
@@ -29,7 +47,10 @@ map.on("click", (event) => {
   }
 
   if (!marker) {
-    marker = L.marker(event.latlng).addTo(map);
+    marker = L.marker(event.latlng, { draggable: true }).addTo(map);
+    marker.on("dragend", (dragEvent) => {
+      updateLocation(dragEvent.target.getLatLng());
+    });
   } else {
     marker.setLatLng(event.latlng);
   }
@@ -38,4 +59,9 @@ map.on("click", (event) => {
   selectionMode = false;
   mapButton.classList.remove("is-active");
   mapButton.textContent = "Select on Map";
+
+  if (hoverMarker) {
+    map.removeLayer(hoverMarker);
+    hoverMarker = null;
+  }
 });
