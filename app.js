@@ -27,8 +27,14 @@ const WIND_YEAR = "2014";
 const PROXY_ENDPOINT = "/api/nrel-proxy";
 const DEFAULT_DATE = new Date(2014, 1, 9);
 let selectedDate = new Date(DEFAULT_DATE);
-const WIND_SPEED_METRIC = "windspeed_20m";
-const WIND_DIR_METRIC = "winddirection_20m";
+const DEFAULT_WIND_SPEED_METRIC = "windspeed_20m";
+const DEFAULT_WIND_DIR_METRIC = "winddirection_20m";
+const FALLBACK_WIND_SPEED_METRIC = "windspeed_100m";
+const FALLBACK_WIND_DIR_METRIC = "winddirection_100m";
+let windMetricState = {
+  speed: DEFAULT_WIND_SPEED_METRIC,
+  direction: DEFAULT_WIND_DIR_METRIC,
+};
 const viewState = {
   period: "day",
   view: "chart",
@@ -71,12 +77,12 @@ const setStatus = ({ loading = false, loadingMessage = "", success = "", error =
   }
 };
 
-const formatNumber = (value) => {
+const formatNumber = (value, fractionDigits = 2) => {
   const numeric = Number(value);
   if (!Number.isFinite(numeric)) {
     return "-";
   }
-  return numeric.toFixed(2);
+  return numeric.toFixed(fractionDigits);
 };
 
 const formatDateLabel = (date) =>
@@ -125,9 +131,10 @@ const getWeekEnd = (weekStart) => {
 
 const normalizeHeader = (header) => {
   const cleaned = cleanText(header)
+    .toLowerCase()
     .replace(/\(.*?\)/g, "")
     .replace(/[^a-z0-9]+/g, "_")
-    .toLowerCase();
+    .replace(/^_+|_+$/g, "");
   if (!cleaned) {
     return cleaned;
   }
@@ -176,10 +183,27 @@ const parseCsv = (csvText) => {
   return lines.slice(headerIndex + 1).map((line) => {
     const values = line.split(",");
     return headers.reduce((acc, header, index) => {
+      if (!header) {
+        return acc;
+      }
       acc[header] = cleanText(values[index]);
       return acc;
     }, {});
   });
+};
+
+const resolveWindMetrics = (records) => {
+  const sample = records[0] || {};
+  const keys = new Set(Object.keys(sample));
+  const has20 = keys.has(DEFAULT_WIND_SPEED_METRIC) && keys.has(DEFAULT_WIND_DIR_METRIC);
+  if (has20) {
+    return { speed: DEFAULT_WIND_SPEED_METRIC, direction: DEFAULT_WIND_DIR_METRIC };
+  }
+  const has100 = keys.has(FALLBACK_WIND_SPEED_METRIC) && keys.has(FALLBACK_WIND_DIR_METRIC);
+  if (has100) {
+    return { speed: FALLBACK_WIND_SPEED_METRIC, direction: FALLBACK_WIND_DIR_METRIC };
+  }
+  return { speed: DEFAULT_WIND_SPEED_METRIC, direction: DEFAULT_WIND_DIR_METRIC };
 };
 
 const summarizeMetrics = (records, metrics) =>
@@ -207,22 +231,23 @@ const buildHourlyAggregation = (records, metrics) => {
       record.hour
     )}:00`;
     if (!buckets.has(hourKey)) {
-      buckets.set(hourKey, { timestamp: hourKey, count: 0 });
+      buckets.set(hourKey, { timestamp: hourKey, sums: {}, counts: {} });
     }
     const bucket = buckets.get(hourKey);
-    bucket.count += 1;
     metrics.forEach((metric) => {
       const value = Number(record[metric]);
       if (!Number.isFinite(value)) {
         return;
       }
-      bucket[metric] = (bucket[metric] || 0) + value;
+      bucket.sums[metric] = (bucket.sums[metric] || 0) + value;
+      bucket.counts[metric] = (bucket.counts[metric] || 0) + 1;
     });
   });
   return Array.from(buckets.values()).map((bucket) => {
     const hourly = { timestamp: bucket.timestamp };
     metrics.forEach((metric) => {
-      hourly[metric] = bucket[metric] ? bucket[metric] / bucket.count : 0;
+      const count = bucket.counts[metric] || 0;
+      hourly[metric] = count ? bucket.sums[metric] / count : 0;
     });
     return hourly;
   });
@@ -233,22 +258,23 @@ const toDailyAggregation = (records, metrics) => {
   records.forEach((record) => {
     const dateKey = `${record.year}-${pad2(record.month)}-${pad2(record.day)}`;
     if (!buckets.has(dateKey)) {
-      buckets.set(dateKey, { date: dateKey, count: 0 });
+      buckets.set(dateKey, { date: dateKey, sums: {}, counts: {} });
     }
     const bucket = buckets.get(dateKey);
-    bucket.count += 1;
     metrics.forEach((metric) => {
       const value = Number(record[metric]);
       if (!Number.isFinite(value)) {
         return;
       }
-      bucket[metric] = (bucket[metric] || 0) + value;
+      bucket.sums[metric] = (bucket.sums[metric] || 0) + value;
+      bucket.counts[metric] = (bucket.counts[metric] || 0) + 1;
     });
   });
   return Array.from(buckets.values()).map((bucket) => {
     const daily = { date: bucket.date };
     metrics.forEach((metric) => {
-      daily[metric] = bucket[metric] ? bucket[metric] / bucket.count : 0;
+      const count = bucket.counts[metric] || 0;
+      daily[metric] = count ? bucket.sums[metric] / count : 0;
     });
     return daily;
   });
@@ -258,6 +284,9 @@ const buildSeries = (solarRecords, windRecords, period, date) => {
   if (!solarRecords.length && !windRecords.length) {
     return buildMockSeries(period);
   }
+
+  const windSpeedMetric = windMetricState.speed;
+  const windDirMetric = windMetricState.direction;
 
   if (period === "day") {
     const start = new Date(date);
@@ -276,8 +305,8 @@ const buildSeries = (solarRecords, windRecords, period, date) => {
       const windRecord = windMap.get(key);
       labels.push(`${pad2(cursor.getHours())}:${pad2(cursor.getMinutes())}`);
       solar.push(solarRecord ? Number(solarRecord.ghi) || 0 : 0);
-      wind.push(windRecord ? Number(windRecord[WIND_SPEED_METRIC]) || 0 : 0);
-      windDirection.push(windRecord ? Number(windRecord[WIND_DIR_METRIC]) || 0 : 0);
+      wind.push(windRecord ? Number(windRecord[windSpeedMetric]) || 0 : 0);
+      windDirection.push(windRecord ? Number(windRecord[windDirMetric]) || 0 : 0);
     }
     return {
       labels,
@@ -312,8 +341,10 @@ const buildSeries = (solarRecords, windRecords, period, date) => {
         })
       );
       solar.push(solarRecord ? Number(solarRecord.ghi) || 0 : 0);
-      wind.push(windRecord ? Number(windRecord[WIND_SPEED_METRIC]) || 0 : 0);
-      windDirection.push(windRecord ? Number(windRecord[WIND_DIR_METRIC]) || 0 : 0);
+      const windSpeed = windRecord ? Number(windRecord[windSpeedMetric]) || 0 : 0;
+      const windDir = windRecord ? Number(windRecord[windDirMetric]) || 0 : 0;
+      wind.push(Math.round(windSpeed));
+      windDirection.push(Math.round(windDir));
     }
     return {
       labels,
@@ -343,8 +374,10 @@ const buildSeries = (solarRecords, windRecords, period, date) => {
     const windRecord = windMap.get(key);
     labels.push(key);
     solar.push(solarRecord ? Number(solarRecord.ghi) || 0 : 0);
-    wind.push(windRecord ? Number(windRecord[WIND_SPEED_METRIC]) || 0 : 0);
-    windDirection.push(windRecord ? Number(windRecord[WIND_DIR_METRIC]) || 0 : 0);
+    const windSpeed = windRecord ? Number(windRecord[windSpeedMetric]) || 0 : 0;
+    const windDir = windRecord ? Number(windRecord[windDirMetric]) || 0 : 0;
+    wind.push(Math.round(windSpeed));
+    windDirection.push(Math.round(windDir));
   }
   return {
     labels,
@@ -432,12 +465,13 @@ const renderTable = (series) => {
   tableBody.innerHTML = "";
   const maxRows = tableState.pageSize * tableState.page;
   series.labels.slice(0, maxRows).forEach((label, index) => {
+    const windDigits = viewState.period === "day" ? 2 : 0;
     const row = document.createElement("tr");
     row.innerHTML = `
       <td>${label}</td>
       <td>${formatNumber(series.solar[index])}</td>
-      <td>${formatNumber(series.wind[index])}</td>
-      <td>${formatNumber(series.windDirection[index])}</td>
+      <td>${formatNumber(series.wind[index], windDigits)}</td>
+      <td>${formatNumber(series.windDirection[index], windDigits)}</td>
     `;
     tableBody.appendChild(row);
   });
@@ -516,6 +550,7 @@ const fetchDataset = async ({ lat, lng }) => {
 
   const solarRecords = parseCsv(solarCsv);
   const windRecords = parseCsv(windCsv);
+  windMetricState = resolveWindMetrics(windRecords);
 
   dataStore.raw15.solar = solarRecords;
   dataStore.raw15.wind = windRecords;
@@ -527,8 +562,8 @@ const fetchDataset = async ({ lat, lng }) => {
     "wind_speed",
   ]);
   dataStore.hourly.wind = buildHourlyAggregation(windRecords, [
-    WIND_SPEED_METRIC,
-    WIND_DIR_METRIC,
+    windMetricState.speed,
+    windMetricState.direction,
     "temperature_20m",
     "pressure_20m",
   ]);
@@ -540,8 +575,8 @@ const fetchDataset = async ({ lat, lng }) => {
     "wind_speed",
   ]);
   dataStore.daily.wind = toDailyAggregation(windRecords, [
-    WIND_SPEED_METRIC,
-    WIND_DIR_METRIC,
+    windMetricState.speed,
+    windMetricState.direction,
     "temperature_20m",
     "pressure_20m",
   ]);
@@ -553,9 +588,13 @@ const fetchDataset = async ({ lat, lng }) => {
     },
     wind: {
       sampleRecord:
-        windRecords.find((record) => record[WIND_SPEED_METRIC]) || windRecords[0] || null,
-      metricSummary: summarizeMetrics(windRecords, [WIND_SPEED_METRIC, WIND_DIR_METRIC]),
+        windRecords.find((record) => record[windMetricState.speed]) || windRecords[0] || null,
+      metricSummary: summarizeMetrics(windRecords, [
+        windMetricState.speed,
+        windMetricState.direction,
+      ]),
     },
+    windMetricState,
     rawSample: {
       solar: solarCsv.split(/\r?\n/).slice(0, 6),
       wind: windCsv.split(/\r?\n/).slice(0, 6),

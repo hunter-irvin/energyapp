@@ -94,7 +94,7 @@ const handleProxy = async (req, res) => {
   const attributes =
     dataset === "solar"
       ? "ghi,dni,dhi,air_temperature,wind_speed"
-      : "windspeed_20m,winddirection_20m,temperature_20m,pressure_20m";
+      : "windspeed_20m,winddirection_20m,windspeed_100m,winddirection_100m,temperature_20m,pressure_20m";
 
   const cacheKey = `${dataset}-${year}-${wkt}-${interval}-${attributes}`;
   if (cache.has(cacheKey)) {
