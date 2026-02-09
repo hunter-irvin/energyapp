@@ -224,6 +224,23 @@ const renderDebugOutput = (payload) => {
   debugOutput.textContent = JSON.stringify(payload, null, 2);
 };
 
+const normalizeRecordYears = (records, targetYear) =>
+  records.map((record) =>
+    record.year && record.year !== targetYear ? { ...record, year: targetYear } : record
+  );
+
+const findSolarSample = (records) =>
+  records.find(
+    (record) =>
+      Number(record.hour) === 12 &&
+      Number(record.minute) === 0 &&
+      Number(record.ghi) > 0
+  ) ||
+  records.find((record) => Number(record.hour) === 12 && Number(record.minute) === 0) ||
+  records.find((record) => record.ghi) ||
+  records[0] ||
+  null;
+
 const buildHourlyAggregation = (records, metrics) => {
   const buckets = new Map();
   records.forEach((record) => {
@@ -548,8 +565,9 @@ const fetchDataset = async ({ lat, lng }) => {
     windResponse.text(),
   ]);
 
-  const solarRecords = parseCsv(solarCsv);
+  const parsedSolarRecords = parseCsv(solarCsv);
   const windRecords = parseCsv(windCsv);
+  const solarRecords = normalizeRecordYears(parsedSolarRecords, SOLAR_YEAR);
   windMetricState = resolveWindMetrics(windRecords);
 
   dataStore.raw15.solar = solarRecords;
@@ -583,7 +601,7 @@ const fetchDataset = async ({ lat, lng }) => {
 
   renderDebugOutput({
     solar: {
-      sampleRecord: solarRecords.find((record) => record.ghi) || solarRecords[0] || null,
+      sampleRecord: findSolarSample(solarRecords),
       metricSummary: summarizeMetrics(solarRecords, ["ghi", "dni", "dhi"]),
     },
     wind: {
