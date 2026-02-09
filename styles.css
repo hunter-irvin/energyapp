@@ -109,30 +109,16 @@ body {
 .loading-bar__fill {
   position: absolute;
   top: 0;
-  left: -60%;
-  width: 60%;
+  left: 0;
+  width: 0%;
   height: 100%;
   border-radius: inherit;
-  background: linear-gradient(90deg, rgba(139, 183, 255, 0), #8bb7ff, rgba(139, 183, 255, 0));
-  animation: loading-slide 1.4s ease-in-out infinite;
+  background: linear-gradient(90deg, rgba(99, 224, 184, 0), #63e0b8, rgba(99, 224, 184, 0));
+  transition: width 0.3s ease;
 }
 
 .loading-bar--overall .loading-bar__fill {
-  width: 40%;
-  background: linear-gradient(90deg, rgba(99, 224, 184, 0), #63e0b8, rgba(99, 224, 184, 0));
-  animation-duration: 2s;
-}
-
-@keyframes loading-slide {
-  0% {
-    transform: translateX(0);
-  }
-  50% {
-    transform: translateX(160%);
-  }
-  100% {
-    transform: translateX(0);
-  }
+  background: linear-gradient(90deg, rgba(139, 183, 255, 0), #8bb7ff, rgba(139, 183, 255, 0));
 }
 
 .map {
@@ -224,6 +210,22 @@ body {
   gap: 12px;
 }
 
+.legend {
+  border: none;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  padding: 0;
+  opacity: 0.7;
+}
+
+.legend.is-active {
+  opacity: 1;
+}
+
 .legend::before {
   content: "";
   display: inline-block;
@@ -263,10 +265,6 @@ body {
 }
 
 .chart-axis {
-  position: absolute;
-  bottom: 6px;
-  left: 12px;
-  right: 12px;
   display: grid;
   gap: 0;
   font-size: 10px;
@@ -276,6 +274,11 @@ body {
 
 .chart-axis span {
   text-align: center;
+}
+
+.chart-axis--below {
+  margin-top: 10px;
+  padding: 0 12px;
 }
 
 .chart-axis-title {

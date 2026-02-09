@@ -26,10 +26,10 @@
                 <span class="status__text" id="loading-text">Loading data for 2024…</span>
                 <div class="loading-bars">
                   <div class="loading-bar loading-bar--step">
-                    <span class="loading-bar__fill"></span>
+                    <span class="loading-bar__fill" id="loading-step-bar"></span>
                   </div>
                   <div class="loading-bar loading-bar--overall">
-                    <span class="loading-bar__fill"></span>
+                    <span class="loading-bar__fill" id="loading-overall-bar"></span>
                   </div>
                 </div>
               </div>
@@ -61,8 +61,12 @@
             <div>
               <h2>Renewable Energy Profile</h2>
               <p class="chart-panel__legend">
-                <span class="legend legend--solar">Solar</span>
-                <span class="legend legend--wind">Wind</span>
+                <button class="legend legend--solar is-active" data-series="solar" type="button">
+                  Solar
+                </button>
+                <button class="legend legend--wind is-active" data-series="wind" type="button">
+                  Wind
+                </button>
               </p>
             </div>
             <p class="chart-panel__date" id="chart-date">February 9, 2024</p>
@@ -73,8 +77,8 @@
             <div class="chart-tooltip" id="chart-tooltip" hidden></div>
             <div class="chart-axis-title chart-axis-title--left">Wind (m/s)</div>
             <div class="chart-axis-title chart-axis-title--right">Solar (W/m²)</div>
-            <div class="chart-axis" id="chart-axis"></div>
           </div>
+          <div class="chart-axis chart-axis--below" id="chart-axis"></div>
           <div class="table-panel" id="table-panel" hidden>
             <table class="data-table">
               <thead>
