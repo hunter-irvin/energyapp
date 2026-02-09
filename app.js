@@ -81,11 +81,11 @@ const parseCsv = (csvText) => {
   if (headerIndex === -1) {
     return [];
   }
-  const headers = lines[headerIndex].split(",");
+  const headers = lines[headerIndex].split(",").map((header) => header.trim().toLowerCase());
   return lines.slice(headerIndex + 1).map((line) => {
     const values = line.split(",");
     return headers.reduce((acc, header, index) => {
-      acc[header] = values[index];
+      acc[header] = values[index]?.trim();
       return acc;
     }, {});
   });
