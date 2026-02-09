@@ -42,15 +42,15 @@
         </div>
         <div class="toolbar">
           <div class="toggle-group">
-            <button class="btn btn--toggle is-active">Day</button>
-            <button class="btn btn--toggle">Week</button>
-            <button class="btn btn--toggle">Month</button>
-            <button class="btn btn--toggle">Year</button>
+            <button class="btn btn--toggle is-active" data-period="day">Day</button>
+            <button class="btn btn--toggle" data-period="week">Week</button>
+            <button class="btn btn--toggle" data-period="month">Month</button>
+            <button class="btn btn--toggle" data-period="year">Year</button>
             <button class="btn btn--icon" aria-label="Pick a date">📅</button>
           </div>
           <div class="toggle-group">
-            <button class="btn btn--toggle is-active">Chart</button>
-            <button class="btn btn--toggle">Table</button>
+            <button class="btn btn--toggle is-active" data-view="chart">Chart</button>
+            <button class="btn btn--toggle" data-view="table">Table</button>
           </div>
         </div>
         <section class="chart-panel">
@@ -62,14 +62,23 @@
                 <span class="legend legend--wind">Wind</span>
               </p>
             </div>
-            <p class="chart-panel__date">February 8, 2024</p>
+            <p class="chart-panel__date" id="chart-date">February 9, 2024</p>
           </header>
-          <div class="chart-placeholder">
-            <div class="chart-sun"></div>
-            <div class="chart-wave"></div>
-            <div class="chart-axis">
-              <span>1</span><span>2</span><span>3</span><span>4</span><span>5</span><span>6</span><span>7</span><span>8</span><span>9</span><span>10</span><span>11</span><span>12</span><span>13</span><span>14</span><span>15</span><span>16</span><span>17</span><span>18</span><span>19</span><span>20</span><span>21</span><span>22</span><span>23</span><span>24</span>
-            </div>
+          <div class="chart-display" id="chart-display">
+            <svg class="chart-svg" id="chart-svg" viewBox="0 0 600 220" preserveAspectRatio="none"></svg>
+            <div class="chart-axis" id="chart-axis"></div>
+          </div>
+          <div class="table-panel" id="table-panel" hidden>
+            <table class="data-table">
+              <thead>
+                <tr>
+                  <th>Timestamp</th>
+                  <th>Solar (GHI)</th>
+                  <th>Wind Speed</th>
+                </tr>
+              </thead>
+              <tbody id="table-body"></tbody>
+            </table>
           </div>
         </section>
       </section>

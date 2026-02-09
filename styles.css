@@ -136,8 +136,8 @@ body {
 }
 
 .map {
-  width: 800px;
-  height: 800px;
+  width: 500px;
+  height: 500px;
   border-radius: 12px;
   overflow: hidden;
   border: 1px solid rgba(78, 118, 210, 0.4);
@@ -236,34 +236,19 @@ body {
   color: #b5c7ec;
 }
 
-.chart-placeholder {
+.chart-display {
   position: relative;
-  height: 180px;
+  height: 220px;
   border: 1px solid rgba(82, 113, 183, 0.4);
   border-radius: 12px;
   overflow: hidden;
   background: linear-gradient(180deg, rgba(6, 18, 46, 0.8), rgba(8, 23, 57, 0.7));
 }
 
-.chart-sun {
-  position: absolute;
-  width: 200px;
-  height: 200px;
-  border-radius: 50%;
-  background: radial-gradient(circle, #f7d97d 0%, #f7c94c 60%, transparent 70%);
-  left: 50%;
-  bottom: -120px;
-  transform: translateX(-50%);
-}
-
-.chart-wave {
-  position: absolute;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  height: 70px;
-  background: linear-gradient(90deg, rgba(80, 195, 229, 0.85), rgba(94, 215, 244, 0.85));
-  clip-path: path("M0,40 C80,10 160,60 240,40 C320,20 400,60 480,40 C560,20 640,60 720,40 C800,20 880,60 960,40 L960,120 L0,120 Z");
+.chart-svg {
+  width: 100%;
+  height: 100%;
+  display: block;
 }
 
 .chart-axis {
@@ -272,14 +257,47 @@ body {
   left: 12px;
   right: 12px;
   display: grid;
-  grid-template-columns: repeat(24, 1fr);
   gap: 0;
   font-size: 10px;
   color: #c7d7f4;
+  pointer-events: none;
 }
 
 .chart-axis span {
   text-align: center;
+}
+
+.table-panel {
+  margin-top: 18px;
+  border-radius: 12px;
+  border: 1px solid rgba(82, 113, 183, 0.4);
+  overflow: hidden;
+}
+
+.data-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+
+.data-table thead {
+  background: rgba(8, 26, 66, 0.9);
+  color: #c7d7f4;
+}
+
+.data-table th,
+.data-table td {
+  padding: 10px 12px;
+  text-align: left;
+  border-bottom: 1px solid rgba(82, 113, 183, 0.2);
+}
+
+.data-table tbody tr:nth-child(even) {
+  background: rgba(6, 18, 46, 0.5);
+}
+
+.data-table tbody tr:nth-child(odd) {
+  background: rgba(6, 18, 46, 0.3);
 }
 
 @media (max-width: 860px) {
