@@ -70,6 +70,24 @@ body {
   color: #9cb2dd;
 }
 
+.status {
+  margin-top: 10px;
+  font-size: 12px;
+  color: #9cb2dd;
+}
+
+.status--loading {
+  color: #8bb7ff;
+}
+
+.status--success {
+  color: #7de3b0;
+}
+
+.status--error {
+  color: #f8a3a3;
+}
+
 .map {
   width: 800px;
   height: 800px;

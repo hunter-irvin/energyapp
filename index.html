@@ -22,6 +22,9 @@
             <div class="field">
               <label>Location</label>
               <button class="btn btn--primary" id="select-map">Select on Map</button>
+              <div class="status status--loading" id="loading-status" hidden>Loading data for 2024…</div>
+              <div class="status status--success" id="success-status" hidden>Data ready for 2024.</div>
+              <div class="status status--error" id="error-status" hidden>Unable to load data.</div>
               <p class="location" id="location-value">No location selected</p>
             </div>
           </div>
