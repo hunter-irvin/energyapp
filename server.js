@@ -6,7 +6,7 @@ const path = require("path");
 
 const API_KEY = "Courz8adc7n8ydX9QySvsL29qfViI8jafqzOwqju";
 const CONTACT_EMAIL = "hunter.irvin@jacobs.com";
-const SOLAR_YEAR = "2024";
+const SOLAR_YEAR = "2014";
 const WIND_YEAR = "2014";
 const SOLAR_ENDPOINT =
   "https://developer.nrel.gov/api/nsrdb/v2/solar/nsrdb-GOES-conus-v4-0-0-download.csv";
@@ -94,7 +94,7 @@ const handleProxy = async (req, res) => {
   const attributes =
     dataset === "solar"
       ? "ghi,dni,dhi,air_temperature,wind_speed"
-      : "windspeed_100m,winddirection_100m,temperature_100m,pressure_100m";
+      : "windspeed_20m,winddirection_20m,windspeed_100m,winddirection_100m,temperature_20m,pressure_20m";
 
   const cacheKey = `${dataset}-${year}-${wkt}-${interval}-${attributes}`;
   if (cache.has(cacheKey)) {

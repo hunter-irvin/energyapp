@@ -10,6 +10,11 @@ const chartAxis = document.getElementById("chart-axis");
 const chartDisplay = document.getElementById("chart-display");
 const tablePanel = document.getElementById("table-panel");
 const tableBody = document.getElementById("table-body");
+const tableLoadMore = document.getElementById("table-load-more");
+const debugPanel = document.getElementById("debug-panel");
+const debugOutput = document.getElementById("debug-output");
+const datePickerButton = document.getElementById("date-picker-button");
+const datePickerInput = document.getElementById("date-picker");
 
 const dataStore = {
   raw15: { solar: [], wind: [] },
@@ -17,14 +22,29 @@ const dataStore = {
   daily: { solar: [], wind: [] },
 };
 
-const SOLAR_YEAR = "2024";
+const SOLAR_YEAR = "2014";
 const WIND_YEAR = "2014";
 const PROXY_ENDPOINT = "/api/nrel-proxy";
-const DEFAULT_DATE = { month: 2, day: 9 };
+const DEFAULT_DATE = new Date(2014, 1, 9);
+let selectedDate = new Date(DEFAULT_DATE);
+const DEFAULT_WIND_SPEED_METRIC = "windspeed_20m";
+const DEFAULT_WIND_DIR_METRIC = "winddirection_20m";
+const FALLBACK_WIND_SPEED_METRIC = "windspeed_100m";
+const FALLBACK_WIND_DIR_METRIC = "winddirection_100m";
+let windMetricState = {
+  speed: DEFAULT_WIND_SPEED_METRIC,
+  direction: DEFAULT_WIND_DIR_METRIC,
+};
+let locationTimeZone = "UTC";
 const viewState = {
   period: "day",
   view: "chart",
 };
+const tableState = {
+  pageSize: 100,
+  page: 1,
+};
+let currentSeries = null;
 
 const map = L.map("map", {
   zoomControl: false,
@@ -58,63 +78,258 @@ const setStatus = ({ loading = false, loadingMessage = "", success = "", error =
   }
 };
 
-const formatNumber = (value) => {
+const formatNumber = (value, fractionDigits = 2) => {
   const numeric = Number(value);
   if (!Number.isFinite(numeric)) {
     return "-";
   }
-  return numeric.toFixed(2);
+  return numeric.toFixed(fractionDigits);
 };
 
-const formatDateLabel = ({ month, day }) => {
-  const date = new Date(2024, month - 1, day);
-  return date.toLocaleDateString("en-US", {
+const formatDateLabel = (date) =>
+  date.toLocaleDateString("en-US", {
     month: "long",
     day: "numeric",
     year: "numeric",
   });
+
+const pad2 = (value) => String(value).padStart(2, "0");
+const cleanText = (value) => String(value || "").replace(/^\ufeff/, "").trim();
+
+const formatDateKey = (date) =>
+  `${date.getFullYear()}-${pad2(date.getMonth() + 1)}-${pad2(date.getDate())}`;
+
+const recordDateKey = (record) =>
+  `${record.year}-${pad2(record.month)}-${pad2(record.day)}`;
+
+const buildRecordKey = (record) =>
+  `${record.year}-${pad2(record.month)}-${pad2(record.day)}` +
+  `-${pad2(record.hour ?? "00")}-${pad2(record.minute ?? "00")}`;
+
+const buildRecordKeyFromDate = (date) =>
+  `${formatDateKey(date)}-${pad2(date.getHours())}-${pad2(date.getMinutes())}`;
+
+const buildHourlyKeyFromDate = (date) =>
+  `${formatDateKey(date)}T${pad2(date.getHours())}:00`;
+
+const toTimestampDate = (timestamp) => new Date(timestamp);
+
+const getWeekStart = (date) => {
+  const start = new Date(date);
+  const day = start.getDay();
+  const diff = (day + 6) % 7;
+  start.setDate(start.getDate() - diff);
+  start.setHours(0, 0, 0, 0);
+  return start;
+};
+
+const getWeekEnd = (weekStart) => {
+  const end = new Date(weekStart);
+  end.setDate(end.getDate() + 6);
+  end.setHours(23, 59, 59, 999);
+  return end;
+};
+
+const normalizeHeader = (header) => {
+  const cleaned = cleanText(header)
+    .toLowerCase()
+    .replace(/\(.*?\)/g, "")
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "");
+  if (!cleaned) {
+    return cleaned;
+  }
+  if (cleaned.includes("wind") && cleaned.includes("speed") && cleaned.includes("20")) {
+    return "windspeed_20m";
+  }
+  if (cleaned.includes("wind") && cleaned.includes("direction") && cleaned.includes("20")) {
+    return "winddirection_20m";
+  }
+  if (cleaned.includes("wind") && cleaned.includes("speed") && cleaned.includes("100")) {
+    return "windspeed_100m";
+  }
+  if (cleaned.includes("wind") && cleaned.includes("direction") && cleaned.includes("100")) {
+    return "winddirection_100m";
+  }
+  if (cleaned.includes("air") && cleaned.includes("temperature")) {
+    return "air_temperature";
+  }
+  if (cleaned === "dni") {
+    return "dni";
+  }
+  if (cleaned === "dhi") {
+    return "dhi";
+  }
+  if (cleaned === "ghi") {
+    return "ghi";
+  }
+  if (cleaned === "year" || cleaned === "month" || cleaned === "day") {
+    return cleaned;
+  }
+  if (cleaned === "hour" || cleaned === "minute") {
+    return cleaned;
+  }
+  return cleaned;
 };
 
 const parseCsv = (csvText) => {
-  const lines = csvText.split(/\r?\n/).filter(Boolean);
-  const headerIndex = lines.findIndex((line) => line.startsWith("Year,Month"));
+  const lines = csvText.split(/\r?\n/).map((line) => cleanText(line)).filter(Boolean);
+  const headerIndex = lines.findIndex((line) =>
+    cleanText(line).toLowerCase().startsWith("year,month")
+  );
   if (headerIndex === -1) {
     return [];
   }
-  const headers = lines[headerIndex].split(",");
+  const headers = lines[headerIndex].split(",").map((header) => normalizeHeader(header));
   return lines.slice(headerIndex + 1).map((line) => {
     const values = line.split(",");
     return headers.reduce((acc, header, index) => {
-      acc[header] = values[index];
+      if (!header) {
+        return acc;
+      }
+      acc[header] = cleanText(values[index]);
       return acc;
     }, {});
   });
 };
 
+const resolveWindMetrics = (records) => {
+  const sample = records[0] || {};
+  const keys = new Set(Object.keys(sample));
+  const has20 = keys.has(DEFAULT_WIND_SPEED_METRIC) && keys.has(DEFAULT_WIND_DIR_METRIC);
+  if (has20) {
+    return { speed: DEFAULT_WIND_SPEED_METRIC, direction: DEFAULT_WIND_DIR_METRIC };
+  }
+  const has100 = keys.has(FALLBACK_WIND_SPEED_METRIC) && keys.has(FALLBACK_WIND_DIR_METRIC);
+  if (has100) {
+    return { speed: FALLBACK_WIND_SPEED_METRIC, direction: FALLBACK_WIND_DIR_METRIC };
+  }
+  return { speed: DEFAULT_WIND_SPEED_METRIC, direction: DEFAULT_WIND_DIR_METRIC };
+};
+
+const summarizeMetrics = (records, metrics) =>
+  metrics.reduce((summary, metric) => {
+    const numericCount = records.reduce((count, record) => {
+      const value = Number(record[metric]);
+      return Number.isFinite(value) ? count + 1 : count;
+    }, 0);
+    summary[metric] = { numeric: numericCount, total: records.length };
+    return summary;
+  }, {});
+
+const renderDebugOutput = (payload) => {
+  if (!debugOutput || !debugPanel) {
+    return;
+  }
+  debugPanel.hidden = false;
+  debugOutput.textContent = JSON.stringify(payload, null, 2);
+};
+
+const fetchTimeZone = async ({ lat, lng }) => {
+  const url = new URL("https://timeapi.io/api/TimeZone/coordinate");
+  url.searchParams.set("latitude", lat);
+  url.searchParams.set("longitude", lng);
+  try {
+    const response = await fetch(url.toString());
+    if (!response.ok) {
+      return "UTC";
+    }
+    const payload = await response.json();
+    return payload?.timeZone || "UTC";
+  } catch (error) {
+    return "UTC";
+  }
+};
+
+const getTimeZoneFormatter = (timeZone) =>
+  new Intl.DateTimeFormat("en-US", {
+    timeZone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  });
+
+const shiftRecordsToTimeZone = (records, timeZone) => {
+  if (!timeZone || timeZone === "UTC") {
+    return records;
+  }
+  const formatter = getTimeZoneFormatter(timeZone);
+  return records.map((record) => {
+    const year = Number(record.year);
+    const month = Number(record.month);
+    const day = Number(record.day);
+    const hour = Number(record.hour || 0);
+    const minute = Number(record.minute || 0);
+    if (
+      !Number.isFinite(year) ||
+      !Number.isFinite(month) ||
+      !Number.isFinite(day) ||
+      !Number.isFinite(hour) ||
+      !Number.isFinite(minute)
+    ) {
+      return record;
+    }
+    const utcDate = new Date(Date.UTC(year, month - 1, day, hour, minute, 0));
+    const parts = formatter.formatToParts(utcDate);
+    const byType = parts.reduce((acc, part) => {
+      acc[part.type] = part.value;
+      return acc;
+    }, {});
+    return {
+      ...record,
+      year: byType.year,
+      month: String(Number(byType.month)),
+      day: String(Number(byType.day)),
+      hour: String(Number(byType.hour)),
+      minute: String(Number(byType.minute)),
+    };
+  });
+};
+
+const normalizeRecordYears = (records, targetYear) =>
+  records.map((record) =>
+    record.year && record.year !== targetYear ? { ...record, year: targetYear } : record
+  );
+
+const findSolarSample = (records) =>
+  records.find(
+    (record) =>
+      Number(record.hour) === 12 &&
+      Number(record.minute) === 0 &&
+      Number(record.ghi) > 0
+  ) ||
+  records.find((record) => Number(record.hour) === 12 && Number(record.minute) === 0) ||
+  records.find((record) => record.ghi) ||
+  records[0] ||
+  null;
+
 const buildHourlyAggregation = (records, metrics) => {
   const buckets = new Map();
   records.forEach((record) => {
-    const hourKey = `${record.Year}-${record.Month.padStart(2, "0")}-${record.Day.padStart(
-      2,
-      "0"
-    )}T${record.Hour.padStart(2, "0")}:00`;
+    const hourKey = `${record.year}-${pad2(record.month)}-${pad2(record.day)}T${pad2(
+      record.hour
+    )}:00`;
     if (!buckets.has(hourKey)) {
-      buckets.set(hourKey, { timestamp: hourKey, count: 0 });
+      buckets.set(hourKey, { timestamp: hourKey, sums: {}, counts: {} });
     }
     const bucket = buckets.get(hourKey);
-    bucket.count += 1;
     metrics.forEach((metric) => {
       const value = Number(record[metric]);
       if (!Number.isFinite(value)) {
         return;
       }
-      bucket[metric] = (bucket[metric] || 0) + value;
+      bucket.sums[metric] = (bucket.sums[metric] || 0) + value;
+      bucket.counts[metric] = (bucket.counts[metric] || 0) + 1;
     });
   });
   return Array.from(buckets.values()).map((bucket) => {
     const hourly = { timestamp: bucket.timestamp };
     metrics.forEach((metric) => {
-      hourly[metric] = bucket[metric] ? bucket[metric] / bucket.count : 0;
+      const count = bucket.counts[metric] || 0;
+      hourly[metric] = count ? bucket.sums[metric] / count : 0;
     });
     return hourly;
   });
@@ -123,113 +338,134 @@ const buildHourlyAggregation = (records, metrics) => {
 const toDailyAggregation = (records, metrics) => {
   const buckets = new Map();
   records.forEach((record) => {
-    const dateKey = `${record.Year}-${record.Month.padStart(2, "0")}-${record.Day.padStart(
-      2,
-      "0"
-    )}`;
+    const dateKey = `${record.year}-${pad2(record.month)}-${pad2(record.day)}`;
     if (!buckets.has(dateKey)) {
-      buckets.set(dateKey, { date: dateKey, count: 0 });
+      buckets.set(dateKey, { date: dateKey, sums: {}, counts: {} });
     }
     const bucket = buckets.get(dateKey);
-    bucket.count += 1;
     metrics.forEach((metric) => {
       const value = Number(record[metric]);
       if (!Number.isFinite(value)) {
         return;
       }
-      bucket[metric] = (bucket[metric] || 0) + value;
+      bucket.sums[metric] = (bucket.sums[metric] || 0) + value;
+      bucket.counts[metric] = (bucket.counts[metric] || 0) + 1;
     });
   });
   return Array.from(buckets.values()).map((bucket) => {
     const daily = { date: bucket.date };
     metrics.forEach((metric) => {
-      daily[metric] = bucket[metric] ? bucket[metric] / bucket.count : 0;
+      const count = bucket.counts[metric] || 0;
+      daily[metric] = count ? bucket.sums[metric] / count : 0;
     });
     return daily;
   });
 };
 
-const normalizeRecordYear = (record, year = "2024") => ({
-  ...record,
-  Year: year,
-});
-
-const buildKey = (record) =>
-  `${record.Year}-${record.Month.padStart(2, "0")}-${record.Day.padStart(2, "0")}` +
-  `-${record.Hour?.padStart?.(2, "0") ?? "00"}-${record.Minute?.padStart?.(2, "0") ?? "00"}`;
-
-const buildSeries = (solarRecords, windRecords, period) => {
-  if (!solarRecords.length || !windRecords.length) {
+const buildSeries = (solarRecords, windRecords, period, date) => {
+  if (!solarRecords.length && !windRecords.length) {
     return buildMockSeries(period);
   }
 
+  const windSpeedMetric = windMetricState.speed;
+  const windDirMetric = windMetricState.direction;
+
   if (period === "day") {
-    const solarDay = solarRecords.filter(
-      (record) =>
-        Number(record.Month) === DEFAULT_DATE.month && Number(record.Day) === DEFAULT_DATE.day
-    );
-    const windDay = windRecords.filter(
-      (record) =>
-        Number(record.Month) === DEFAULT_DATE.month && Number(record.Day) === DEFAULT_DATE.day
-    );
-    const windMap = new Map(windDay.map((record) => [buildKey(record), record]));
-    const base = solarDay.length ? solarDay : windDay;
-    const labels = base.map(
-      (record) => `${record.Hour.padStart(2, "0")}:${record.Minute.padStart(2, "0")}`
-    );
+    const start = new Date(date);
+    start.setHours(0, 0, 0, 0);
+    const end = new Date(date);
+    end.setHours(23, 45, 0, 0);
+    const solarMap = new Map(solarRecords.map((record) => [buildRecordKey(record), record]));
+    const windMap = new Map(windRecords.map((record) => [buildRecordKey(record), record]));
+    const labels = [];
+    const solar = [];
+    const wind = [];
+    const windDirection = [];
+    for (let cursor = new Date(start); cursor <= end; cursor.setMinutes(cursor.getMinutes() + 15)) {
+      const key = buildRecordKeyFromDate(cursor);
+      const solarRecord = solarMap.get(key);
+      const windRecord = windMap.get(key);
+      labels.push(`${pad2(cursor.getHours())}:${pad2(cursor.getMinutes())}`);
+      solar.push(solarRecord ? Number(solarRecord.ghi) || 0 : 0);
+      wind.push(windRecord ? Number(windRecord[windSpeedMetric]) || 0 : 0);
+      windDirection.push(windRecord ? Number(windRecord[windDirMetric]) || 0 : 0);
+    }
     return {
       labels,
-      solar: base.map((record) => Number(record.ghi) || 0),
-      wind: base.map((record) => {
-        const windRecord = windMap.get(buildKey(record));
-        return windRecord ? Number(windRecord.windspeed_100m) : 0;
-      }),
-      windDirection: base.map((record) => {
-        const windRecord = windMap.get(buildKey(record));
-        return windRecord ? Number(windRecord.winddirection_100m) : 0;
-      }),
+      solar,
+      wind,
+      windDirection,
     };
   }
 
   if (period === "week") {
-    const solarHourly = dataStore.hourly.solar.filter((record) =>
-      record.timestamp.includes("-02-")
+    const weekStart = getWeekStart(date);
+    const weekEnd = getWeekEnd(weekStart);
+    const solarMap = new Map(
+      dataStore.hourly.solar.map((record) => [record.timestamp, record])
     );
-    const windMap = new Map(dataStore.hourly.wind.map((record) => [record.timestamp, record]));
-    const weekSlice = solarHourly.slice(0, 168);
-    const labels = weekSlice.map((record) => record.timestamp.split("T")[1]);
+    const windMap = new Map(
+      dataStore.hourly.wind.map((record) => [record.timestamp, record])
+    );
+    const labels = [];
+    const solar = [];
+    const wind = [];
+    const windDirection = [];
+    for (let cursor = new Date(weekStart); cursor <= weekEnd; cursor.setHours(cursor.getHours() + 1)) {
+      const key = buildHourlyKeyFromDate(cursor);
+      const solarRecord = solarMap.get(key);
+      const windRecord = windMap.get(key);
+      labels.push(
+        cursor.toLocaleString("en-US", {
+          weekday: "short",
+          hour: "2-digit",
+          minute: "2-digit",
+        })
+      );
+      solar.push(solarRecord ? Number(solarRecord.ghi) || 0 : 0);
+      const windSpeed = windRecord ? Number(windRecord[windSpeedMetric]) || 0 : 0;
+      const windDir = windRecord ? Number(windRecord[windDirMetric]) || 0 : 0;
+      wind.push(Math.round(windSpeed));
+      windDirection.push(Math.round(windDir));
+    }
     return {
       labels,
-      solar: weekSlice.map((record) => Number(record.ghi)),
-      wind: weekSlice.map((record) => {
-        const windRecord = windMap.get(record.timestamp);
-        return windRecord ? Number(windRecord.windspeed_100m) : 0;
-      }),
-      windDirection: weekSlice.map((record) => {
-        const windRecord = windMap.get(record.timestamp);
-        return windRecord ? Number(windRecord.winddirection_100m) : 0;
-      }),
+      solar,
+      wind,
+      windDirection,
     };
   }
 
-  const solarDaily = dataStore.daily.solar;
+  const solarMap = new Map(dataStore.daily.solar.map((record) => [record.date, record]));
   const windMap = new Map(dataStore.daily.wind.map((record) => [record.date, record]));
-  const filtered =
+  const start =
     period === "month"
-      ? solarDaily.filter((record) => record.date.includes("-02-"))
-      : solarDaily;
-  const labels = filtered.map((record) => record.date);
+      ? new Date(date.getFullYear(), date.getMonth(), 1)
+      : new Date(date.getFullYear(), 0, 1);
+  const end =
+    period === "month"
+      ? new Date(date.getFullYear(), date.getMonth() + 1, 0)
+      : new Date(date.getFullYear(), 11, 31);
+  const labels = [];
+  const solar = [];
+  const wind = [];
+  const windDirection = [];
+  for (let cursor = new Date(start); cursor <= end; cursor.setDate(cursor.getDate() + 1)) {
+    const key = formatDateKey(cursor);
+    const solarRecord = solarMap.get(key);
+    const windRecord = windMap.get(key);
+    labels.push(key);
+    solar.push(solarRecord ? Number(solarRecord.ghi) || 0 : 0);
+    const windSpeed = windRecord ? Number(windRecord[windSpeedMetric]) || 0 : 0;
+    const windDir = windRecord ? Number(windRecord[windDirMetric]) || 0 : 0;
+    wind.push(Math.round(windSpeed));
+    windDirection.push(Math.round(windDir));
+  }
   return {
     labels,
-    solar: filtered.map((record) => Number(record.ghi)),
-    wind: filtered.map((record) => {
-      const windRecord = windMap.get(record.date);
-      return windRecord ? Number(windRecord.windspeed_100m) : 0;
-    }),
-    windDirection: filtered.map((record) => {
-      const windRecord = windMap.get(record.date);
-      return windRecord ? Number(windRecord.winddirection_100m) : 0;
-    }),
+    solar,
+    wind,
+    windDirection,
   };
 };
 
@@ -309,22 +545,33 @@ const renderChart = (series) => {
 
 const renderTable = (series) => {
   tableBody.innerHTML = "";
-  const rows = series.labels.slice(0, 24);
-  rows.forEach((label, index) => {
+  const maxRows = tableState.pageSize * tableState.page;
+  series.labels.slice(0, maxRows).forEach((label, index) => {
+    const windDigits = viewState.period === "day" ? 2 : 0;
     const row = document.createElement("tr");
     row.innerHTML = `
       <td>${label}</td>
       <td>${formatNumber(series.solar[index])}</td>
-      <td>${formatNumber(series.wind[index])}</td>
-      <td>${formatNumber(series.windDirection[index])}</td>
+      <td>${formatNumber(series.wind[index], windDigits)}</td>
+      <td>${formatNumber(series.windDirection[index], windDigits)}</td>
     `;
     tableBody.appendChild(row);
   });
+  if (tableLoadMore) {
+    tableLoadMore.hidden = series.labels.length <= maxRows;
+  }
 };
 
 const updateView = () => {
-  chartDate.textContent = formatDateLabel(DEFAULT_DATE);
-  const series = buildSeries(dataStore.raw15.solar, dataStore.raw15.wind, viewState.period);
+  chartDate.textContent = formatDateLabel(selectedDate);
+  const series = buildSeries(
+    dataStore.raw15.solar,
+    dataStore.raw15.wind,
+    viewState.period,
+    selectedDate
+  );
+  currentSeries = series;
+  tableState.page = 1;
   renderChart(series);
   renderTable(series);
   chartDisplay.hidden = viewState.view !== "chart";
@@ -361,6 +608,7 @@ const parseError = async (responses) => {
 
 const fetchDataset = async ({ lat, lng }) => {
   const wkt = `POINT(${lng} ${lat})`;
+  locationTimeZone = await fetchTimeZone({ lat, lng });
   const solarUrl = buildUrl(PROXY_ENDPOINT, {
     dataset: "solar",
     wkt,
@@ -383,8 +631,12 @@ const fetchDataset = async ({ lat, lng }) => {
     windResponse.text(),
   ]);
 
-  const solarRecords = parseCsv(solarCsv).map((record) => normalizeRecordYear(record, SOLAR_YEAR));
-  const windRecords = parseCsv(windCsv).map((record) => normalizeRecordYear(record, SOLAR_YEAR));
+  const parsedSolarRecords = parseCsv(solarCsv);
+  const parsedWindRecords = parseCsv(windCsv);
+  const normalizedSolarRecords = normalizeRecordYears(parsedSolarRecords, SOLAR_YEAR);
+  const solarRecords = shiftRecordsToTimeZone(normalizedSolarRecords, locationTimeZone);
+  const windRecords = shiftRecordsToTimeZone(parsedWindRecords, locationTimeZone);
+  windMetricState = resolveWindMetrics(windRecords);
 
   dataStore.raw15.solar = solarRecords;
   dataStore.raw15.wind = windRecords;
@@ -396,10 +648,10 @@ const fetchDataset = async ({ lat, lng }) => {
     "wind_speed",
   ]);
   dataStore.hourly.wind = buildHourlyAggregation(windRecords, [
-    "windspeed_100m",
-    "winddirection_100m",
-    "temperature_100m",
-    "pressure_100m",
+    windMetricState.speed,
+    windMetricState.direction,
+    "temperature_20m",
+    "pressure_20m",
   ]);
   dataStore.daily.solar = toDailyAggregation(solarRecords, [
     "ghi",
@@ -409,11 +661,32 @@ const fetchDataset = async ({ lat, lng }) => {
     "wind_speed",
   ]);
   dataStore.daily.wind = toDailyAggregation(windRecords, [
-    "windspeed_100m",
-    "winddirection_100m",
-    "temperature_100m",
-    "pressure_100m",
+    windMetricState.speed,
+    windMetricState.direction,
+    "temperature_20m",
+    "pressure_20m",
   ]);
+
+  renderDebugOutput({
+    solar: {
+      sampleRecord: findSolarSample(solarRecords),
+      metricSummary: summarizeMetrics(solarRecords, ["ghi", "dni", "dhi"]),
+    },
+    wind: {
+      sampleRecord:
+        windRecords.find((record) => record[windMetricState.speed]) || windRecords[0] || null,
+      metricSummary: summarizeMetrics(windRecords, [
+        windMetricState.speed,
+        windMetricState.direction,
+      ]),
+    },
+    windMetricState,
+    timeZone: locationTimeZone,
+    rawSample: {
+      solar: solarCsv.split(/\r?\n/).slice(0, 6),
+      wind: windCsv.split(/\r?\n/).slice(0, 6),
+    },
+  });
 
   return {
     solarCount: solarRecords.length,
@@ -442,6 +715,41 @@ document.querySelectorAll("[data-view]").forEach((button) => {
     updateView();
   });
 });
+
+if (datePickerInput) {
+  datePickerInput.value = formatDateKey(selectedDate);
+}
+
+if (datePickerButton && datePickerInput) {
+  datePickerButton.addEventListener("click", () => {
+    if (typeof datePickerInput.showPicker === "function") {
+      datePickerInput.showPicker();
+    } else {
+      datePickerInput.click();
+    }
+  });
+}
+
+if (datePickerInput) {
+  datePickerInput.addEventListener("change", (event) => {
+    const nextDate = new Date(event.target.value);
+    if (Number.isNaN(nextDate.getTime())) {
+      return;
+    }
+    selectedDate = nextDate;
+    updateView();
+  });
+}
+
+if (tableLoadMore) {
+  tableLoadMore.addEventListener("click", () => {
+    if (!currentSeries) {
+      return;
+    }
+    tableState.page += 1;
+    renderTable(currentSeries);
+  });
+}
 
 mapButton.addEventListener("click", () => {
   selectionMode = !selectionMode;
@@ -493,13 +801,13 @@ map.on("click", (event) => {
     hoverMarker = null;
   }
 
-  setStatus({ loading: true, loadingMessage: "Fetching 2024 solar and 2014 wind data…" });
+  setStatus({ loading: true, loadingMessage: "Fetching 2014 solar and wind data…" });
   mapButton.disabled = true;
   fetchDataset(event.latlng)
     .then(({ solarCount, windCount }) => {
       setStatus({
         loading: false,
-        success: `Loaded ${solarCount} solar points (2024) and ${windCount} wind points (2014).`,
+        success: `Loaded ${solarCount} solar points (2014) and ${windCount} wind points (2014).`,
       });
       updateView();
     })
