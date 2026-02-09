@@ -292,6 +292,28 @@ body {
   background: rgba(8, 26, 66, 0.65);
 }
 
+.debug-panel {
+  padding: 12px 16px 16px;
+  background: rgba(8, 22, 54, 0.7);
+  border-top: 1px solid rgba(82, 113, 183, 0.35);
+  color: #c7d7f4;
+  font-size: 12px;
+}
+
+.debug-panel summary {
+  cursor: pointer;
+  font-weight: 600;
+  color: #e2edff;
+  margin-bottom: 8px;
+}
+
+.debug-panel pre {
+  margin: 8px 0 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: #b9c8e8;
+}
+
 .data-table {
   width: 100%;
   border-collapse: collapse;
