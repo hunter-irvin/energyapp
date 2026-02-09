@@ -10,8 +10,9 @@ const dataStore = {
 };
 
 const API_KEY = "Courz8adc7n8ydX9QySvsL29qfViI8jafqzOwqju";
-const CONTACT_EMAIL = "demo@example.com";
-const YEAR = "2024";
+const CONTACT_EMAIL = "hunter.irvin@jacobs.com";
+const SOLAR_YEAR = "2024";
+const WIND_YEAR = "2014";
 const SOLAR_ENDPOINT =
   "https://developer.nrel.gov/api/nsrdb/v2/solar/nsrdb-GOES-conus-v4-0-0-download.csv";
 const WIND_ENDPOINT =
@@ -99,12 +100,32 @@ const buildUrl = (base, params) => {
   return url.toString();
 };
 
+const parseError = async (responses) => {
+  const failed = responses.find((response) => !response.ok);
+  if (!failed) {
+    return "";
+  }
+  try {
+    const errorPayload = await failed.clone().json();
+    if (Array.isArray(errorPayload?.errors) && errorPayload.errors.length > 0) {
+      return errorPayload.errors.join(" ");
+    }
+  } catch (error) {
+    // ignore parsing errors and fall back to text
+  }
+  const text = await failed.text();
+  if (text) {
+    return text;
+  }
+  return "Unable to fetch datasets.";
+};
+
 const fetchDataset = async ({ lat, lng }) => {
   const wkt = `POINT(${lng} ${lat})`;
   const sharedParams = {
     api_key: API_KEY,
     wkt,
-    names: YEAR,
+    names: SOLAR_YEAR,
     utc: "true",
     leap_day: "false",
     email: CONTACT_EMAIL,
@@ -117,16 +138,14 @@ const fetchDataset = async ({ lat, lng }) => {
   });
   const windUrl = buildUrl(WIND_ENDPOINT, {
     ...sharedParams,
+    names: WIND_YEAR,
     attributes: "windspeed_100m,winddirection_100m,temperature_100m,pressure_100m",
   });
 
-  const [solarResponse, windResponse] = await Promise.all([
-    fetch(solarUrl),
-    fetch(windUrl),
-  ]);
-
-  if (!solarResponse.ok || !windResponse.ok) {
-    throw new Error("Unable to fetch datasets.");
+  const [solarResponse, windResponse] = await Promise.all([fetch(solarUrl), fetch(windUrl)]);
+  const responseError = await parseError([solarResponse, windResponse]);
+  if (responseError) {
+    throw new Error(responseError);
   }
 
   const [solarCsv, windCsv] = await Promise.all([
@@ -215,7 +234,7 @@ map.on("click", (event) => {
     .then(({ solarCount, windCount }) => {
       setStatus({
         loading: false,
-        success: `Loaded ${solarCount} solar points and ${windCount} wind points.`,
+        success: `Loaded ${solarCount} solar points (2024) and ${windCount} wind points (2014).`,
       });
     })
     .catch((error) => {
