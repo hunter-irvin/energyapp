@@ -1,0 +1,91 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Energy Explorer</title>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <main class="page">
+      <section class="card">
+        <header class="card__header">
+          <h1>Facility Settings</h1>
+        </header>
+        <div class="layout">
+          <div class="settings">
+            <div class="field">
+              <label for="facility-name">Name:</label>
+              <input id="facility-name" type="text" placeholder="Untitled" />
+            </div>
+            <div class="field">
+              <label>Location</label>
+              <button class="btn btn--primary" id="select-map">Select on Map</button>
+              <div class="status status--loading" id="loading-status" hidden>
+                <span class="status__text" id="loading-text">Loading data for 2024…</span>
+                <div class="loading-bars">
+                  <div class="loading-bar loading-bar--step">
+                    <span class="loading-bar__fill"></span>
+                  </div>
+                  <div class="loading-bar loading-bar--overall">
+                    <span class="loading-bar__fill"></span>
+                  </div>
+                </div>
+              </div>
+              <div class="status status--success" id="success-status" hidden>Data ready for 2024.</div>
+              <div class="status status--error" id="error-status" hidden>Unable to load data.</div>
+              <p class="location" id="location-value">No location selected</p>
+            </div>
+          </div>
+          <div class="map" id="map"></div>
+        </div>
+        <div class="toolbar">
+          <div class="toggle-group">
+            <button class="btn btn--toggle is-active" data-period="day">Day</button>
+            <button class="btn btn--toggle" data-period="week">Week</button>
+            <button class="btn btn--toggle" data-period="month">Month</button>
+            <button class="btn btn--toggle" data-period="year">Year</button>
+            <button class="btn btn--icon" aria-label="Pick a date">📅</button>
+          </div>
+          <div class="toggle-group">
+            <button class="btn btn--toggle is-active" data-view="chart">Chart</button>
+            <button class="btn btn--toggle" data-view="table">Table</button>
+          </div>
+        </div>
+        <section class="chart-panel">
+          <header class="chart-panel__header">
+            <div>
+              <h2>Typical Generation</h2>
+              <p class="chart-panel__legend">
+                <span class="legend legend--solar">Solar</span>
+                <span class="legend legend--wind">Wind</span>
+              </p>
+            </div>
+            <p class="chart-panel__date" id="chart-date">February 9, 2024</p>
+          </header>
+          <div class="chart-display" id="chart-display" title="Solar/wind values for each time bucket.">
+            <svg class="chart-svg" id="chart-svg" viewBox="0 0 600 220" preserveAspectRatio="none"></svg>
+            <div class="chart-axis" id="chart-axis"></div>
+          </div>
+          <div class="table-panel" id="table-panel" hidden>
+            <table class="data-table">
+              <thead>
+                <tr>
+                  <th title="Local time bucket for this reading.">Timestamp</th>
+                  <th title="Solar irradiance in watts per square meter.">Solar (GHI)</th>
+                  <th title="Wind speed in meters per second.">Wind Speed</th>
+                  <th title="Wind direction in degrees from north.">Wind Direction</th>
+                </tr>
+              </thead>
+              <tbody id="table-body"></tbody>
+            </table>
+          </div>
+        </section>
+      </section>
+    </main>
+
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script src="app.js"></script>
+  </body>
+</html>
