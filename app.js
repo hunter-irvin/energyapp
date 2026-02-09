@@ -35,6 +35,7 @@ let windMetricState = {
   speed: DEFAULT_WIND_SPEED_METRIC,
   direction: DEFAULT_WIND_DIR_METRIC,
 };
+let locationTimeZone = "UTC";
 const viewState = {
   period: "day",
   view: "chart",
@@ -222,6 +223,70 @@ const renderDebugOutput = (payload) => {
   }
   debugPanel.hidden = false;
   debugOutput.textContent = JSON.stringify(payload, null, 2);
+};
+
+const fetchTimeZone = async ({ lat, lng }) => {
+  const url = new URL("https://timeapi.io/api/TimeZone/coordinate");
+  url.searchParams.set("latitude", lat);
+  url.searchParams.set("longitude", lng);
+  try {
+    const response = await fetch(url.toString());
+    if (!response.ok) {
+      return "UTC";
+    }
+    const payload = await response.json();
+    return payload?.timeZone || "UTC";
+  } catch (error) {
+    return "UTC";
+  }
+};
+
+const getTimeZoneFormatter = (timeZone) =>
+  new Intl.DateTimeFormat("en-US", {
+    timeZone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  });
+
+const shiftRecordsToTimeZone = (records, timeZone) => {
+  if (!timeZone || timeZone === "UTC") {
+    return records;
+  }
+  const formatter = getTimeZoneFormatter(timeZone);
+  return records.map((record) => {
+    const year = Number(record.year);
+    const month = Number(record.month);
+    const day = Number(record.day);
+    const hour = Number(record.hour || 0);
+    const minute = Number(record.minute || 0);
+    if (
+      !Number.isFinite(year) ||
+      !Number.isFinite(month) ||
+      !Number.isFinite(day) ||
+      !Number.isFinite(hour) ||
+      !Number.isFinite(minute)
+    ) {
+      return record;
+    }
+    const utcDate = new Date(Date.UTC(year, month - 1, day, hour, minute, 0));
+    const parts = formatter.formatToParts(utcDate);
+    const byType = parts.reduce((acc, part) => {
+      acc[part.type] = part.value;
+      return acc;
+    }, {});
+    return {
+      ...record,
+      year: byType.year,
+      month: String(Number(byType.month)),
+      day: String(Number(byType.day)),
+      hour: String(Number(byType.hour)),
+      minute: String(Number(byType.minute)),
+    };
+  });
 };
 
 const normalizeRecordYears = (records, targetYear) =>
@@ -543,6 +608,7 @@ const parseError = async (responses) => {
 
 const fetchDataset = async ({ lat, lng }) => {
   const wkt = `POINT(${lng} ${lat})`;
+  locationTimeZone = await fetchTimeZone({ lat, lng });
   const solarUrl = buildUrl(PROXY_ENDPOINT, {
     dataset: "solar",
     wkt,
@@ -566,8 +632,10 @@ const fetchDataset = async ({ lat, lng }) => {
   ]);
 
   const parsedSolarRecords = parseCsv(solarCsv);
-  const windRecords = parseCsv(windCsv);
-  const solarRecords = normalizeRecordYears(parsedSolarRecords, SOLAR_YEAR);
+  const parsedWindRecords = parseCsv(windCsv);
+  const normalizedSolarRecords = normalizeRecordYears(parsedSolarRecords, SOLAR_YEAR);
+  const solarRecords = shiftRecordsToTimeZone(normalizedSolarRecords, locationTimeZone);
+  const windRecords = shiftRecordsToTimeZone(parsedWindRecords, locationTimeZone);
   windMetricState = resolveWindMetrics(windRecords);
 
   dataStore.raw15.solar = solarRecords;
@@ -613,6 +681,7 @@ const fetchDataset = async ({ lat, lng }) => {
       ]),
     },
     windMetricState,
+    timeZone: locationTimeZone,
     rawSample: {
       solar: solarCsv.split(/\r?\n/).slice(0, 6),
       wind: windCsv.split(/\r?\n/).slice(0, 6),
