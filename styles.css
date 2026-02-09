@@ -109,30 +109,16 @@ body {
 .loading-bar__fill {
   position: absolute;
   top: 0;
-  left: -60%;
-  width: 60%;
+  left: 0;
+  width: 0%;
   height: 100%;
   border-radius: inherit;
-  background: linear-gradient(90deg, rgba(139, 183, 255, 0), #8bb7ff, rgba(139, 183, 255, 0));
-  animation: loading-slide 1.4s ease-in-out infinite;
+  background: linear-gradient(90deg, rgba(99, 224, 184, 0), #63e0b8, rgba(99, 224, 184, 0));
+  transition: width 0.3s ease;
 }
 
 .loading-bar--overall .loading-bar__fill {
-  width: 40%;
-  background: linear-gradient(90deg, rgba(99, 224, 184, 0), #63e0b8, rgba(99, 224, 184, 0));
-  animation-duration: 2s;
-}
-
-@keyframes loading-slide {
-  0% {
-    transform: translateX(0);
-  }
-  50% {
-    transform: translateX(160%);
-  }
-  100% {
-    transform: translateX(0);
-  }
+  background: linear-gradient(90deg, rgba(139, 183, 255, 0), #8bb7ff, rgba(139, 183, 255, 0));
 }
 
 .map {
@@ -224,6 +210,22 @@ body {
   gap: 12px;
 }
 
+.legend {
+  border: none;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  padding: 0;
+  opacity: 0.7;
+}
+
+.legend.is-active {
+  opacity: 1;
+}
+
 .legend::before {
   content: "";
   display: inline-block;
@@ -263,10 +265,6 @@ body {
 }
 
 .chart-axis {
-  position: absolute;
-  bottom: 6px;
-  left: 12px;
-  right: 12px;
   display: grid;
   gap: 0;
   font-size: 10px;
@@ -276,6 +274,80 @@ body {
 
 .chart-axis span {
   text-align: center;
+}
+
+.chart-axis--below {
+  margin-top: 10px;
+  padding: 0 12px;
+}
+
+.chart-axis-title {
+  position: absolute;
+  top: 12px;
+  font-size: 11px;
+  color: #c7d7f4;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  pointer-events: none;
+}
+
+.chart-axis-title--left {
+  left: 12px;
+}
+
+.chart-axis-title--right {
+  right: 12px;
+}
+
+.chart-hover-line {
+  position: absolute;
+  top: 8px;
+  bottom: 24px;
+  width: 1px;
+  background: rgba(214, 227, 255, 0.8);
+  pointer-events: none;
+}
+
+.chart-tooltip {
+  position: absolute;
+  z-index: 2;
+  min-width: 150px;
+  padding: 10px 12px;
+  background: rgba(6, 20, 54, 0.95);
+  border: 1px solid rgba(120, 155, 234, 0.45);
+  border-radius: 10px;
+  font-size: 11px;
+  color: #e3edff;
+  pointer-events: none;
+  box-shadow: 0 12px 24px rgba(2, 8, 24, 0.4);
+}
+
+.chart-tooltip__label {
+  font-weight: 600;
+  margin-bottom: 6px;
+  color: #f5f8ff;
+}
+
+.chart-tooltip__row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: #c9d8f8;
+}
+
+.chart-tooltip__swatch {
+  width: 10px;
+  height: 6px;
+  border-radius: 999px;
+  flex-shrink: 0;
+}
+
+.chart-tooltip__swatch--solar {
+  background: linear-gradient(90deg, #f2c94c, #f7d77d);
+}
+
+.chart-tooltip__swatch--wind {
+  background: linear-gradient(90deg, #5cd3e8, #9be7f4);
 }
 
 .table-panel {
@@ -338,6 +410,19 @@ body {
 
 .data-table tbody tr:nth-child(odd) {
   background: rgba(6, 18, 46, 0.3);
+}
+
+.wind-direction {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: rgba(10, 30, 74, 0.6);
+  color: #d8e6ff;
+  font-size: 12px;
+  line-height: 1;
 }
 
 @media (max-width: 860px) {
