@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Energy Explorer</title>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <main class="page">
+      <section class="card">
+        <header class="card__header">
+          <h1>Facility Settings</h1>
+        </header>
+        <div class="layout">
+          <div class="settings">
+            <div class="field">
+              <label for="facility-name">Name:</label>
+              <input id="facility-name" type="text" placeholder="Untitled" />
+            </div>
+            <div class="field">
+              <label>Location</label>
+              <button class="btn btn--primary" id="select-map">Select on Map</button>
+              <p class="location" id="location-value">No location selected</p>
+            </div>
+          </div>
+          <div class="map" id="map"></div>
+        </div>
+        <div class="toolbar">
+          <div class="toggle-group">
+            <button class="btn btn--toggle is-active">Day</button>
+            <button class="btn btn--toggle">Week</button>
+            <button class="btn btn--toggle">Month</button>
+            <button class="btn btn--toggle">Year</button>
+            <button class="btn btn--icon" aria-label="Pick a date">📅</button>
+          </div>
+          <div class="toggle-group">
+            <button class="btn btn--toggle is-active">Chart</button>
+            <button class="btn btn--toggle">Table</button>
+          </div>
+        </div>
+        <section class="chart-panel">
+          <header class="chart-panel__header">
+            <div>
+              <h2>Typical Generation</h2>
+              <p class="chart-panel__legend">
+                <span class="legend legend--solar">Solar</span>
+                <span class="legend legend--wind">Wind</span>
+              </p>
+            </div>
+            <p class="chart-panel__date">February 8, 2024</p>
+          </header>
+          <div class="chart-placeholder">
+            <div class="chart-sun"></div>
+            <div class="chart-wave"></div>
+            <div class="chart-axis">
+              <span>1</span><span>2</span><span>3</span><span>4</span><span>5</span><span>6</span><span>7</span><span>8</span><span>9</span><span>10</span><span>11</span><span>12</span><span>13</span><span>14</span><span>15</span><span>16</span><span>17</span><span>18</span><span>19</span><span>20</span><span>21</span><span>22</span><span>23</span><span>24</span>
+            </div>
+          </div>
+        </section>
+      </section>
+    </main>
+
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script src="app.js"></script>
+  </body>
+</html>
