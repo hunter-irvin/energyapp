@@ -75,6 +75,46 @@
     return Number.isFinite(numeric) ? numeric : fallback;
   };
 
+  const toUtcDate = (timestampLike) => {
+    const raw = cleanText(timestampLike);
+    if (!raw) {
+      return null;
+    }
+    const withT = raw.includes("T") ? raw : raw.replace(" ", "T");
+    const hasZone = /(?:z|[+-]\d{2}:?\d{2})$/i.test(withT);
+    const primary = new Date(hasZone ? withT : `${withT}Z`);
+    if (!Number.isNaN(primary.getTime())) {
+      return primary;
+    }
+    const fallback = new Date(raw);
+    if (!Number.isNaN(fallback.getTime())) {
+      return fallback;
+    }
+    return null;
+  };
+
+  const withDateParts = (record) => {
+    const hasDateParts = [record.year, record.month, record.day].every((value) => Number.isFinite(Number(value)));
+    if (hasDateParts) {
+      return record;
+    }
+    const timestampLike =
+      record.timestamp || record.time || record.datetime || record.date_time || record.local_time || record.utc_time;
+    const utcDate = toUtcDate(timestampLike);
+    if (!utcDate) {
+      return record;
+    }
+    return {
+      ...record,
+      year: String(utcDate.getUTCFullYear()),
+      month: String(utcDate.getUTCMonth() + 1),
+      day: String(utcDate.getUTCDate()),
+      hour: String(utcDate.getUTCHours()),
+      minute: String(utcDate.getUTCMinutes()),
+      second: String(utcDate.getUTCSeconds()),
+    };
+  };
+
   const buildUrl = (base, params) => {
     const url = new URL(base, window.location.origin);
     Object.entries(params).forEach(([key, value]) => {
@@ -176,7 +216,7 @@
         const numeric = Number(raw);
         record[header] = Number.isNaN(numeric) ? raw : numeric;
       });
-      return record;
+      return withDateParts(record);
     });
   };
 
