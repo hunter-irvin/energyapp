@@ -4,6 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Add Generation Assets</title>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
     <link rel="stylesheet" href="styles.css" />
   </head>
   <body>
@@ -18,39 +19,91 @@
         </header>
         <section class="assets-summary">
           <div class="assets-facility">
-            <h2>[Facility Name]</h2>
+            <h2 data-facility-name>[Facility Name]</h2>
             <div class="assets-map">
-              <div class="assets-map__image" role="img" aria-label="Facility map preview"></div>
+              <div id="assets-map" class="assets-map__image" role="img" aria-label="Facility map preview"></div>
             </div>
+            <p class="assets-location" data-facility-location>No location selected</p>
           </div>
           <div class="assets-inputs">
             <div class="assets-column">
               <h3>Solar Assets</h3>
               <p class="assets-subtitle">Basic</p>
               <div class="assets-fields">
-                <label class="assets-label">square meters</label>
-                <input class="assets-input" type="text" />
-                <label class="assets-label">angle</label>
-                <input class="assets-input" type="text" />
-                <label class="assets-label">xyz</label>
-                <input class="assets-input" type="text" />
+                <label class="assets-label">Name <span class="assets-optional">(Optional)</span></label>
+                <input class="assets-input" type="text" data-solar-field="name" />
+                <label class="assets-label">Capacity (AC kW)</label>
+                <input class="assets-input" type="number" min="0" step="1" data-solar-field="capacity_ac_kw" />
+                <label class="assets-label">DC/AC Ratio <span class="assets-optional">(Optional)</span></label>
+                <input class="assets-input" type="number" min="0" step="0.01" data-solar-field="dc_ac_ratio" />
+                <label class="assets-label">Mount Type <span class="assets-optional">(Optional)</span></label>
+                <select class="assets-input" data-solar-field="mount_type">
+                  <option value="fixed">Fixed</option>
+                  <option value="single_axis_tracker">Single Axis Tracker</option>
+                </select>
+                <label class="assets-label">Tilt (deg) <span class="assets-optional">(Optional)</span></label>
+                <input class="assets-input" type="number" step="1" data-solar-field="tilt_deg" />
+                <label class="assets-label">Azimuth (deg) <span class="assets-optional">(Optional)</span></label>
+                <input class="assets-input" type="number" step="1" data-solar-field="azimuth_deg" />
               </div>
               <p class="assets-subtitle assets-subtitle--muted">Advanced</p>
+              <div class="assets-fields">
+                <label class="assets-label">System Losses (frac) <span class="assets-optional">(Optional)</span></label>
+                <input class="assets-input" type="number" step="0.01" data-solar-field="system_losses_frac" />
+                <label class="assets-label">Availability (frac) <span class="assets-optional">(Optional)</span></label>
+                <input class="assets-input" type="number" step="0.01" data-solar-field="availability_frac" />
+                <label class="assets-label">Clip at AC Capacity <span class="assets-optional">(Optional)</span></label>
+                <select class="assets-input" data-solar-field="clip_at_ac_capacity">
+                  <option value="true">True</option>
+                  <option value="false">False</option>
+                </select>
+                <label class="assets-label">NOCT (°C) <span class="assets-optional">(Optional)</span></label>
+                <input class="assets-input" type="number" step="1" data-solar-field="noct_c" />
+                <label class="assets-label">Temp Coeff (/°C) <span class="assets-optional">(Optional)</span></label>
+                <input class="assets-input" type="number" step="0.001" data-solar-field="temp_coeff_per_c" />
+              </div>
             </div>
             <div class="assets-column">
               <h3>Wind Assets</h3>
               <p class="assets-subtitle">Basic</p>
               <div class="assets-fields">
-                <label class="assets-label">Hub Height</label>
-                <input class="assets-input" type="text" />
-                <label class="assets-label">Rating</label>
-                <input class="assets-input" type="text" />
-                <label class="assets-label">Direction</label>
-                <input class="assets-input" type="text" />
-                <label class="assets-label">xyz</label>
-                <input class="assets-input" type="text" />
+                <label class="assets-label">Name <span class="assets-optional">(Optional)</span></label>
+                <input class="assets-input" type="text" data-wind-field="name" />
+                <label class="assets-label">Rated Power (kW)</label>
+                <input class="assets-input" type="number" min="0" step="1" data-wind-field="rated_power_kw" />
+                <label class="assets-label"># Turbines <span class="assets-optional">(Optional)</span></label>
+                <input class="assets-input" type="number" min="1" step="1" data-wind-field="num_turbines" />
+                <label class="assets-label">Hub Height (m) <span class="assets-optional">(Optional)</span></label>
+                <input class="assets-input" type="number" step="1" data-wind-field="hub_height_m" />
+                <label class="assets-label">Power Curve <span class="assets-optional">(Optional)</span></label>
+                <input class="assets-input" type="text" data-wind-field="power_curve_id" />
               </div>
               <p class="assets-subtitle assets-subtitle--muted">Advanced</p>
+              <div class="assets-fields">
+                <label class="assets-label">Cut-in (m/s) <span class="assets-optional">(Optional)</span></label>
+                <input class="assets-input" type="number" step="0.1" data-wind-field="cut_in_mps" />
+                <label class="assets-label">Rated (m/s) <span class="assets-optional">(Optional)</span></label>
+                <input class="assets-input" type="number" step="0.1" data-wind-field="rated_mps" />
+                <label class="assets-label">Cut-out (m/s) <span class="assets-optional">(Optional)</span></label>
+                <input class="assets-input" type="number" step="0.1" data-wind-field="cut_out_mps" />
+                <label class="assets-label">Availability (frac) <span class="assets-optional">(Optional)</span></label>
+                <input class="assets-input" type="number" step="0.01" data-wind-field="availability_frac" />
+                <label class="assets-label">Wake Losses (frac) <span class="assets-optional">(Optional)</span></label>
+                <input class="assets-input" type="number" step="0.01" data-wind-field="wake_losses_frac" />
+                <label class="assets-label">Electrical Losses (frac) <span class="assets-optional">(Optional)</span></label>
+                <input class="assets-input" type="number" step="0.01" data-wind-field="electrical_losses_frac" />
+                <label class="assets-label">Density Correction <span class="assets-optional">(Optional)</span></label>
+                <select class="assets-input" data-wind-field="density_correction_enabled">
+                  <option value="true">True</option>
+                  <option value="false">False</option>
+                </select>
+                <label class="assets-label">Air Density Std <span class="assets-optional">(Optional)</span></label>
+                <input class="assets-input" type="number" step="0.001" data-wind-field="air_density_std" />
+                <label class="assets-label">Shear Exponent α <span class="assets-optional">(Optional)</span></label>
+                <input class="assets-input" type="number" step="0.01" data-wind-field="shear_exponent_alpha" />
+                <label class="assets-label">Reference Height (m) <span class="assets-optional">(Optional)</span></label>
+                <input class="assets-input" type="number" step="1" data-wind-field="reference_height_m" />
+              </div>
             </div>
           </div>
         </section>
@@ -99,5 +152,8 @@
         </section>
       </section>
     </main>
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script src="models.js"></script>
+    <script src="assets.js"></script>
   </body>
 </html>

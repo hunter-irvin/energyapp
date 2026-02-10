@@ -62,13 +62,43 @@ L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
   attribution: "&copy; OpenStreetMap contributors",
 }).addTo(map);
 
+const storedMapState = JSON.parse(localStorage.getItem("energyapp.mapState") || "null");
+if (storedMapState?.center && typeof storedMapState.zoom === "number") {
+  map.setView([storedMapState.center.lat, storedMapState.center.lng], storedMapState.zoom);
+}
+
 let selectionMode = false;
 let marker = null;
 let hoverMarker = null;
 
+const MAP_STORAGE_KEY = "energyapp.mapState";
+const FACILITY_STORAGE_KEY = "energyapp.facility";
+
+const persistMapState = () => {
+  const center = map.getCenter();
+  const bounds = map.getBounds();
+  const state = {
+    center: { lat: center.lat, lng: center.lng },
+    zoom: map.getZoom(),
+    bounds: {
+      north: bounds.getNorth(),
+      south: bounds.getSouth(),
+      east: bounds.getEast(),
+      west: bounds.getWest(),
+    },
+  };
+  localStorage.setItem(MAP_STORAGE_KEY, JSON.stringify(state));
+};
+
 const updateLocation = (latlng) => {
   const { lat, lng } = latlng;
   locationValue.textContent = `${lat.toFixed(4)}, ${lng.toFixed(4)}`;
+  persistMapState();
+  const facility = JSON.parse(localStorage.getItem(FACILITY_STORAGE_KEY) || "{}");
+  localStorage.setItem(
+    FACILITY_STORAGE_KEY,
+    JSON.stringify({ ...facility, lat, lng })
+  );
 };
 
 const setStatus = ({ loading = false, loadingMessage = "", success = "", error = "" }) => {
@@ -943,6 +973,17 @@ if (chartDisplay) {
   chartDisplay.addEventListener("mouseleave", hideChartTooltip);
 }
 
+const facilityNameInput = document.getElementById("facility-name");
+if (facilityNameInput) {
+  facilityNameInput.addEventListener("input", (event) => {
+    const facility = JSON.parse(localStorage.getItem(FACILITY_STORAGE_KEY) || "{}");
+    localStorage.setItem(
+      FACILITY_STORAGE_KEY,
+      JSON.stringify({ ...facility, name: event.target.value || "Untitled Facility" })
+    );
+  });
+}
+
 mapButton.addEventListener("click", () => {
   selectionMode = !selectionMode;
   mapButton.classList.toggle("is-active", selectionMode);
@@ -984,6 +1025,7 @@ map.on("click", (event) => {
   }
 
   updateLocation(event.latlng);
+  persistMapState();
   selectionMode = false;
   mapButton.classList.remove("is-active");
   mapButton.textContent = "Select on Map";
@@ -1010,6 +1052,10 @@ map.on("click", (event) => {
     .finally(() => {
       mapButton.disabled = false;
     });
+});
+
+map.on("moveend", () => {
+  persistMapState();
 });
 
 updateView();
