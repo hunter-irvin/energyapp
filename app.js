@@ -1019,6 +1019,102 @@ const fetchDataset = async ({ lat, lng }, options = {}) => {
 
 
 
+
+const applyToggleState = (buttons, value, attribute) => {
+  buttons.forEach((button) => {
+    button.classList.toggle("is-active", button.dataset[attribute] === value);
+  });
+};
+
+document.querySelectorAll("[data-period]").forEach((button) => {
+  button.addEventListener("click", () => {
+    viewState.period = button.dataset.period;
+    applyToggleState(document.querySelectorAll("[data-period]"), viewState.period, "period");
+    updateView();
+  });
+});
+
+document.querySelectorAll("[data-view]").forEach((button) => {
+  button.addEventListener("click", () => {
+    viewState.view = button.dataset.view;
+    applyToggleState(document.querySelectorAll("[data-view]"), viewState.view, "view");
+    updateView();
+  });
+});
+
+document.querySelectorAll("[data-series]").forEach((button) => {
+  button.addEventListener("click", () => {
+    const series = button.dataset.series;
+    if (!series) {
+      return;
+    }
+    seriesVisibility[series] = !seriesVisibility[series];
+    button.classList.toggle("is-active", seriesVisibility[series]);
+    updateView();
+  });
+});
+
+if (datePickerInput) {
+  datePickerInput.value = formatDateKey(selectedDate);
+}
+
+if (datePickerButton && datePickerInput) {
+  datePickerButton.addEventListener("click", () => {
+    if (typeof datePickerInput.showPicker === "function") {
+      datePickerInput.showPicker();
+    } else {
+      datePickerInput.click();
+    }
+  });
+}
+
+if (datePickerInput) {
+  datePickerInput.addEventListener("change", async (event) => {
+    const nextDate = new Date(event.target.value);
+    if (Number.isNaN(nextDate.getTime())) {
+      return;
+    }
+    selectedDate = nextDate;
+    if (currentProject) {
+      try {
+        currentProject = await withRetry(() =>
+          supabaseService.updateProject(currentProject.id, { selectedDate: formatDateKey(selectedDate) })
+        );
+      } catch (error) {
+        setStatus({ loading: false, error: "Unable to save date selection. Please retry." });
+      }
+    }
+    updateView();
+  });
+}
+
+if (tableLoadMore) {
+  tableLoadMore.addEventListener("click", () => {
+    if (!currentSeries) {
+      return;
+    }
+    tableState.page += 1;
+    renderTable(currentSeries);
+  });
+}
+
+if (chartDisplay) {
+  chartDisplay.addEventListener("mousemove", updateChartTooltip);
+  chartDisplay.addEventListener("mouseleave", hideChartTooltip);
+}
+
+if (facilityNameInput) {
+  facilityNameInput.addEventListener("input", async (event) => {
+    if (!currentProject) {
+      return;
+    }
+    currentProject = await supabaseService.updateProject(currentProject.id, {
+      name: event.target.value || "Untitled Facility",
+    });
+  });
+}
+
+
 if (refreshWeatherDataButton) {
   refreshWeatherDataButton.addEventListener("click", async () => {
     if (!currentProject || currentProject.lat == null || currentProject.lng == null) {
