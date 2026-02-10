@@ -2,6 +2,7 @@
   const POINTS_PER_DAY = 96;
   const PROXY_ENDPOINT = "/api/nrel-proxy";
   const DEFAULT_DATE_KEY = "2014-02-09";
+  const ASSETS_STORAGE_KEY = "energyapp.assetsState";
 
   const facilityNameEl = document.querySelector("[data-facility-name]");
   const facilityLocationEl = document.querySelector("[data-facility-location]");
@@ -16,6 +17,8 @@
   const mapContainer = document.getElementById("assets-map");
   const generationChart = document.getElementById("generation-chart");
   const generationAxis = document.getElementById("generation-axis");
+  const generationChartFrame = document.getElementById("assets-chart-frame");
+  const generationTooltip = document.getElementById("generation-tooltip");
   const assetsDatePickerButton = document.getElementById("assets-date-picker-button");
   const assetsDatePickerInput = document.getElementById("assets-date-picker");
   const generationDebugOutput = document.getElementById("generation-debug-output");
@@ -47,6 +50,12 @@
 
   const solarAssets = [];
   const windAssets = [];
+
+  const chartState = {
+    solarKw: new Float64Array(POINTS_PER_DAY),
+    windKw: new Float64Array(POINTS_PER_DAY),
+    totalKw: new Float64Array(POINTS_PER_DAY),
+  };
 
   const weatherDay = {
     loading: false,
@@ -102,6 +111,90 @@
   const toNumber = (value, fallback = 0) => {
     const numeric = Number(value);
     return Number.isFinite(numeric) ? numeric : fallback;
+  };
+
+
+  const safeParse = (value, fallback) => {
+    try {
+      return JSON.parse(value);
+    } catch (error) {
+      return fallback;
+    }
+  };
+
+  const persistAssetsState = () => {
+    const payload = {
+      solar: solarAssets.map((entry) => entry.model),
+      wind: windAssets.map((entry) => entry.model),
+    };
+    localStorage.setItem(ASSETS_STORAGE_KEY, JSON.stringify(payload));
+  };
+
+  const formatKw = (value) => `${Number(value || 0).toFixed(2)} kW`;
+
+  const formatHourLabel = (index) => {
+    const totalMinutes = index * 15;
+    const hour = Math.floor(totalMinutes / 60);
+    const minute = totalMinutes % 60;
+    return `${pad2(hour)}:${pad2(minute)}`;
+  };
+
+  const buildGridLines = (maxValue, width, height, tickCount = 4) => {
+    const ticks = [];
+    for (let i = 0; i <= tickCount; i += 1) {
+      const value = (maxValue * i) / tickCount;
+      const y = height - (value / maxValue) * height;
+      ticks.push({ value, y });
+    }
+    const lines = ticks
+      .map(
+        ({ y }) =>
+          `<line x1="0" y1="${y.toFixed(2)}" x2="${width}" y2="${y.toFixed(2)}" stroke="rgba(141, 171, 230, 0.24)" stroke-width="1" />`
+      )
+      .join("");
+    const labels = ticks
+      .map(({ value, y }) => {
+        const rounded = value >= 100 ? Math.round(value) : Number(value.toFixed(1));
+        return `<text x="8" y="${Math.max(12, y - 4).toFixed(2)}" fill="#9fc0ff" font-size="11">${rounded}</text>`;
+      })
+      .join("");
+    return { lines, labels };
+  };
+
+  const hideTooltip = () => {
+    if (generationTooltip) {
+      generationTooltip.hidden = true;
+    }
+  };
+
+  const updateTooltip = (event) => {
+    if (!generationChartFrame || !generationTooltip || !chartState.totalKw) {
+      return;
+    }
+    const rect = generationChartFrame.getBoundingClientRect();
+    const x = event.clientX - rect.left;
+    const clampedX = Math.max(0, Math.min(rect.width, x));
+    const ratio = rect.width > 0 ? clampedX / rect.width : 0;
+    const index = Math.max(0, Math.min(POINTS_PER_DAY - 1, Math.round(ratio * (POINTS_PER_DAY - 1))));
+    const solarValue = chartState.solarKw[index] || 0;
+    const windValue = chartState.windKw[index] || 0;
+    const totalValue = chartState.totalKw[index] || 0;
+
+    generationTooltip.innerHTML = `
+      <div class="generation-tooltip__time">${formatHourLabel(index)}</div>
+      <div>Solar: ${formatKw(solarValue)}</div>
+      <div>Wind: ${formatKw(windValue)}</div>
+      <div>Total: ${formatKw(totalValue)}</div>
+    `;
+
+    const offset = 14;
+    const maxLeft = rect.width - generationTooltip.offsetWidth - 8;
+    const left = Math.max(8, Math.min(maxLeft, clampedX + offset));
+    const maxTop = rect.height - generationTooltip.offsetHeight - 8;
+    const top = Math.max(8, Math.min(maxTop, event.clientY - rect.top - generationTooltip.offsetHeight - 10));
+    generationTooltip.style.left = `${left}px`;
+    generationTooltip.style.top = `${top}px`;
+    generationTooltip.hidden = false;
   };
 
   const hasZoneInTimestamp = (timestampLike) => /(?:z|[+-]\d{2}:?\d{2})$/i.test(cleanText(timestampLike));
@@ -592,11 +685,13 @@
     }
 
     if (weatherDay.loading) {
+      hideTooltip();
       generationChart.innerHTML = '<text x="20" y="26" fill="#c7d7f4" font-size="14">Loading weather data…</text>';
       return;
     }
 
     if (!weatherDay.loaded) {
+      hideTooltip();
       const message = weatherDay.error || "No weather data loaded.";
       generationChart.innerHTML = `<text x="20" y="26" fill="#ffb3b3" font-size="13">${message}</text>`;
       if (generationAxis) {
@@ -656,12 +751,20 @@
     const height = 240;
     const yScale = height / maxValue;
     const zero = new Float64Array(POINTS_PER_DAY);
+    const { lines: gridLines, labels: gridLabels } = buildGridLines(maxValue, width, height);
 
     generationChart.innerHTML = `
+      <g class="generation-grid">${gridLines}</g>
+      <g class="generation-grid-labels">${gridLabels}</g>
+      <text x="20" y="132" fill="#9fc0ff" font-size="11" transform="rotate(-90 20 132)">Generation (kW)</text>
       <path d="${areaPath(windKw, zero, yScale, width, height)}" fill="rgba(92, 211, 232, 0.50)" stroke="rgba(92, 211, 232, 0.95)" stroke-width="1" />
       <path d="${areaPath(solarKw, windKw, yScale, width, height)}" fill="rgba(242, 201, 76, 0.60)" stroke="rgba(247, 215, 125, 0.95)" stroke-width="1" />
       <path d="${linePath(totalKw, yScale, width, height)}" fill="none" stroke="#ffffff" stroke-width="2" />
     `;
+
+    chartState.solarKw = solarKw;
+    chartState.windKw = windKw;
+    chartState.totalKw = totalKw;
 
     if (generationAxis) {
       generationAxis.innerHTML = ["00:00", "06:00", "12:00", "18:00", "24:00"]
@@ -705,6 +808,7 @@
     card.querySelectorAll("input, select").forEach((field) => {
       const handler = () => {
         updateModelFromField(model, field, prefix);
+        persistAssetsState();
         scheduleRecompute();
       };
       field.addEventListener("input", handler);
@@ -763,6 +867,7 @@
     }
     list[index].card.remove();
     list.splice(index, 1);
+    persistAssetsState();
   };
 
   if (deleteModal) {
@@ -783,7 +888,7 @@
     });
   }
 
-  const addAsset = (type) => {
+  const addAsset = (type, restoredModel = null, restoredId = null) => {
     const isSolar = type === "solar";
     const template = isSolar ? solarTemplate : windTemplate;
     const listEl = isSolar ? solarList : windList;
@@ -792,10 +897,10 @@
     }
 
     const nextIndex = isSolar ? ++solarCount : ++windCount;
-    const assetId = `${type}-${nextIndex}-${Date.now()}`;
+    const assetId = restoredId || `${type}-${nextIndex}-${Date.now()}`;
     const defaultModel = isSolar
-      ? createSolarAsset({ name: `Solar ${nextIndex}` })
-      : createWindAsset({ name: `Wind ${nextIndex}` });
+      ? createSolarAsset(restoredModel || { name: `Solar ${nextIndex}` })
+      : createWindAsset(restoredModel || { name: `Wind ${nextIndex}` });
 
     const fragment = template.content.cloneNode(true);
     const card = fragment.querySelector(".asset-card");
@@ -824,6 +929,7 @@
     };
     (isSolar ? solarAssets : windAssets).push(entry);
 
+    persistAssetsState();
     scheduleRecompute();
   };
 
@@ -834,6 +940,10 @@
     addWindButton.addEventListener("click", () => addAsset("wind"));
   }
 
+  if (generationChartFrame) {
+    generationChartFrame.addEventListener("mousemove", updateTooltip);
+    generationChartFrame.addEventListener("mouseleave", hideTooltip);
+  }
 
   if (assetsDatePickerInput) {
     assetsDatePickerInput.value = selectedDateKey;
@@ -883,6 +993,17 @@
     }
   }
 
+  const restoreAssetsState = () => {
+    const saved = safeParse(localStorage.getItem(ASSETS_STORAGE_KEY) || "null", null);
+    if (!saved) {
+      return;
+    }
+
+    (saved.solar || []).forEach((model) => addAsset("solar", model));
+    (saved.wind || []).forEach((model) => addAsset("wind", model));
+  };
+
+  restoreAssetsState();
   scheduleRecompute();
   fetchWeatherForDay();
 })();
