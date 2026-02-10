@@ -16,9 +16,12 @@
   const mapContainer = document.getElementById("assets-map");
   const generationChart = document.getElementById("generation-chart");
   const generationAxis = document.getElementById("generation-axis");
+  const assetsDatePickerButton = document.getElementById("assets-date-picker-button");
+  const assetsDatePickerInput = document.getElementById("assets-date-picker");
+  const generationDebugOutput = document.getElementById("generation-debug-output");
 
   const facility = JSON.parse(localStorage.getItem("energyapp.facility") || "{}");
-  const selectedDateKey = localStorage.getItem("energyapp.selectedDate") || DEFAULT_DATE_KEY;
+  let selectedDateKey = localStorage.getItem("energyapp.selectedDate") || DEFAULT_DATE_KEY;
 
   if (facilityNameEl) {
     facilityNameEl.textContent = facility.name || "Untitled Facility";
@@ -259,6 +262,28 @@
 
   const buildEmptySeries = () => new Float64Array(POINTS_PER_DAY);
 
+  const renderDebugData = ({ solarDebug = [], windDebug = [], totalKw = null }) => {
+    if (!generationDebugOutput) {
+      return;
+    }
+
+    const payload = {
+      selectedDate: selectedDateKey,
+      weatherStatus: {
+        loaded: weatherDay.loaded,
+        loading: weatherDay.loading,
+        error: weatherDay.error || null,
+        solarPoints: weatherDay.solar.length,
+        windPoints: weatherDay.wind.length,
+      },
+      solarAssets: solarDebug,
+      windAssets: windDebug,
+      totalSampleKw: totalKw ? Array.from(totalKw.slice(0, 8)).map((v) => Number(v.toFixed(3))) : [],
+    };
+
+    generationDebugOutput.textContent = JSON.stringify(payload, null, 2);
+  };
+
   const renderChart = () => {
     if (!generationChart) {
       return;
@@ -275,19 +300,34 @@
       if (generationAxis) {
         generationAxis.innerHTML = "";
       }
+      renderDebugData({});
       return;
     }
 
+    const solarDebug = [];
     solarAssets.forEach((assetEntry) => {
-      assetEntry.series = window.EnergyGeneration?.computeSolarPower
-        ? window.EnergyGeneration.computeSolarPower(assetEntry.model, weatherDay.solar)
-        : buildEmptySeries();
+      if (window.EnergyGeneration?.computeSolarPowerDebug) {
+        const debug = window.EnergyGeneration.computeSolarPowerDebug(assetEntry.model, weatherDay.solar);
+        assetEntry.series = debug.output;
+        solarDebug.push({ id: assetEntry.id, name: assetEntry.model.name, sample: debug.sample, errors: debug.errors });
+      } else {
+        assetEntry.series = window.EnergyGeneration?.computeSolarPower
+          ? window.EnergyGeneration.computeSolarPower(assetEntry.model, weatherDay.solar)
+          : buildEmptySeries();
+      }
     });
 
+    const windDebug = [];
     windAssets.forEach((assetEntry) => {
-      assetEntry.series = window.EnergyGeneration?.computeWindPower
-        ? window.EnergyGeneration.computeWindPower(assetEntry.model, weatherDay.wind)
-        : buildEmptySeries();
+      if (window.EnergyGeneration?.computeWindPowerDebug) {
+        const debug = window.EnergyGeneration.computeWindPowerDebug(assetEntry.model, weatherDay.wind);
+        assetEntry.series = debug.output;
+        windDebug.push({ id: assetEntry.id, name: assetEntry.model.name, sample: debug.sample, errors: debug.errors });
+      } else {
+        assetEntry.series = window.EnergyGeneration?.computeWindPower
+          ? window.EnergyGeneration.computeWindPower(assetEntry.model, weatherDay.wind)
+          : buildEmptySeries();
+      }
     });
 
     const solarKw = window.EnergyGeneration?.sumSolarAssets
@@ -326,6 +366,8 @@
         .map((label) => `<span>${label}</span>`)
         .join("");
     }
+
+    renderDebugData({ solarDebug, windDebug, totalKw });
   };
 
   const scheduleRecompute = () => {
@@ -488,6 +530,33 @@
   }
   if (addWindButton) {
     addWindButton.addEventListener("click", () => addAsset("wind"));
+  }
+
+
+  if (assetsDatePickerInput) {
+    assetsDatePickerInput.value = selectedDateKey;
+  }
+
+  if (assetsDatePickerButton && assetsDatePickerInput) {
+    assetsDatePickerButton.addEventListener("click", () => {
+      if (typeof assetsDatePickerInput.showPicker === "function") {
+        assetsDatePickerInput.showPicker();
+      } else {
+        assetsDatePickerInput.click();
+      }
+    });
+  }
+
+  if (assetsDatePickerInput) {
+    assetsDatePickerInput.addEventListener("change", (event) => {
+      const value = event.target.value;
+      if (!value) {
+        return;
+      }
+      selectedDateKey = value;
+      localStorage.setItem("energyapp.selectedDate", value);
+      fetchWeatherForDay();
+    });
   }
 
   if (mapContainer && window.L) {

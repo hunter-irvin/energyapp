@@ -45,7 +45,14 @@
         <div class="assets-divider"></div>
         <section class="assets-chart-section">
           <div class="assets-chart-header">
-            <h3>Typical Generation</h3>
+            <h3>Expected Generation</h3>
+            <div class="assets-chart-controls">
+              <div class="toggle-group">
+                <button class="btn btn--toggle is-active" type="button">Day</button>
+                <button class="btn btn--icon" id="assets-date-picker-button" aria-label="Pick a date">📅</button>
+                <input class="date-picker" id="assets-date-picker" type="date" aria-label="Select date" />
+              </div>
+            </div>
             <p class="assets-chart-legend">
               <span class="legend-chip legend-chip--solar">Solar</span>
               <span class="legend-chip legend-chip--wind">Wind</span>
@@ -56,6 +63,10 @@
             <svg id="generation-chart" class="generation-chart" viewBox="0 0 1000 260" preserveAspectRatio="none" aria-label="Typical generation chart"></svg>
           </div>
           <div class="assets-chart-axis" id="generation-axis"></div>
+          <details class="debug-panel assets-debug" id="generation-debug-panel">
+            <summary>Generation debug</summary>
+            <pre id="generation-debug-output">No generation debug data yet.</pre>
+          </details>
         </section>
       </section>
     </main>

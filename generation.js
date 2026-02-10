@@ -40,6 +40,45 @@
     return output;
   };
 
+  const computeSolarPowerDebug = (asset, nsrdbDaySeries = []) => {
+    const series = computeSolarPower(asset, nsrdbDaySeries);
+    const sample = [];
+    const errors = [];
+
+    const capacityAc = toNumber(asset?.capacity_ac_kw, 0);
+    const dcAcRatio = toNumber(asset?.dc_ac_ratio, 1.2);
+    const losses = toNumber(asset?.system_losses_frac, 0.14);
+    const availability = toNumber(asset?.availability_frac, 0.99);
+    const clipAtAc = asset?.clip_at_ac_capacity !== false;
+    const noct = toNumber(asset?.noct_c, 45);
+    const gamma = toNumber(asset?.temp_coeff_per_c, -0.004);
+    const pdcStcKw = capacityAc * dcAcRatio;
+
+    for (let i = 0; i < Math.min(nsrdbDaySeries.length, 4); i += 1) {
+      const record = nsrdbDaySeries[i] || {};
+      if (record.ghi == null || record.air_temperature == null) {
+        errors.push(`Solar point ${i}: missing ghi or air_temperature.`);
+      }
+      const poaWm2 = toNumber(record.ghi, 0);
+      const ta = toNumber(record.air_temperature, 0);
+      const tCell = ta + ((noct - 20) / 800) * poaWm2;
+      const pdcRaw = pdcStcKw * (poaWm2 / 1000) * (1 + gamma * (tCell - 25)) * (1 - losses);
+      const pdcClamped = Math.max(0, Number.isFinite(pdcRaw) ? pdcRaw : 0);
+      const pacKw = clipAtAc ? Math.min(pdcClamped, capacityAc) : pdcClamped;
+      sample.push({
+        timestamp: record.timestamp ?? i,
+        poa_wm2: poaWm2,
+        t_cell_c: tCell,
+        pdc_raw_kw: pdcRaw,
+        pdc_clamped_kw: pdcClamped,
+        pac_kw: pacKw,
+        output_kw: series[i],
+      });
+    }
+
+    return { output: series, sample, errors };
+  };
+
   const sumSolarAssets = (assets = [], nsrdbDaySeries = []) => {
     const points = Array.isArray(nsrdbDaySeries) ? nsrdbDaySeries.length : 0;
     const total = new Float64Array(points);
@@ -177,6 +216,33 @@
     return output;
   };
 
+  const computeWindPowerDebug = (asset, wtkDaySeries = []) => {
+    const series = computeWindPower(asset, wtkDaySeries);
+    const sample = [];
+    const errors = [];
+
+    const hubHeight = toNumber(asset?.hub_height_m, 100);
+
+    for (let i = 0; i < Math.min(wtkDaySeries.length, 4); i += 1) {
+      const record = wtkDaySeries[i] || {};
+      const windKeys = Object.keys(record).filter((k) => /^windspeed_\d+m$/.test(k));
+      const hubKey = `${'windspeed'}_${Math.round(hubHeight)}m`;
+      const sourceKey = record[hubKey] != null ? hubKey : windKeys[0] || "windspeed";
+      const vRaw = toNumber(record[sourceKey], 0);
+      if (!windKeys.length && record.windspeed == null) {
+        errors.push(`Wind point ${i}: no windspeed column found.`);
+      }
+      sample.push({
+        timestamp: record.timestamp ?? i,
+        source_key: sourceKey,
+        v_raw_mps: vRaw,
+        output_kw: series[i],
+      });
+    }
+
+    return { output: series, sample, errors };
+  };
+
   const sumWindAssets = (assets = [], wtkDaySeries = []) => {
     const points = Array.isArray(wtkDaySeries) ? wtkDaySeries.length : 0;
     const total = new Float64Array(points);
@@ -192,9 +258,11 @@
   const api = {
     computeSolarPower,
     sumSolarAssets,
+    computeSolarPowerDebug,
     powerCurve,
     computeWindPower,
     sumWindAssets,
+    computeWindPowerDebug,
   };
 
   if (typeof module !== "undefined" && module.exports) {
