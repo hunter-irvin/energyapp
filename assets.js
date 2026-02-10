@@ -420,15 +420,25 @@
       weatherDay.firstMatchedTimestamp = solarSlice.firstMatchedTimestamp || windSlice.firstMatchedTimestamp;
       weatherDay.lastMatchedTimestamp = solarSlice.lastMatchedTimestamp || windSlice.lastMatchedTimestamp;
 
-      weatherDay.loaded =
-        weatherDay.solar.length === POINTS_PER_DAY &&
-        weatherDay.wind.length === POINTS_PER_DAY &&
-        weatherDay.matchedSolarRows > 0 &&
-        weatherDay.matchedWindRows > 0;
+      const needsSolar = solarAssets.length > 0;
+      const needsWind = windAssets.length > 0;
+      const solarReady = weatherDay.solar.length === POINTS_PER_DAY && weatherDay.matchedSolarRows > 0;
+      const windReady = weatherDay.wind.length === POINTS_PER_DAY && weatherDay.matchedWindRows > 0;
+
+      weatherDay.loaded = (!needsSolar || solarReady) && (!needsWind || windReady);
 
       if (!weatherDay.loaded) {
+        const missingStreams = [];
+        if (needsSolar && !solarReady) {
+          missingStreams.push("solar");
+        }
+        if (needsWind && !windReady) {
+          missingStreams.push("wind");
+        }
         weatherDay.error =
-          "No weather rows matched selected date after alignment. Check timezone/year normalization.";
+          missingStreams.length === 1
+            ? `No ${missingStreams[0]} weather rows matched selected date after alignment. Check timezone/year normalization.`
+            : "No solar/wind weather rows matched selected date after alignment. Check timezone/year normalization.";
       }
     } catch (error) {
       weatherDay.loaded = false;
