@@ -803,3 +803,15 @@ body {
     align-items: flex-start;
   }
 }
+
+.project-controls {
+  margin-top: 0.5rem;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.9rem;
+}
+
+.project-controls select {
+  min-width: 180px;
+}

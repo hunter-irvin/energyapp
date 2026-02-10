@@ -26,14 +26,17 @@ const dataStore = {
   daily: { solar: [], wind: [] },
 };
 
+const projectSelect = document.getElementById("project-select");
+const createProjectButton = document.getElementById("create-project");
+const facilityNameInput = document.getElementById("facility-name");
+const supabaseService = window.EnergySupabaseService;
+
 const SOLAR_YEAR = "2014";
 const WIND_YEAR = "2014";
 const PROXY_ENDPOINT = "/api/nrel-proxy";
 const DEFAULT_DATE = new Date(2014, 1, 9);
-const SELECTED_DATE_STORAGE_KEY = "energyapp.selectedDate";
-const storedSelectedDate = localStorage.getItem(SELECTED_DATE_STORAGE_KEY);
-const parsedStoredDate = storedSelectedDate ? new Date(`${storedSelectedDate}T00:00:00`) : null;
-let selectedDate = parsedStoredDate && !Number.isNaN(parsedStoredDate.getTime()) ? parsedStoredDate : new Date(DEFAULT_DATE);
+let selectedDate = new Date(DEFAULT_DATE);
+let currentProject = null;
 const DEFAULT_WIND_SPEED_METRIC = "windspeed_20m";
 const DEFAULT_WIND_DIR_METRIC = "winddirection_20m";
 const FALLBACK_WIND_SPEED_METRIC = "windspeed_100m";
@@ -57,9 +60,6 @@ const tableState = {
 };
 let currentSeries = null;
 
-const MAP_STORAGE_KEY = "energyapp.mapState";
-const FACILITY_STORAGE_KEY = "energyapp.facility";
-
 let selectionMode = false;
 let marker = null;
 let hoverMarker = null;
@@ -73,27 +73,17 @@ L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
   attribution: "&copy; OpenStreetMap contributors",
 }).addTo(map);
 
-const storedMapState = JSON.parse(localStorage.getItem("energyapp.mapState") || "null");
-if (storedMapState?.center && typeof storedMapState.zoom === "number") {
-  map.setView([storedMapState.center.lat, storedMapState.center.lng], storedMapState.zoom);
-}
 
-const storedFacility = JSON.parse(localStorage.getItem(FACILITY_STORAGE_KEY) || "null");
-if (storedFacility?.lat != null && storedFacility?.lng != null) {
-  locationValue.textContent = `${storedFacility.lat.toFixed(4)}, ${storedFacility.lng.toFixed(4)}`;
-  marker = L.marker([storedFacility.lat, storedFacility.lng], { draggable: true }).addTo(map);
-  marker.on("dragend", (dragEvent) => {
-    updateLocation(dragEvent.target.getLatLng());
-  });
-}
+const getSelectedDateStorageKey = (projectId) => supabaseService.buildScopedUiStorageKey(projectId, "selectedDate");
+const getMapStorageKey = (projectId) => supabaseService.buildScopedUiStorageKey(projectId, "mapState");
 
-const facilityNameInput = document.getElementById("facility-name");
-if (facilityNameInput && storedFacility?.name) {
-  facilityNameInput.value = storedFacility.name;
-}
-
+const loadProjectMapState = (projectId) =>
+  JSON.parse(localStorage.getItem(getMapStorageKey(projectId)) || "null");
 
 const persistMapState = () => {
+  if (!currentProject) {
+    return;
+  }
   const center = map.getCenter();
   const bounds = map.getBounds();
   const state = {
@@ -106,18 +96,60 @@ const persistMapState = () => {
       west: bounds.getWest(),
     },
   };
-  localStorage.setItem(MAP_STORAGE_KEY, JSON.stringify(state));
+  localStorage.setItem(getMapStorageKey(currentProject.id), JSON.stringify(state));
 };
 
-const updateLocation = (latlng) => {
+const setProjectDate = (projectId) => {
+  const storedSelectedDate = localStorage.getItem(getSelectedDateStorageKey(projectId));
+  const parsedStoredDate = storedSelectedDate ? new Date(`${storedSelectedDate}T00:00:00`) : null;
+  selectedDate = parsedStoredDate && !Number.isNaN(parsedStoredDate.getTime()) ? parsedStoredDate : new Date(DEFAULT_DATE);
+  if (datePickerInput) {
+    datePickerInput.value = formatDateKey(selectedDate);
+  }
+};
+
+const applyProjectToUi = (project) => {
+  currentProject = project;
+  supabaseService.setLastOpenedProjectId(project.id);
+  if (facilityNameInput) {
+    facilityNameInput.value = project.name || "Untitled Facility";
+  }
+  if (project.lat != null && project.lng != null) {
+    locationValue.textContent = `${project.lat.toFixed(4)}, ${project.lng.toFixed(4)}`;
+    if (!marker) {
+      marker = L.marker([project.lat, project.lng], { draggable: true }).addTo(map);
+      marker.on("dragend", (dragEvent) => {
+        void updateLocation(dragEvent.target.getLatLng());
+      });
+    } else {
+      marker.setLatLng([project.lat, project.lng]);
+    }
+  } else {
+    locationValue.textContent = "No location selected";
+    if (marker) {
+      map.removeLayer(marker);
+      marker = null;
+    }
+  }
+
+  const mapState = loadProjectMapState(project.id);
+  if (mapState?.center && typeof mapState.zoom === "number") {
+    map.setView([mapState.center.lat, mapState.center.lng], mapState.zoom);
+  } else if (project.lat != null && project.lng != null) {
+    map.setView([project.lat, project.lng], 10);
+  }
+
+  setProjectDate(project.id);
+};
+
+const updateLocation = async (latlng) => {
+  if (!currentProject) {
+    return;
+  }
   const { lat, lng } = latlng;
   locationValue.textContent = `${lat.toFixed(4)}, ${lng.toFixed(4)}`;
   persistMapState();
-  const facility = JSON.parse(localStorage.getItem(FACILITY_STORAGE_KEY) || "{}");
-  localStorage.setItem(
-    FACILITY_STORAGE_KEY,
-    JSON.stringify({ ...facility, lat, lng })
-  );
+  currentProject = await supabaseService.updateProject(currentProject.id, { lat, lng });
 };
 
 const setStatus = ({ loading = false, loadingMessage = "", success = "", error = "" }) => {
@@ -806,8 +838,12 @@ const parseError = async (responses) => {
 };
 
 const fetchDataset = async ({ lat, lng }) => {
+  const cacheKey = "all";
   const wkt = `POINT(${lng} ${lat})`;
   locationTimeZone = await fetchTimeZone({ lat, lng });
+  const cachedSolar = currentProject ? await supabaseService.getNrelCache(currentProject.id, "solar", cacheKey) : null;
+  const cachedWind = currentProject ? await supabaseService.getNrelCache(currentProject.id, "wind", cacheKey) : null;
+
   const solarUrl = buildUrl(PROXY_ENDPOINT, {
     dataset: "solar",
     wkt,
@@ -818,6 +854,20 @@ const fetchDataset = async ({ lat, lng }) => {
     wkt,
     interval: "15",
   });
+
+  if (cachedSolar?.payload && cachedWind?.payload) {
+    const normalizedSolarRecords = normalizeRecordYears(cachedSolar.payload, SOLAR_YEAR);
+    const nextSolarRecords = shiftRecordsToTimeZone(normalizedSolarRecords, locationTimeZone);
+    const nextWindRecords = shiftRecordsToTimeZone(cachedWind.payload, locationTimeZone);
+    windMetricState = resolveWindMetrics(nextWindRecords);
+    dataStore.raw15.solar = nextSolarRecords;
+    dataStore.raw15.wind = nextWindRecords;
+    dataStore.hourly.solar = buildHourlyAggregation(nextSolarRecords, ["ghi", "dni", "dhi", "air_temperature", "wind_speed"]);
+    dataStore.hourly.wind = buildHourlyAggregation(nextWindRecords, [windMetricState.speed, windMetricState.direction, "temperature_20m", "pressure_20m"]);
+    dataStore.daily.solar = toDailyAggregation(nextSolarRecords, ["ghi", "dni", "dhi", "air_temperature", "wind_speed"]);
+    dataStore.daily.wind = toDailyAggregation(nextWindRecords, [windMetricState.speed, windMetricState.direction, "temperature_20m", "pressure_20m"]);
+    return { solarCount: nextSolarRecords.length, windCount: nextWindRecords.length };
+  }
 
   const totalSteps = 4;
   const { solarResponsePromise, windResponsePromise } = await runLoadingStep(
@@ -856,6 +906,10 @@ const fetchDataset = async ({ lat, lng }) => {
     () => {
       const parsedSolarRecords = parseCsv(solarCsv);
       const parsedWindRecords = parseCsv(windCsv);
+      if (currentProject) {
+        void supabaseService.upsertNrelCache({ projectId: currentProject.id, dataset: "solar", dateKey: cacheKey, payload: parsedSolarRecords });
+        void supabaseService.upsertNrelCache({ projectId: currentProject.id, dataset: "wind", dateKey: cacheKey, payload: parsedWindRecords });
+      }
       const normalizedSolarRecords = normalizeRecordYears(parsedSolarRecords, SOLAR_YEAR);
       const nextSolarRecords = shiftRecordsToTimeZone(normalizedSolarRecords, locationTimeZone);
       const nextWindRecords = shiftRecordsToTimeZone(parsedWindRecords, locationTimeZone);
@@ -973,7 +1027,9 @@ if (datePickerInput) {
       return;
     }
     selectedDate = nextDate;
-    localStorage.setItem(SELECTED_DATE_STORAGE_KEY, formatDateKey(selectedDate));
+    if (currentProject) {
+      localStorage.setItem(getSelectedDateStorageKey(currentProject.id), formatDateKey(selectedDate));
+    }
     updateView();
   });
 }
@@ -994,12 +1050,13 @@ if (chartDisplay) {
 }
 
 if (facilityNameInput) {
-  facilityNameInput.addEventListener("input", (event) => {
-    const facility = JSON.parse(localStorage.getItem(FACILITY_STORAGE_KEY) || "{}");
-    localStorage.setItem(
-      FACILITY_STORAGE_KEY,
-      JSON.stringify({ ...facility, name: event.target.value || "Untitled Facility" })
-    );
+  facilityNameInput.addEventListener("input", async (event) => {
+    if (!currentProject) {
+      return;
+    }
+    currentProject = await supabaseService.updateProject(currentProject.id, {
+      name: event.target.value || "Untitled Facility",
+    });
   });
 }
 
@@ -1077,24 +1134,80 @@ map.on("moveend", () => {
   persistMapState();
 });
 
-updateView();
+const refreshProjectSelect = async (selectedProjectId = null) => {
+  if (!projectSelect) {
+    return;
+  }
+  const projects = await supabaseService.listProjects();
+  projectSelect.innerHTML = projects
+    .map((project) => `<option value="${project.id}">${project.name || "Untitled Facility"}</option>`)
+    .join("");
 
-if (storedFacility?.lat != null && storedFacility?.lng != null && dataStore.raw15.solar.length === 0) {
+  const preferredId = selectedProjectId || supabaseService.getLastOpenedProjectId() || projects[0]?.id || null;
+  if (!preferredId) {
+    return;
+  }
+  projectSelect.value = preferredId;
+  const selected = projects.find((project) => project.id === preferredId);
+  if (selected) {
+    applyProjectToUi(selected);
+  }
+};
+
+const loadProjectWeather = async () => {
+  if (!currentProject || currentProject.lat == null || currentProject.lng == null) {
+    updateView();
+    return;
+  }
   setStatus({ loading: true, loadingMessage: "Restoring weather data for saved location…" });
   setLoadingProgress(0, 0);
   mapButton.disabled = true;
-  fetchDataset({ lat: storedFacility.lat, lng: storedFacility.lng })
-    .then(({ solarCount, windCount }) => {
-      setStatus({
-        loading: false,
-        success: `Loaded ${solarCount} solar points (2014) and ${windCount} wind points (2014).`,
-      });
-      updateView();
-    })
-    .catch((error) => {
-      setStatus({ loading: false, error: error.message });
-    })
-    .finally(() => {
-      mapButton.disabled = false;
-    });
+  try {
+    const { solarCount, windCount } = await fetchDataset({ lat: currentProject.lat, lng: currentProject.lng });
+    setStatus({ loading: false, success: `Loaded ${solarCount} solar points (2014) and ${windCount} wind points (2014).` });
+    updateView();
+  } catch (error) {
+    setStatus({ loading: false, error: error.message });
+  } finally {
+    mapButton.disabled = false;
+  }
+};
+
+const init = async () => {
+  await supabaseService.migrateLegacyLocalData();
+  let projects = await supabaseService.listProjects();
+  if (projects.length === 0) {
+    const created = await supabaseService.createProject({ name: "Project 1" });
+    projects = [created];
+  }
+
+  await refreshProjectSelect(projects[0].id);
+  updateView();
+  await loadProjectWeather();
+};
+
+if (projectSelect) {
+  projectSelect.addEventListener("change", async (event) => {
+    const project = await supabaseService.getProject(event.target.value);
+    if (!project) {
+      return;
+    }
+    applyProjectToUi(project);
+    dataStore.raw15.solar = [];
+    dataStore.raw15.wind = [];
+    await loadProjectWeather();
+  });
 }
+
+if (createProjectButton) {
+  createProjectButton.addEventListener("click", async () => {
+    const name = window.prompt("Project name", `Project ${Date.now()}`) || "Untitled Project";
+    const project = await supabaseService.createProject({ name });
+    await refreshProjectSelect(project.id);
+    dataStore.raw15.solar = [];
+    dataStore.raw15.wind = [];
+    updateView();
+  });
+}
+
+void init();
