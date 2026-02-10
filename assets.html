@@ -93,18 +93,16 @@
     </main>
     <template id="solar-asset-template">
       <div class="asset-card" data-asset-type="solar">
-        <div class="asset-card__header">
-          <label class="assets-label">
-            Name <span class="assets-optional">(Optional)</span>
-            <input class="assets-input asset-name" type="text" data-solar-field="name" />
-          </label>
-          <button class="asset-collapse" type="button" aria-expanded="true" aria-label="Collapse asset">
-            ▾
-          </button>
-        </div>
-        <div class="asset-card__body">
-          <p class="assets-subtitle">Basic</p>
-          <div class="assets-fields">
+        <button class="asset-delete" type="button" aria-label="Delete asset">×</button>
+        <input class="asset-title-input" type="text" data-solar-field="name" aria-label="Solar asset name" />
+        <div class="asset-section asset-section--basic">
+          <div class="asset-section__header">
+            <p class="assets-subtitle">Basic</p>
+            <button class="asset-section-toggle" type="button" aria-expanded="true" aria-label="Collapse basic fields">
+              ▾
+            </button>
+          </div>
+          <div class="asset-section__body assets-fields">
             <label class="assets-label">Capacity (AC kW)</label>
             <input class="assets-input" type="number" min="0" step="1" data-solar-field="capacity_ac_kw" />
             <label class="assets-label">DC/AC Ratio <span class="assets-optional">(Optional)</span></label>
@@ -119,8 +117,15 @@
             <label class="assets-label">Azimuth (deg) <span class="assets-optional">(Optional)</span></label>
             <input class="assets-input" type="number" step="1" data-solar-field="azimuth_deg" />
           </div>
-          <p class="assets-subtitle assets-subtitle--muted">Advanced</p>
-          <div class="assets-fields">
+        </div>
+        <div class="asset-section asset-section--advanced is-collapsed">
+          <div class="asset-section__header">
+            <p class="assets-subtitle assets-subtitle--muted">Advanced</p>
+            <button class="asset-section-toggle" type="button" aria-expanded="false" aria-label="Expand advanced fields">
+              ▸
+            </button>
+          </div>
+          <div class="asset-section__body assets-fields">
             <label class="assets-label">System Losses (frac) <span class="assets-optional">(Optional)</span></label>
             <input class="assets-input" type="number" step="0.01" data-solar-field="system_losses_frac" />
             <label class="assets-label">Availability (frac) <span class="assets-optional">(Optional)</span></label>
@@ -140,18 +145,16 @@
     </template>
     <template id="wind-asset-template">
       <div class="asset-card" data-asset-type="wind">
-        <div class="asset-card__header">
-          <label class="assets-label">
-            Name <span class="assets-optional">(Optional)</span>
-            <input class="assets-input asset-name" type="text" data-wind-field="name" />
-          </label>
-          <button class="asset-collapse" type="button" aria-expanded="true" aria-label="Collapse asset">
-            ▾
-          </button>
-        </div>
-        <div class="asset-card__body">
-          <p class="assets-subtitle">Basic</p>
-          <div class="assets-fields">
+        <button class="asset-delete" type="button" aria-label="Delete asset">×</button>
+        <input class="asset-title-input" type="text" data-wind-field="name" aria-label="Wind asset name" />
+        <div class="asset-section asset-section--basic">
+          <div class="asset-section__header">
+            <p class="assets-subtitle">Basic</p>
+            <button class="asset-section-toggle" type="button" aria-expanded="true" aria-label="Collapse basic fields">
+              ▾
+            </button>
+          </div>
+          <div class="asset-section__body assets-fields">
             <label class="assets-label">Rated Power (kW)</label>
             <input class="assets-input" type="number" min="0" step="1" data-wind-field="rated_power_kw" />
             <label class="assets-label"># Turbines <span class="assets-optional">(Optional)</span></label>
@@ -161,8 +164,15 @@
             <label class="assets-label">Power Curve <span class="assets-optional">(Optional)</span></label>
             <input class="assets-input" type="text" data-wind-field="power_curve_id" />
           </div>
-          <p class="assets-subtitle assets-subtitle--muted">Advanced</p>
-          <div class="assets-fields">
+        </div>
+        <div class="asset-section asset-section--advanced is-collapsed">
+          <div class="asset-section__header">
+            <p class="assets-subtitle assets-subtitle--muted">Advanced</p>
+            <button class="asset-section-toggle" type="button" aria-expanded="false" aria-label="Expand advanced fields">
+              ▸
+            </button>
+          </div>
+          <div class="asset-section__body assets-fields">
             <label class="assets-label">Cut-in (m/s) <span class="assets-optional">(Optional)</span></label>
             <input class="assets-input" type="number" step="0.1" data-wind-field="cut_in_mps" />
             <label class="assets-label">Rated (m/s) <span class="assets-optional">(Optional)</span></label>
@@ -190,7 +200,17 @@
         </div>
       </div>
     </template>
-    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <dialog class="delete-modal" id="delete-asset-modal">
+      <form method="dialog" class="delete-modal__content">
+        <h3>Delete asset?</h3>
+        <p>This action cannot be undone.</p>
+        <div class="delete-modal__actions">
+          <button class="btn" value="cancel">Cancel</button>
+          <button class="btn btn--danger" id="confirm-delete-asset" value="confirm">Delete</button>
+        </div>
+      </form>
+    </dialog>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
     <script src="models.js"></script>
     <script src="assets.js"></script>
   </body>

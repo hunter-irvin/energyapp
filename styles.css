@@ -280,47 +280,107 @@ body {
   gap: 12px;
 }
 
+
+
 .asset-card {
+  position: relative;
   border: 1px solid rgba(82, 113, 183, 0.4);
   border-radius: 12px;
   padding: 12px;
   background: rgba(6, 18, 46, 0.5);
 }
 
-.asset-card__header {
+.asset-delete {
+  position: absolute;
+  right: 10px;
+  top: 10px;
+  border: none;
+  background: #7f1d2b;
+  color: #ffdce1;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  cursor: pointer;
+  font-size: 16px;
+  line-height: 1;
+}
+
+.asset-title-input {
+  width: calc(100% - 40px);
+  background: transparent;
+  border: none;
+  border-bottom: 1px solid rgba(82, 113, 183, 0.5);
+  color: #f4f8ff;
+  font-size: 18px;
+  font-weight: 600;
+  padding: 0 0 8px;
+  margin-bottom: 10px;
+}
+
+.asset-title-input:focus {
+  outline: none;
+  border-bottom-color: #5f89e7;
+}
+
+.asset-section {
+  margin-top: 6px;
+}
+
+.asset-section__header {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 8px;
+  margin-bottom: 8px;
 }
 
-.asset-card__header .assets-label {
-  display: grid;
-  gap: 6px;
-  text-transform: uppercase;
-}
-
-.asset-name {
-  width: 100%;
-}
-
-.asset-collapse {
+.asset-section-toggle {
   border: none;
-  background: rgba(6, 22, 60, 0.6);
+  background: transparent;
   color: #d8e6ff;
-  border-radius: 999px;
-  width: 28px;
-  height: 28px;
+  font-size: 20px;
   cursor: pointer;
+  line-height: 1;
 }
 
-.asset-card.is-collapsed .asset-card__body {
+.asset-section.is-collapsed .asset-section__body {
   display: none;
 }
 
-.asset-card.is-collapsed .asset-collapse {
-  transform: rotate(-90deg);
+.delete-modal {
+  border: 1px solid rgba(82, 113, 183, 0.4);
+  border-radius: 12px;
+  background: #061c4d;
+  color: #e5eeff;
 }
+
+.delete-modal::backdrop {
+  background: rgba(0, 0, 0, 0.45);
+}
+
+.delete-modal__content {
+  min-width: 280px;
+}
+
+.delete-modal__content h3 {
+  margin: 0 0 8px;
+}
+
+.delete-modal__content p {
+  margin: 0 0 14px;
+  color: #b3c7ed;
+}
+
+.delete-modal__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
+.btn--danger {
+  background: linear-gradient(135deg, #9c1f36, #77162a);
+  color: #fff;
+}
+
 
 .assets-column h3 {
   margin: 0 0 6px;

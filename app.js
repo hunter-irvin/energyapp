@@ -56,34 +56,11 @@ let currentSeries = null;
 
 const MAP_STORAGE_KEY = "energyapp.mapState";
 const FACILITY_STORAGE_KEY = "energyapp.facility";
-const DATA_STORAGE_KEY = "energyapp.dataStore";
 
 let selectionMode = false;
 let marker = null;
 let hoverMarker = null;
 
-const persistDataStore = () => {
-  sessionStorage.setItem(
-    DATA_STORAGE_KEY,
-    JSON.stringify({
-      dataStore,
-      windMetricState,
-      locationTimeZone,
-    })
-  );
-};
-
-const hydrateDataStore = () => {
-  const stored = JSON.parse(sessionStorage.getItem(DATA_STORAGE_KEY) || "null");
-  if (!stored?.dataStore) {
-    return;
-  }
-  dataStore.raw15 = stored.dataStore.raw15 || { solar: [], wind: [] };
-  dataStore.hourly = stored.dataStore.hourly || { solar: [], wind: [] };
-  dataStore.daily = stored.dataStore.daily || { solar: [], wind: [] };
-  windMetricState = stored.windMetricState || windMetricState;
-  locationTimeZone = stored.locationTimeZone || locationTimeZone;
-};
 
 const map = L.map("map", {
   zoomControl: false,
@@ -112,7 +89,6 @@ if (facilityNameInput && storedFacility?.name) {
   facilityNameInput.value = storedFacility.name;
 }
 
-hydrateDataStore();
 
 const persistMapState = () => {
   const center = map.getCenter();
@@ -910,7 +886,6 @@ const fetchDataset = async ({ lat, lng }) => {
         "temperature_20m",
         "pressure_20m",
       ]);
-      persistDataStore();
 
       return { solarRecords: nextSolarRecords, windRecords: nextWindRecords };
     }
@@ -1099,3 +1074,23 @@ map.on("moveend", () => {
 });
 
 updateView();
+
+if (storedFacility?.lat != null && storedFacility?.lng != null && dataStore.raw15.solar.length === 0) {
+  setStatus({ loading: true, loadingMessage: "Restoring weather data for saved location…" });
+  setLoadingProgress(0, 0);
+  mapButton.disabled = true;
+  fetchDataset({ lat: storedFacility.lat, lng: storedFacility.lng })
+    .then(({ solarCount, windCount }) => {
+      setStatus({
+        loading: false,
+        success: `Loaded ${solarCount} solar points (2014) and ${windCount} wind points (2014).`,
+      });
+      updateView();
+    })
+    .catch((error) => {
+      setStatus({ loading: false, error: error.message });
+    })
+    .finally(() => {
+      mapButton.disabled = false;
+    });
+}

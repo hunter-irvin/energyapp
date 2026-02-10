@@ -7,6 +7,8 @@
   const addWindButton = document.getElementById("add-wind");
   const solarTemplate = document.getElementById("solar-asset-template");
   const windTemplate = document.getElementById("wind-asset-template");
+  const deleteModal = document.getElementById("delete-asset-modal");
+  const confirmDeleteButton = document.getElementById("confirm-delete-asset");
   const mapContainer = document.getElementById("assets-map");
 
   const facility = JSON.parse(localStorage.getItem("energyapp.facility") || "{}");
@@ -21,6 +23,7 @@
   const windDefaults = window.EnergyModels?.DEFAULT_WIND_ASSET;
   let solarCount = 0;
   let windCount = 0;
+  let pendingDeleteCard = null;
 
   const populateFields = (container, defaults, prefix) => {
     const fields = container.querySelectorAll(`[data-${prefix}-field]`);
@@ -38,24 +41,48 @@
     });
   };
 
-  const setAssetName = (container, name) => {
-    const nameField = container.querySelector(".asset-name");
-    if (nameField) {
-      nameField.value = name;
-    }
-  };
-
-  const wireCollapse = (container) => {
-    const button = container.querySelector(".asset-collapse");
-    const body = container.querySelector(".asset-card__body");
-    if (!button || !body) {
-      return;
-    }
-    button.addEventListener("click", () => {
-      const collapsed = container.classList.toggle("is-collapsed");
-      button.setAttribute("aria-expanded", String(!collapsed));
+  const wireSectionToggles = (card) => {
+    card.querySelectorAll(".asset-section").forEach((section) => {
+      const toggle = section.querySelector(".asset-section-toggle");
+      if (!toggle) {
+        return;
+      }
+      toggle.addEventListener("click", () => {
+        const collapsed = section.classList.toggle("is-collapsed");
+        toggle.setAttribute("aria-expanded", String(!collapsed));
+        toggle.textContent = collapsed ? "▸" : "▾";
+      });
     });
   };
+
+  const wireDelete = (card) => {
+    const deleteButton = card.querySelector(".asset-delete");
+    if (!deleteButton || !deleteModal || !confirmDeleteButton) {
+      return;
+    }
+    deleteButton.addEventListener("click", () => {
+      pendingDeleteCard = card;
+      deleteModal.showModal();
+    });
+  };
+
+
+  if (deleteModal) {
+    deleteModal.addEventListener("close", () => {
+      pendingDeleteCard = null;
+    });
+  }
+
+  if (confirmDeleteButton) {
+    confirmDeleteButton.addEventListener("click", (event) => {
+      event.preventDefault();
+      if (pendingDeleteCard) {
+        pendingDeleteCard.remove();
+        pendingDeleteCard = null;
+      }
+      deleteModal?.close();
+    });
+  }
 
   const addAsset = (type) => {
     const isSolar = type === "solar";
@@ -73,8 +100,12 @@
     const nextIndex = isSolar ? ++solarCount : ++windCount;
     const assetName = isSolar ? `Solar ${nextIndex}` : `Wind ${nextIndex}`;
     populateFields(card, defaults, isSolar ? "solar" : "wind");
-    setAssetName(card, assetName);
-    wireCollapse(card);
+    const nameInput = card.querySelector(".asset-title-input");
+    if (nameInput) {
+      nameInput.value = assetName;
+    }
+    wireSectionToggles(card);
+    wireDelete(card);
     list.appendChild(card);
   };
 
