@@ -5,8 +5,9 @@ global.window = {};
 require(path.join(__dirname, "..", "data-utils.js"));
 
 const { normalizeHeader, mapHeaders, mergeSeriesOnTimestamps } = global.window.EnergyDataUtils;
+const { runSolarComputeTests } = require(path.join(__dirname, "solar-compute.test.js"));
 
-const run = () => {
+const runDataUtilsTests = () => {
   assert.strictEqual(normalizeHeader(" GHI (W/m^2) "), "ghi");
   assert.strictEqual(normalizeHeader("\ufeffTemperature (C)"), "temperature");
 
@@ -44,5 +45,6 @@ const run = () => {
   assert.strictEqual(merged.solar[0].ghi, 0);
 };
 
-run();
+runDataUtilsTests();
+runSolarComputeTests();
 console.log("All tests passed.");

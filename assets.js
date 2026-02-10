@@ -197,6 +197,10 @@
   };
 
   const buildSolarProfile = (asset, solarSlice) => {
+    if (window.EnergyGeneration?.computeSolarPower) {
+      return window.EnergyGeneration.computeSolarPower(asset, solarSlice);
+    }
+
     const profile = new Float64Array(POINTS_PER_DAY);
     const capacity = Math.max(0, numberOrDefault(asset.capacity_ac_kw, 0));
     const availability = Math.max(0, Math.min(1, numberOrDefault(asset.availability_frac, 0.99)));
@@ -285,7 +289,9 @@
       collectAssetValues(card, "wind", windDefaults || {})
     );
 
-    const solarKw = sumProfiles(solarAssets.map((asset) => buildSolarProfile(asset, weatherDay.solar)));
+    const solarKw = window.EnergyGeneration?.sumSolarAssets
+      ? window.EnergyGeneration.sumSolarAssets(solarAssets, weatherDay.solar)
+      : sumProfiles(solarAssets.map((asset) => buildSolarProfile(asset, weatherDay.solar)));
     const windKw = sumProfiles(windAssets.map((asset) => buildWindProfile(asset, weatherDay.wind)));
     const totalKw = new Float64Array(POINTS_PER_DAY);
     for (let i = 0; i < POINTS_PER_DAY; i += 1) {
