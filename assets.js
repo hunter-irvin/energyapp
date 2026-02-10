@@ -18,6 +18,8 @@
   const generationAxis = document.getElementById("generation-axis");
 
   const facility = JSON.parse(localStorage.getItem("energyapp.facility") || "{}");
+  const selectedDateKey = localStorage.getItem("energyapp.selectedDate") || DEFAULT_DATE_KEY;
+
   if (facilityNameEl) {
     facilityNameEl.textContent = facility.name || "Untitled Facility";
   }
@@ -25,18 +27,30 @@
     facilityLocationEl.textContent = `${facility.lat.toFixed(4)}, ${facility.lng.toFixed(4)}`;
   }
 
-  const solarDefaults = window.EnergyModels?.DEFAULT_SOLAR_ASSET;
-  const windDefaults = window.EnergyModels?.DEFAULT_WIND_ASSET;
+  const solarDefaults = window.EnergyModels?.DEFAULT_SOLAR_ASSET || {};
+  const windDefaults = window.EnergyModels?.DEFAULT_WIND_ASSET || {};
+  const createSolarAsset =
+    window.EnergyModels?.createSolarAsset ||
+    ((overrides = {}) => ({ ...solarDefaults, ...overrides }));
+  const createWindAsset =
+    window.EnergyModels?.createWindAsset ||
+    ((overrides = {}) => ({ ...windDefaults, ...overrides }));
+
   let solarCount = 0;
   let windCount = 0;
-  let pendingDeleteCard = null;
+  let pendingDeleteId = null;
+  let pendingDeleteType = null;
+  let recomputeRaf = 0;
 
-  const selectedDateKey = localStorage.getItem("energyapp.selectedDate") || DEFAULT_DATE_KEY;
+  const solarAssets = [];
+  const windAssets = [];
+
   const weatherDay = {
     loading: false,
+    loaded: false,
     error: "",
-    solar: Array.from({ length: POINTS_PER_DAY }, (_, i) => ({ timestamp: i, ghi: 0, air_temperature: 20 })),
-    wind: Array.from({ length: POINTS_PER_DAY }, (_, i) => ({ timestamp: i, windspeed: 0 })),
+    solar: [],
+    wind: [],
   };
 
   const pad2 = (value) => String(value).padStart(2, "0");
@@ -48,9 +62,9 @@
       .replace(/[^a-z0-9]+/g, "_")
       .replace(/^_+|_+$/g, "");
 
-  const numberOrDefault = (value, fallback) => {
-    const n = Number(value);
-    return Number.isFinite(n) ? n : fallback;
+  const toNumber = (value, fallback = 0) => {
+    const numeric = Number(value);
+    return Number.isFinite(numeric) ? numeric : fallback;
   };
 
   const buildUrl = (base, params) => {
@@ -101,11 +115,30 @@
     if (!records.length) {
       return "windspeed_100m";
     }
-    const keys = Object.keys(records[0]).filter((key) => /^windspeed_\d+m$/.test(key));
+    const sample = records.find(Boolean) || {};
+    const keys = Object.keys(sample).filter((key) => /^windspeed_\d+m$/.test(key));
     if (keys.includes("windspeed_100m")) {
       return "windspeed_100m";
     }
     return keys[0] || "windspeed_100m";
+  };
+
+  const pickWindTemperatureKey = (records) => {
+    const sample = records.find(Boolean) || {};
+    const keys = Object.keys(sample).filter((key) => /^temperature_\d+m$/.test(key));
+    if (keys.includes("temperature_100m")) {
+      return "temperature_100m";
+    }
+    return keys[0] || null;
+  };
+
+  const pickWindPressureKey = (records) => {
+    const sample = records.find(Boolean) || {};
+    const keys = Object.keys(sample).filter((key) => /^pressure_\d+m$/.test(key));
+    if (keys.includes("pressure_100m")) {
+      return "pressure_100m";
+    }
+    return keys[0] || null;
   };
 
   const sliceDay = (records, dateKey, mapFn) => {
@@ -126,15 +159,24 @@
       const hour = Math.floor((i * 15) / 60);
       const minute = (i * 15) % 60;
       const key = hour * 60 + minute;
-      points.push(
-        mapFn(byMinute.get(key), `${dateKey}T${pad2(hour)}:${pad2(minute)}:00`)
-      );
+      points.push(mapFn(byMinute.get(key), `${dateKey}T${pad2(hour)}:${pad2(minute)}:00`));
     }
+
     return points;
+  };
+
+  const setNoWeatherLoaded = () => {
+    weatherDay.loaded = false;
+    weatherDay.loading = false;
+    weatherDay.error = "";
+    weatherDay.solar = [];
+    weatherDay.wind = [];
   };
 
   const fetchWeatherForDay = async () => {
     if (facility.lat == null || facility.lng == null) {
+      setNoWeatherLoaded();
+      scheduleRecompute();
       return;
     }
 
@@ -144,100 +186,48 @@
 
     try {
       const wkt = `POINT(${facility.lng} ${facility.lat})`;
-      const [solarCsv, windCsv] = await Promise.all([
-        fetch(buildUrl(PROXY_ENDPOINT, { dataset: "solar", wkt, interval: "15" })).then((r) => r.text()),
-        fetch(buildUrl(PROXY_ENDPOINT, { dataset: "wind", wkt, interval: "15" })).then((r) => r.text()),
+      const [solarResponse, windResponse] = await Promise.all([
+        fetch(buildUrl(PROXY_ENDPOINT, { dataset: "solar", wkt, interval: "15" })),
+        fetch(buildUrl(PROXY_ENDPOINT, { dataset: "wind", wkt, interval: "15" })),
       ]);
 
+      if (!solarResponse.ok || !windResponse.ok) {
+        throw new Error("Unable to load weather data for selected location.");
+      }
+
+      const [solarCsv, windCsv] = await Promise.all([solarResponse.text(), windResponse.text()]);
       const solarRecords = parseCsv(solarCsv);
       const windRecords = parseCsv(windCsv);
+
       const windSpeedKey = pickWindSpeedKey(windRecords);
+      const windTemperatureKey = pickWindTemperatureKey(windRecords);
+      const windPressureKey = pickWindPressureKey(windRecords);
 
       weatherDay.solar = sliceDay(solarRecords, selectedDateKey, (record, timestamp) => ({
         timestamp,
-        ghi: numberOrDefault(record?.ghi, 0),
-        dni: numberOrDefault(record?.dni, 0),
-        dhi: numberOrDefault(record?.dhi, 0),
-        air_temperature: numberOrDefault(record?.air_temperature, 20),
+        ghi: toNumber(record?.ghi, 0),
+        dni: toNumber(record?.dni, 0),
+        dhi: toNumber(record?.dhi, 0),
+        air_temperature: toNumber(record?.air_temperature, 20),
       }));
 
       weatherDay.wind = sliceDay(windRecords, selectedDateKey, (record, timestamp) => ({
         timestamp,
-        windspeed: numberOrDefault(record?.[windSpeedKey], 0),
+        [windSpeedKey]: toNumber(record?.[windSpeedKey], 0),
+        ...(windTemperatureKey ? { [windTemperatureKey]: toNumber(record?.[windTemperatureKey], NaN) } : {}),
+        ...(windPressureKey ? { [windPressureKey]: toNumber(record?.[windPressureKey], NaN) } : {}),
       }));
+
+      weatherDay.loaded = weatherDay.solar.length === POINTS_PER_DAY && weatherDay.wind.length === POINTS_PER_DAY;
     } catch (error) {
+      weatherDay.loaded = false;
       weatherDay.error = error.message || "Unable to fetch weather data.";
+      weatherDay.solar = [];
+      weatherDay.wind = [];
     } finally {
       weatherDay.loading = false;
-      renderChart();
+      scheduleRecompute();
     }
-  };
-
-  const collectAssetValues = (card, prefix, defaults) => {
-    const fields = card.querySelectorAll(`[data-${prefix}-field]`);
-    const values = { ...defaults };
-    fields.forEach((field) => {
-      const key = field.dataset[`${prefix}Field`];
-      if (!key) {
-        return;
-      }
-      if (field.type === "number") {
-        values[key] = numberOrDefault(field.value, defaults[key]);
-      } else if (field.tagName === "SELECT") {
-        if (field.value === "true" || field.value === "false") {
-          values[key] = field.value === "true";
-        } else {
-          values[key] = field.value;
-        }
-      } else {
-        values[key] = field.value;
-      }
-    });
-    return values;
-  };
-
-  const buildSolarProfile = (asset, solarSlice) => {
-    if (window.EnergyGeneration?.computeSolarPower) {
-      return window.EnergyGeneration.computeSolarPower(asset, solarSlice);
-    }
-
-    const profile = new Float64Array(POINTS_PER_DAY);
-    const capacity = Math.max(0, numberOrDefault(asset.capacity_ac_kw, 0));
-    const availability = Math.max(0, Math.min(1, numberOrDefault(asset.availability_frac, 0.99)));
-    const losses = Math.max(0, Math.min(0.9, numberOrDefault(asset.system_losses_frac, 0.14)));
-
-    for (let i = 0; i < POINTS_PER_DAY; i += 1) {
-      const ghi = Math.max(0, numberOrDefault(solarSlice[i]?.ghi, 0));
-      const irradianceFactor = Math.min(1.2, ghi / 1000);
-      profile[i] = Math.max(0, capacity * irradianceFactor * (1 - losses) * availability);
-    }
-    return profile;
-  };
-
-  const buildWindProfile = (asset, windSlice) => {
-    const profile = new Float64Array(POINTS_PER_DAY);
-    const ratedPower = Math.max(0, numberOrDefault(asset.rated_power_kw, 0));
-    const turbines = Math.max(1, Math.round(numberOrDefault(asset.num_turbines, 1)));
-    const availability = Math.max(0, Math.min(1, numberOrDefault(asset.availability_frac, 0.97)));
-    const wakeLoss = Math.max(0, Math.min(0.5, numberOrDefault(asset.wake_losses_frac, 0)));
-    const electricalLoss = Math.max(0, Math.min(0.5, numberOrDefault(asset.electrical_losses_frac, 0.02)));
-
-    for (let i = 0; i < POINTS_PER_DAY; i += 1) {
-      const speed = Math.max(0, numberOrDefault(windSlice[i]?.windspeed, 0));
-      const fraction = Math.min(1, speed / 12);
-      profile[i] = Math.max(0, ratedPower * turbines * fraction * (1 - wakeLoss) * (1 - electricalLoss) * availability);
-    }
-    return profile;
-  };
-
-  const sumProfiles = (profiles) => {
-    const total = new Float64Array(POINTS_PER_DAY);
-    profiles.forEach((profile) => {
-      for (let i = 0; i < POINTS_PER_DAY; i += 1) {
-        total[i] += profile[i];
-      }
-    });
-    return total;
   };
 
   const areaPath = (values, baseline, yScale, width, height) => {
@@ -267,6 +257,8 @@
     return path;
   };
 
+  const buildEmptySeries = () => new Float64Array(POINTS_PER_DAY);
+
   const renderChart = () => {
     if (!generationChart) {
       return;
@@ -277,24 +269,41 @@
       return;
     }
 
-    if (weatherDay.error) {
-      generationChart.innerHTML = `<text x="20" y="26" fill="#ffb3b3" font-size="13">${weatherDay.error}</text>`;
+    if (!weatherDay.loaded) {
+      const message = weatherDay.error || "No weather data loaded.";
+      generationChart.innerHTML = `<text x="20" y="26" fill="#ffb3b3" font-size="13">${message}</text>`;
+      if (generationAxis) {
+        generationAxis.innerHTML = "";
+      }
       return;
     }
 
-    const solarAssets = Array.from(solarList?.querySelectorAll(".asset-card") || []).map((card) =>
-      collectAssetValues(card, "solar", solarDefaults || {})
-    );
-    const windAssets = Array.from(windList?.querySelectorAll(".asset-card") || []).map((card) =>
-      collectAssetValues(card, "wind", windDefaults || {})
-    );
+    solarAssets.forEach((assetEntry) => {
+      assetEntry.series = window.EnergyGeneration?.computeSolarPower
+        ? window.EnergyGeneration.computeSolarPower(assetEntry.model, weatherDay.solar)
+        : buildEmptySeries();
+    });
+
+    windAssets.forEach((assetEntry) => {
+      assetEntry.series = window.EnergyGeneration?.computeWindPower
+        ? window.EnergyGeneration.computeWindPower(assetEntry.model, weatherDay.wind)
+        : buildEmptySeries();
+    });
 
     const solarKw = window.EnergyGeneration?.sumSolarAssets
-      ? window.EnergyGeneration.sumSolarAssets(solarAssets, weatherDay.solar)
-      : sumProfiles(solarAssets.map((asset) => buildSolarProfile(asset, weatherDay.solar)));
+      ? window.EnergyGeneration.sumSolarAssets(
+          solarAssets.map((entry) => entry.model),
+          weatherDay.solar
+        )
+      : buildEmptySeries();
+
     const windKw = window.EnergyGeneration?.sumWindAssets
-      ? window.EnergyGeneration.sumWindAssets(windAssets, weatherDay.wind)
-      : sumProfiles(windAssets.map((asset) => buildWindProfile(asset, weatherDay.wind)));
+      ? window.EnergyGeneration.sumWindAssets(
+          windAssets.map((entry) => entry.model),
+          weatherDay.wind
+        )
+      : buildEmptySeries();
+
     const totalKw = new Float64Array(POINTS_PER_DAY);
     for (let i = 0; i < POINTS_PER_DAY; i += 1) {
       totalKw[i] = solarKw[i] + windKw[i];
@@ -319,10 +328,43 @@
     }
   };
 
-  const wireFieldChanges = (card) => {
+  const scheduleRecompute = () => {
+    if (recomputeRaf) {
+      cancelAnimationFrame(recomputeRaf);
+    }
+    recomputeRaf = requestAnimationFrame(() => {
+      recomputeRaf = 0;
+      renderChart();
+    });
+  };
+
+  const updateModelFromField = (model, field, prefix) => {
+    const key = field.dataset[`${prefix}Field`];
+    if (!key) {
+      return;
+    }
+
+    if (field.type === "number") {
+      model[key] = toNumber(field.value, model[key]);
+    } else if (field.tagName === "SELECT") {
+      if (field.value === "true" || field.value === "false") {
+        model[key] = field.value === "true";
+      } else {
+        model[key] = field.value;
+      }
+    } else {
+      model[key] = field.value;
+    }
+  };
+
+  const wireFieldChanges = (card, model, prefix) => {
     card.querySelectorAll("input, select").forEach((field) => {
-      field.addEventListener("input", renderChart);
-      field.addEventListener("change", renderChart);
+      const handler = () => {
+        updateModelFromField(model, field, prefix);
+        scheduleRecompute();
+      };
+      field.addEventListener("input", handler);
+      field.addEventListener("change", handler);
     });
   };
 
@@ -352,65 +394,93 @@
         const collapsed = section.classList.toggle("is-collapsed");
         toggle.setAttribute("aria-expanded", String(!collapsed));
         toggle.textContent = collapsed ? "▸" : "▾";
-        renderChart();
+        scheduleRecompute();
       });
     });
   };
 
-  const wireDelete = (card) => {
+  const wireDelete = (card, type, id) => {
     const deleteButton = card.querySelector(".asset-delete");
     if (!deleteButton || !deleteModal || !confirmDeleteButton) {
       return;
     }
     deleteButton.addEventListener("click", () => {
-      pendingDeleteCard = card;
+      pendingDeleteId = id;
+      pendingDeleteType = type;
       deleteModal.showModal();
     });
   };
 
+  const removeAsset = (type, id) => {
+    const list = type === "solar" ? solarAssets : windAssets;
+    const index = list.findIndex((entry) => entry.id === id);
+    if (index < 0) {
+      return;
+    }
+    list[index].card.remove();
+    list.splice(index, 1);
+  };
+
   if (deleteModal) {
     deleteModal.addEventListener("close", () => {
-      pendingDeleteCard = null;
+      pendingDeleteId = null;
+      pendingDeleteType = null;
     });
   }
 
   if (confirmDeleteButton) {
     confirmDeleteButton.addEventListener("click", (event) => {
       event.preventDefault();
-      if (pendingDeleteCard) {
-        pendingDeleteCard.remove();
-        pendingDeleteCard = null;
+      if (pendingDeleteId && pendingDeleteType) {
+        removeAsset(pendingDeleteType, pendingDeleteId);
       }
       deleteModal?.close();
-      renderChart();
+      scheduleRecompute();
     });
   }
 
   const addAsset = (type) => {
     const isSolar = type === "solar";
     const template = isSolar ? solarTemplate : windTemplate;
-    const list = isSolar ? solarList : windList;
-    const defaults = isSolar ? solarDefaults : windDefaults;
-    if (!template || !list || !defaults) {
+    const listEl = isSolar ? solarList : windList;
+    if (!template || !listEl) {
       return;
     }
+
+    const nextIndex = isSolar ? ++solarCount : ++windCount;
+    const assetId = `${type}-${nextIndex}-${Date.now()}`;
+    const defaultModel = isSolar
+      ? createSolarAsset({ name: `Solar ${nextIndex}` })
+      : createWindAsset({ name: `Wind ${nextIndex}` });
+
     const fragment = template.content.cloneNode(true);
     const card = fragment.querySelector(".asset-card");
     if (!card) {
       return;
     }
-    const nextIndex = isSolar ? ++solarCount : ++windCount;
-    const assetName = isSolar ? `Solar ${nextIndex}` : `Wind ${nextIndex}`;
-    populateFields(card, defaults, isSolar ? "solar" : "wind");
+
+    card.dataset.assetId = assetId;
+    populateFields(card, defaultModel, isSolar ? "solar" : "wind");
     const nameInput = card.querySelector(".asset-title-input");
     if (nameInput) {
-      nameInput.value = assetName;
+      nameInput.value = defaultModel.name;
     }
+
     wireSectionToggles(card);
-    wireDelete(card);
-    wireFieldChanges(card);
-    list.appendChild(card);
-    renderChart();
+    wireDelete(card, type, assetId);
+    wireFieldChanges(card, defaultModel, isSolar ? "solar" : "wind");
+
+    listEl.appendChild(card);
+
+    const entry = {
+      id: assetId,
+      model: defaultModel,
+      card,
+      series: new Float64Array(POINTS_PER_DAY),
+    };
+    (isSolar ? solarAssets : windAssets).push(entry);
+
+    scheduleRecompute();
   };
 
   if (addSolarButton) {
@@ -436,11 +506,12 @@
     } else {
       map.setView([39.742, -105.1786], 10);
     }
+
     if (mapState?.center) {
       L.marker([mapState.center.lat, mapState.center.lng]).addTo(map);
     }
   }
 
-  renderChart();
+  scheduleRecompute();
   fetchWeatherForDay();
 })();
