@@ -30,7 +30,10 @@ const SOLAR_YEAR = "2014";
 const WIND_YEAR = "2014";
 const PROXY_ENDPOINT = "/api/nrel-proxy";
 const DEFAULT_DATE = new Date(2014, 1, 9);
-let selectedDate = new Date(DEFAULT_DATE);
+const SELECTED_DATE_STORAGE_KEY = "energyapp.selectedDate";
+const storedSelectedDate = localStorage.getItem(SELECTED_DATE_STORAGE_KEY);
+const parsedStoredDate = storedSelectedDate ? new Date(`${storedSelectedDate}T00:00:00`) : null;
+let selectedDate = parsedStoredDate && !Number.isNaN(parsedStoredDate.getTime()) ? parsedStoredDate : new Date(DEFAULT_DATE);
 const DEFAULT_WIND_SPEED_METRIC = "windspeed_20m";
 const DEFAULT_WIND_DIR_METRIC = "winddirection_20m";
 const FALLBACK_WIND_SPEED_METRIC = "windspeed_100m";
@@ -54,6 +57,14 @@ const tableState = {
 };
 let currentSeries = null;
 
+const MAP_STORAGE_KEY = "energyapp.mapState";
+const FACILITY_STORAGE_KEY = "energyapp.facility";
+
+let selectionMode = false;
+let marker = null;
+let hoverMarker = null;
+
+
 const map = L.map("map", {
   zoomControl: false,
 }).setView([39.742, -105.1786], 10);
@@ -62,13 +73,51 @@ L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
   attribution: "&copy; OpenStreetMap contributors",
 }).addTo(map);
 
-let selectionMode = false;
-let marker = null;
-let hoverMarker = null;
+const storedMapState = JSON.parse(localStorage.getItem("energyapp.mapState") || "null");
+if (storedMapState?.center && typeof storedMapState.zoom === "number") {
+  map.setView([storedMapState.center.lat, storedMapState.center.lng], storedMapState.zoom);
+}
+
+const storedFacility = JSON.parse(localStorage.getItem(FACILITY_STORAGE_KEY) || "null");
+if (storedFacility?.lat != null && storedFacility?.lng != null) {
+  locationValue.textContent = `${storedFacility.lat.toFixed(4)}, ${storedFacility.lng.toFixed(4)}`;
+  marker = L.marker([storedFacility.lat, storedFacility.lng], { draggable: true }).addTo(map);
+  marker.on("dragend", (dragEvent) => {
+    updateLocation(dragEvent.target.getLatLng());
+  });
+}
+
+const facilityNameInput = document.getElementById("facility-name");
+if (facilityNameInput && storedFacility?.name) {
+  facilityNameInput.value = storedFacility.name;
+}
+
+
+const persistMapState = () => {
+  const center = map.getCenter();
+  const bounds = map.getBounds();
+  const state = {
+    center: { lat: center.lat, lng: center.lng },
+    zoom: map.getZoom(),
+    bounds: {
+      north: bounds.getNorth(),
+      south: bounds.getSouth(),
+      east: bounds.getEast(),
+      west: bounds.getWest(),
+    },
+  };
+  localStorage.setItem(MAP_STORAGE_KEY, JSON.stringify(state));
+};
 
 const updateLocation = (latlng) => {
   const { lat, lng } = latlng;
   locationValue.textContent = `${lat.toFixed(4)}, ${lng.toFixed(4)}`;
+  persistMapState();
+  const facility = JSON.parse(localStorage.getItem(FACILITY_STORAGE_KEY) || "{}");
+  localStorage.setItem(
+    FACILITY_STORAGE_KEY,
+    JSON.stringify({ ...facility, lat, lng })
+  );
 };
 
 const setStatus = ({ loading = false, loadingMessage = "", success = "", error = "" }) => {
@@ -115,8 +164,8 @@ const runLoadingStep = async (stepIndex, totalSteps, label, action) => {
     magicInterval = setInterval(() => {
       showingMagic = !showingMagic;
       updateText(showingMagic ? "Performing magic" : label);
-    }, 500);
-  }, 500);
+    }, 2000);
+  }, 2000);
 
   const progressTimer = setInterval(() => {
     stepProgress = Math.min(stepProgress + 6, 90);
@@ -924,6 +973,7 @@ if (datePickerInput) {
       return;
     }
     selectedDate = nextDate;
+    localStorage.setItem(SELECTED_DATE_STORAGE_KEY, formatDateKey(selectedDate));
     updateView();
   });
 }
@@ -941,6 +991,16 @@ if (tableLoadMore) {
 if (chartDisplay) {
   chartDisplay.addEventListener("mousemove", updateChartTooltip);
   chartDisplay.addEventListener("mouseleave", hideChartTooltip);
+}
+
+if (facilityNameInput) {
+  facilityNameInput.addEventListener("input", (event) => {
+    const facility = JSON.parse(localStorage.getItem(FACILITY_STORAGE_KEY) || "{}");
+    localStorage.setItem(
+      FACILITY_STORAGE_KEY,
+      JSON.stringify({ ...facility, name: event.target.value || "Untitled Facility" })
+    );
+  });
 }
 
 mapButton.addEventListener("click", () => {
@@ -984,6 +1044,7 @@ map.on("click", (event) => {
   }
 
   updateLocation(event.latlng);
+  persistMapState();
   selectionMode = false;
   mapButton.classList.remove("is-active");
   mapButton.textContent = "Select on Map";
@@ -1012,4 +1073,28 @@ map.on("click", (event) => {
     });
 });
 
+map.on("moveend", () => {
+  persistMapState();
+});
+
 updateView();
+
+if (storedFacility?.lat != null && storedFacility?.lng != null && dataStore.raw15.solar.length === 0) {
+  setStatus({ loading: true, loadingMessage: "Restoring weather data for saved location…" });
+  setLoadingProgress(0, 0);
+  mapButton.disabled = true;
+  fetchDataset({ lat: storedFacility.lat, lng: storedFacility.lng })
+    .then(({ solarCount, windCount }) => {
+      setStatus({
+        loading: false,
+        success: `Loaded ${solarCount} solar points (2014) and ${windCount} wind points (2014).`,
+      });
+      updateView();
+    })
+    .catch((error) => {
+      setStatus({ loading: false, error: error.message });
+    })
+    .finally(() => {
+      mapButton.disabled = false;
+    });
+}
