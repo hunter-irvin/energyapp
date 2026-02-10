@@ -26,10 +26,11 @@ const dataStore = {
   daily: { solar: [], wind: [] },
 };
 
-const projectSelect = document.getElementById("project-select");
-const createProjectButton = document.getElementById("create-project");
 const facilityNameInput = document.getElementById("facility-name");
+const openAssetsLink = document.getElementById("open-assets-link");
 const supabaseService = window.EnergySupabaseService;
+const queryParams = new URLSearchParams(window.location.search);
+const selectedProjectId = queryParams.get("projectId");
 
 const SOLAR_YEAR = "2014";
 const WIND_YEAR = "2014";
@@ -1134,26 +1135,6 @@ map.on("moveend", () => {
   persistMapState();
 });
 
-const refreshProjectSelect = async (selectedProjectId = null) => {
-  if (!projectSelect) {
-    return;
-  }
-  const projects = await supabaseService.listProjects();
-  projectSelect.innerHTML = projects
-    .map((project) => `<option value="${project.id}">${project.name || "Untitled Facility"}</option>`)
-    .join("");
-
-  const preferredId = selectedProjectId || supabaseService.getLastOpenedProjectId() || projects[0]?.id || null;
-  if (!preferredId) {
-    return;
-  }
-  projectSelect.value = preferredId;
-  const selected = projects.find((project) => project.id === preferredId);
-  if (selected) {
-    applyProjectToUi(selected);
-  }
-};
-
 const loadProjectWeather = async () => {
   if (!currentProject || currentProject.lat == null || currentProject.lng == null) {
     updateView();
@@ -1175,39 +1156,26 @@ const loadProjectWeather = async () => {
 
 const init = async () => {
   await supabaseService.migrateLegacyLocalData();
-  let projects = await supabaseService.listProjects();
-  if (projects.length === 0) {
-    const created = await supabaseService.createProject({ name: "Project 1" });
-    projects = [created];
+
+  if (!selectedProjectId) {
+    window.location.href = "projects.html";
+    return;
   }
 
-  await refreshProjectSelect(projects[0].id);
+  const project = await supabaseService.getProject(selectedProjectId);
+  if (!project) {
+    window.location.href = "projects.html";
+    return;
+  }
+
+  applyProjectToUi(project);
+
+  if (openAssetsLink) {
+    openAssetsLink.href = `assets.html?projectId=${encodeURIComponent(project.id)}`;
+  }
+
   updateView();
   await loadProjectWeather();
 };
-
-if (projectSelect) {
-  projectSelect.addEventListener("change", async (event) => {
-    const project = await supabaseService.getProject(event.target.value);
-    if (!project) {
-      return;
-    }
-    applyProjectToUi(project);
-    dataStore.raw15.solar = [];
-    dataStore.raw15.wind = [];
-    await loadProjectWeather();
-  });
-}
-
-if (createProjectButton) {
-  createProjectButton.addEventListener("click", async () => {
-    const name = window.prompt("Project name", `Project ${Date.now()}`) || "Untitled Project";
-    const project = await supabaseService.createProject({ name });
-    await refreshProjectSelect(project.id);
-    dataStore.raw15.solar = [];
-    dataStore.raw15.wind = [];
-    updateView();
-  });
-}
 
 void init();

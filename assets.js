@@ -23,6 +23,10 @@
   const assetsDatePickerInput = document.getElementById("assets-date-picker");
   const generationDebugOutput = document.getElementById("generation-debug-output");
   const projectNameEl = document.getElementById("assets-project-name");
+  const backToFacilityLink = document.getElementById("back-to-facility");
+
+  const queryParams = new URLSearchParams(window.location.search);
+  const selectedProjectId = queryParams.get("projectId");
 
   let currentProject = null;
   let selectedDateKey = DEFAULT_DATE_KEY;
@@ -985,15 +989,19 @@
 
   const initProject = async () => {
     await supabaseService.migrateLegacyLocalData();
-    const projectId = supabaseService.getLastOpenedProjectId();
-    if (!projectId) {
-      window.location.href = "index.html";
+    if (!selectedProjectId) {
+      window.location.href = "projects.html";
       return;
     }
-    currentProject = await supabaseService.getProject(projectId);
+
+    currentProject = await supabaseService.getProject(selectedProjectId);
     if (!currentProject) {
-      window.location.href = "index.html";
+      window.location.href = "projects.html";
       return;
+    }
+
+    if (backToFacilityLink) {
+      backToFacilityLink.href = `index.html?projectId=${encodeURIComponent(currentProject.id)}`;
     }
 
     selectedDateKey =

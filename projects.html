@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Energy Explorer Projects</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <main class="page projects-page">
+      <section class="card projects-card">
+        <header class="card__header">
+          <h1>Projects</h1>
+          <button class="btn btn--primary" id="create-project" type="button">Create New Project</button>
+        </header>
+
+        <div class="projects-state" id="projects-loading">Loading projects…</div>
+        <div class="projects-state" id="projects-error" hidden></div>
+        <div class="projects-state" id="projects-empty" hidden>No projects found. Create your first project.</div>
+
+        <section class="projects-grid" id="projects-grid" hidden></section>
+      </section>
+    </main>
+
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+    <script src="supabase-client.js"></script>
+    <script src="projects.js"></script>
+  </body>
+</html>
