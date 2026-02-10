@@ -19,6 +19,7 @@ const debugPanel = document.getElementById("debug-panel");
 const debugOutput = document.getElementById("debug-output");
 const datePickerButton = document.getElementById("date-picker-button");
 const datePickerInput = document.getElementById("date-picker");
+const refreshWeatherDataButton = document.getElementById("refresh-weather-data");
 
 const dataStore = {
   raw15: { solar: [], wind: [] },
@@ -36,6 +37,9 @@ const isValidProjectId = (value) => typeof value === "string" && /^[a-zA-Z0-9-]+
 const SOLAR_YEAR = "2014";
 const WIND_YEAR = "2014";
 const PROXY_ENDPOINT = "/api/nrel-proxy";
+const NREL_CACHE_DATE_KEY = "all";
+const NREL_INTERVAL_MINUTES = 15;
+const NREL_CACHE_TTL_MS = 1000 * 60 * 60 * 24;
 const DEFAULT_DATE = new Date(2014, 1, 9);
 let selectedDate = new Date(DEFAULT_DATE);
 let currentProject = null;
@@ -863,43 +867,60 @@ const parseError = async (responses) => {
   return "Unable to fetch datasets.";
 };
 
-const fetchDataset = async ({ lat, lng }) => {
-  const cacheKey = "all";
+const isFreshCache = (cacheRow) => {
+  if (!cacheRow?.fetched_at) {
+    return false;
+  }
+  const fetchedAt = new Date(cacheRow.fetched_at).getTime();
+  return Number.isFinite(fetchedAt) && Date.now() - fetchedAt <= NREL_CACHE_TTL_MS;
+};
+
+const hydrateDataStore = (solarPayload, windPayload) => {
+  const normalizedSolarRecords = normalizeRecordYears(solarPayload, SOLAR_YEAR);
+  const nextSolarRecords = shiftRecordsToTimeZone(normalizedSolarRecords, locationTimeZone);
+  const nextWindRecords = shiftRecordsToTimeZone(windPayload, locationTimeZone);
+  windMetricState = resolveWindMetrics(nextWindRecords);
+  dataStore.raw15.solar = nextSolarRecords;
+  dataStore.raw15.wind = nextWindRecords;
+  dataStore.hourly.solar = buildHourlyAggregation(nextSolarRecords, ["ghi", "dni", "dhi", "air_temperature", "wind_speed"]);
+  dataStore.hourly.wind = buildHourlyAggregation(nextWindRecords, [windMetricState.speed, windMetricState.direction, "temperature_20m", "pressure_20m"]);
+  dataStore.daily.solar = toDailyAggregation(nextSolarRecords, ["ghi", "dni", "dhi", "air_temperature", "wind_speed"]);
+  dataStore.daily.wind = toDailyAggregation(nextWindRecords, [windMetricState.speed, windMetricState.direction, "temperature_20m", "pressure_20m"]);
+  return { solarCount: nextSolarRecords.length, windCount: nextWindRecords.length };
+};
+
+const fetchDataset = async ({ lat, lng }, options = {}) => {
+  const { forceRefresh = false } = options;
   const wkt = `POINT(${lng} ${lat})`;
   locationTimeZone = await fetchTimeZone({ lat, lng });
-  const cachedSolar = currentProject ? await supabaseService.getNrelCache(currentProject.id, "solar", cacheKey) : null;
-  const cachedWind = currentProject ? await supabaseService.getNrelCache(currentProject.id, "wind", cacheKey) : null;
+  const cacheLookup = { sourceYear: Number(SOLAR_YEAR), intervalMinutes: NREL_INTERVAL_MINUTES };
+  const [cachedSolar, cachedWind] = currentProject
+    ? await Promise.all([
+        supabaseService.getNrelCache(currentProject.id, "solar", NREL_CACHE_DATE_KEY, cacheLookup),
+        supabaseService.getNrelCache(currentProject.id, "wind", NREL_CACHE_DATE_KEY, cacheLookup),
+      ])
+    : [null, null];
+
+  if (!forceRefresh && isFreshCache(cachedSolar) && isFreshCache(cachedWind) && cachedSolar?.payload && cachedWind?.payload) {
+    return hydrateDataStore(cachedSolar.payload, cachedWind.payload);
+  }
 
   const solarUrl = buildUrl(PROXY_ENDPOINT, {
     dataset: "solar",
     wkt,
-    interval: "15",
+    interval: String(NREL_INTERVAL_MINUTES),
   });
   const windUrl = buildUrl(PROXY_ENDPOINT, {
     dataset: "wind",
     wkt,
-    interval: "15",
+    interval: String(NREL_INTERVAL_MINUTES),
   });
-
-  if (cachedSolar?.payload && cachedWind?.payload) {
-    const normalizedSolarRecords = normalizeRecordYears(cachedSolar.payload, SOLAR_YEAR);
-    const nextSolarRecords = shiftRecordsToTimeZone(normalizedSolarRecords, locationTimeZone);
-    const nextWindRecords = shiftRecordsToTimeZone(cachedWind.payload, locationTimeZone);
-    windMetricState = resolveWindMetrics(nextWindRecords);
-    dataStore.raw15.solar = nextSolarRecords;
-    dataStore.raw15.wind = nextWindRecords;
-    dataStore.hourly.solar = buildHourlyAggregation(nextSolarRecords, ["ghi", "dni", "dhi", "air_temperature", "wind_speed"]);
-    dataStore.hourly.wind = buildHourlyAggregation(nextWindRecords, [windMetricState.speed, windMetricState.direction, "temperature_20m", "pressure_20m"]);
-    dataStore.daily.solar = toDailyAggregation(nextSolarRecords, ["ghi", "dni", "dhi", "air_temperature", "wind_speed"]);
-    dataStore.daily.wind = toDailyAggregation(nextWindRecords, [windMetricState.speed, windMetricState.direction, "temperature_20m", "pressure_20m"]);
-    return { solarCount: nextSolarRecords.length, windCount: nextWindRecords.length };
-  }
 
   const totalSteps = 4;
   const { solarResponsePromise, windResponsePromise } = await runLoadingStep(
     1,
     totalSteps,
-    "Fetching solar and Wind data from NREL",
+    forceRefresh ? "Refreshing solar and wind data from NREL" : "Fetching solar and Wind data from NREL",
     async () => ({
       solarResponsePromise: fetch(solarUrl),
       windResponsePromise: fetch(windUrl),
@@ -925,170 +946,84 @@ const fetchDataset = async ({ lat, lng }) => {
     () => Promise.all([solarResponse.text(), windResponse.text()])
   );
 
-  const { solarRecords, windRecords } = await runLoadingStep(
+  const { parsedSolarRecords, parsedWindRecords } = await runLoadingStep(
     4,
     totalSteps,
     "Performing aggregations",
     () => {
       const parsedSolarRecords = parseCsv(solarCsv);
       const parsedWindRecords = parseCsv(windCsv);
-      if (currentProject) {
-        void supabaseService.upsertNrelCache({ projectId: currentProject.id, dataset: "solar", dateKey: cacheKey, payload: parsedSolarRecords });
-        void supabaseService.upsertNrelCache({ projectId: currentProject.id, dataset: "wind", dateKey: cacheKey, payload: parsedWindRecords });
-      }
-      const normalizedSolarRecords = normalizeRecordYears(parsedSolarRecords, SOLAR_YEAR);
-      const nextSolarRecords = shiftRecordsToTimeZone(normalizedSolarRecords, locationTimeZone);
-      const nextWindRecords = shiftRecordsToTimeZone(parsedWindRecords, locationTimeZone);
-      windMetricState = resolveWindMetrics(nextWindRecords);
-
-      dataStore.raw15.solar = nextSolarRecords;
-      dataStore.raw15.wind = nextWindRecords;
-      dataStore.hourly.solar = buildHourlyAggregation(nextSolarRecords, [
-        "ghi",
-        "dni",
-        "dhi",
-        "air_temperature",
-        "wind_speed",
-      ]);
-      dataStore.hourly.wind = buildHourlyAggregation(nextWindRecords, [
-        windMetricState.speed,
-        windMetricState.direction,
-        "temperature_20m",
-        "pressure_20m",
-      ]);
-      dataStore.daily.solar = toDailyAggregation(nextSolarRecords, [
-        "ghi",
-        "dni",
-        "dhi",
-        "air_temperature",
-        "wind_speed",
-      ]);
-      dataStore.daily.wind = toDailyAggregation(nextWindRecords, [
-        windMetricState.speed,
-        windMetricState.direction,
-        "temperature_20m",
-        "pressure_20m",
-      ]);
-
-      return { solarRecords: nextSolarRecords, windRecords: nextWindRecords };
+      return { parsedSolarRecords, parsedWindRecords };
     }
   );
 
+  if (currentProject) {
+    const fetchedAt = new Date().toISOString();
+    void supabaseService.upsertNrelCache({
+      projectId: currentProject.id,
+      dataset: "solar",
+      dateKey: NREL_CACHE_DATE_KEY,
+      sourceYear: Number(SOLAR_YEAR),
+      intervalMinutes: NREL_INTERVAL_MINUTES,
+      wkt,
+      timezone: locationTimeZone,
+      source: "nrel_proxy",
+      fetchedAt,
+      payload: parsedSolarRecords,
+    });
+    void supabaseService.upsertNrelCache({
+      projectId: currentProject.id,
+      dataset: "wind",
+      dateKey: NREL_CACHE_DATE_KEY,
+      sourceYear: Number(WIND_YEAR),
+      intervalMinutes: NREL_INTERVAL_MINUTES,
+      wkt,
+      timezone: locationTimeZone,
+      source: "nrel_proxy",
+      fetchedAt,
+      payload: parsedWindRecords,
+    });
+  }
+
+  const result = hydrateDataStore(parsedSolarRecords, parsedWindRecords);
+
   renderDebugOutput({
     solar: {
-      sampleRecord: findSolarSample(solarRecords),
-      metricSummary: summarizeMetrics(solarRecords, ["ghi", "dni", "dhi"]),
+      sampleRecord: findSolarSample(dataStore.raw15.solar),
+      metricSummary: summarizeMetrics(dataStore.raw15.solar, ["ghi", "dni", "dhi"]),
+      totalRows: dataStore.raw15.solar.length,
     },
     wind: {
-      sampleRecord:
-        windRecords.find((record) => record[windMetricState.speed]) || windRecords[0] || null,
-      metricSummary: summarizeMetrics(windRecords, [
-        windMetricState.speed,
-        windMetricState.direction,
-      ]),
-    },
-    windMetricState,
-    timeZone: locationTimeZone,
-    rawSample: {
-      solar: solarCsv.split(/\r?\n/).slice(0, 6),
-      wind: windCsv.split(/\r?\n/).slice(0, 6),
+      sampleRecord: findWindSample(dataStore.raw15.wind),
+      metricSummary: summarizeMetrics(dataStore.raw15.wind, [windMetricState.speed, windMetricState.direction]),
+      totalRows: dataStore.raw15.wind.length,
+      speedMetric: windMetricState.speed,
+      directionMetric: windMetricState.direction,
     },
   });
 
-  return {
-    solarCount: solarRecords.length,
-    windCount: windRecords.length,
-  };
+  return result;
 };
 
-const applyToggleState = (buttons, value, attribute) => {
-  buttons.forEach((button) => {
-    button.classList.toggle("is-active", button.dataset[attribute] === value);
-  });
-};
 
-document.querySelectorAll("[data-period]").forEach((button) => {
-  button.addEventListener("click", () => {
-    viewState.period = button.dataset.period;
-    applyToggleState(document.querySelectorAll("[data-period]"), viewState.period, "period");
-    updateView();
-  });
-});
 
-document.querySelectorAll("[data-view]").forEach((button) => {
-  button.addEventListener("click", () => {
-    viewState.view = button.dataset.view;
-    applyToggleState(document.querySelectorAll("[data-view]"), viewState.view, "view");
-    updateView();
-  });
-});
-
-document.querySelectorAll("[data-series]").forEach((button) => {
-  button.addEventListener("click", () => {
-    const series = button.dataset.series;
-    seriesVisibility[series] = !seriesVisibility[series];
-    button.classList.toggle("is-active", seriesVisibility[series]);
-    updateView();
-  });
-});
-
-if (datePickerInput) {
-  datePickerInput.value = formatDateKey(selectedDate);
-}
-
-if (datePickerButton && datePickerInput) {
-  datePickerButton.addEventListener("click", () => {
-    if (typeof datePickerInput.showPicker === "function") {
-      datePickerInput.showPicker();
-    } else {
-      datePickerInput.click();
-    }
-  });
-}
-
-if (datePickerInput) {
-  datePickerInput.addEventListener("change", async (event) => {
-    const nextDate = new Date(event.target.value);
-    if (Number.isNaN(nextDate.getTime())) {
+if (refreshWeatherDataButton) {
+  refreshWeatherDataButton.addEventListener("click", async () => {
+    if (!currentProject || currentProject.lat == null || currentProject.lng == null) {
+      setStatus({ loading: false, error: "Select a location before refreshing weather data." });
       return;
     }
-    selectedDate = nextDate;
-    if (currentProject) {
-      try {
-        currentProject = await withRetry(() =>
-          supabaseService.updateProject(currentProject.id, { selectedDate: formatDateKey(selectedDate) })
-        );
-      } catch (error) {
-        setStatus({ loading: false, error: "Unable to save date selection. Please retry." });
-      }
+    setStatus({ loading: true, loadingMessage: "Refreshing weather data…" });
+    refreshWeatherDataButton.disabled = true;
+    try {
+      const { solarCount, windCount } = await fetchDataset({ lat: currentProject.lat, lng: currentProject.lng }, { forceRefresh: true });
+      setStatus({ loading: false, success: `Refreshed ${solarCount} solar and ${windCount} wind points.` });
+      updateView();
+    } catch (error) {
+      setStatus({ loading: false, error: error.message || "Unable to refresh weather data." });
+    } finally {
+      refreshWeatherDataButton.disabled = false;
     }
-    updateView();
-  });
-}
-
-if (tableLoadMore) {
-  tableLoadMore.addEventListener("click", () => {
-    if (!currentSeries) {
-      return;
-    }
-    tableState.page += 1;
-    renderTable(currentSeries);
-  });
-}
-
-if (chartDisplay) {
-  chartDisplay.addEventListener("mousemove", updateChartTooltip);
-  chartDisplay.addEventListener("mouseleave", hideChartTooltip);
-}
-
-if (facilityNameInput) {
-  facilityNameInput.addEventListener("input", async (event) => {
-    if (!currentProject) {
-      return;
-    }
-    currentProject = await supabaseService.updateProject(currentProject.id, {
-      name: event.target.value || "Untitled Facility",
-    });
   });
 }
 

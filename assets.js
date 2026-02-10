@@ -2,6 +2,10 @@
   const POINTS_PER_DAY = 96;
   const PROXY_ENDPOINT = "/api/nrel-proxy";
   const DEFAULT_DATE_KEY = "2014-02-09";
+  const NREL_CACHE_DATE_KEY = "all";
+  const NREL_SOURCE_YEAR = 2014;
+  const NREL_INTERVAL_MINUTES = 15;
+  const NREL_CACHE_TTL_MS = 1000 * 60 * 60 * 24;
   const supabaseService = window.EnergySupabaseService;
 
   const facilityNameEl = document.querySelector("[data-facility-name]");
@@ -21,6 +25,7 @@
   const generationTooltip = document.getElementById("generation-tooltip");
   const assetsDatePickerButton = document.getElementById("assets-date-picker-button");
   const assetsDatePickerInput = document.getElementById("assets-date-picker");
+  const assetsRefreshWeatherButton = document.getElementById("assets-refresh-weather");
   const generationDebugOutput = document.getElementById("generation-debug-output");
   const projectNameEl = document.getElementById("assets-project-name");
   const backToFacilityLink = document.getElementById("back-to-facility");
@@ -532,52 +537,103 @@
     weatherDay.lastMatchedTimestamp = null;
   };
 
-  const fetchWeatherForDay = async () => {
+  const isFreshCache = (cacheRow) => {
+    if (!cacheRow?.fetched_at) {
+      return false;
+    }
+    const fetchedAt = new Date(cacheRow.fetched_at).getTime();
+    return Number.isFinite(fetchedAt) && Date.now() - fetchedAt <= NREL_CACHE_TTL_MS;
+  };
+
+  const loadPersistedOrRemoteWeather = async ({ forceRefresh = false } = {}) => {
+    if (currentProject?.lat == null || currentProject?.lng == null) {
+      throw new Error("Project location is required to load weather data.");
+    }
+
+    const wkt = `POINT(${currentProject.lng} ${currentProject.lat})`;
+    const cacheLookup = { sourceYear: NREL_SOURCE_YEAR, intervalMinutes: NREL_INTERVAL_MINUTES };
+    const [cachedSolar, cachedWind] = await Promise.all([
+      supabaseService.getNrelCache(currentProject.id, "solar", NREL_CACHE_DATE_KEY, cacheLookup),
+      supabaseService.getNrelCache(currentProject.id, "wind", NREL_CACHE_DATE_KEY, cacheLookup),
+    ]);
+
+    if (!forceRefresh && isFreshCache(cachedSolar) && isFreshCache(cachedWind) && cachedSolar?.payload && cachedWind?.payload) {
+      return {
+        rawSolarRecords: cachedSolar.payload,
+        rawWindRecords: cachedWind.payload,
+        timeZone: cachedSolar.timezone || cachedWind.timezone || (await fetchTimeZone({ lat: currentProject.lat, lng: currentProject.lng })),
+      };
+    }
+
+    const [solarResponse, windResponse] = await Promise.all([
+      fetch(buildUrl(PROXY_ENDPOINT, { dataset: "solar", wkt, interval: String(NREL_INTERVAL_MINUTES) })),
+      fetch(buildUrl(PROXY_ENDPOINT, { dataset: "wind", wkt, interval: String(NREL_INTERVAL_MINUTES) })),
+    ]);
+
+    if (!solarResponse.ok || !windResponse.ok) {
+      throw new Error("Unable to load weather data for selected location.");
+    }
+
+    const [solarCsv, windCsv] = await Promise.all([solarResponse.text(), windResponse.text()]);
+    const rawSolarRecords = parseCsv(solarCsv);
+    const rawWindRecords = parseCsv(windCsv);
+    const timeZone = await fetchTimeZone({ lat: currentProject.lat, lng: currentProject.lng });
+    const fetchedAt = new Date().toISOString();
+
+    await Promise.all([
+      supabaseService.upsertNrelCache({
+        projectId: currentProject.id,
+        dataset: "solar",
+        dateKey: NREL_CACHE_DATE_KEY,
+        sourceYear: NREL_SOURCE_YEAR,
+        intervalMinutes: NREL_INTERVAL_MINUTES,
+        wkt,
+        timezone: timeZone,
+        source: "nrel_proxy",
+        fetchedAt,
+        payload: rawSolarRecords,
+      }),
+      supabaseService.upsertNrelCache({
+        projectId: currentProject.id,
+        dataset: "wind",
+        dateKey: NREL_CACHE_DATE_KEY,
+        sourceYear: NREL_SOURCE_YEAR,
+        intervalMinutes: NREL_INTERVAL_MINUTES,
+        wkt,
+        timezone: timeZone,
+        source: "nrel_proxy",
+        fetchedAt,
+        payload: rawWindRecords,
+      }),
+    ]);
+
+    return { rawSolarRecords, rawWindRecords, timeZone };
+  };
+
+  const fetchWeatherForDay = async (options = {}) => {
+    const { forceRefresh = false } = options;
     if (!currentProject || currentProject.lat == null || currentProject.lng == null) {
-      setNoWeatherLoaded();
+      weatherDay.loaded = false;
+      weatherDay.error = "Set a facility location before adding assets.";
+      weatherDay.solar = [];
+      weatherDay.wind = [];
       scheduleRecompute();
       return;
     }
 
     weatherDay.loading = true;
     weatherDay.error = "";
-    renderChart();
+    scheduleRecompute();
 
     try {
-      const wkt = `POINT(${currentProject.lng} ${currentProject.lat})`;
-      const [cachedSolar, cachedWind] = await Promise.all([
-        supabaseService.getNrelCache(currentProject.id, "solar", selectedDateKey),
-        supabaseService.getNrelCache(currentProject.id, "wind", selectedDateKey),
-      ]);
-
-      let rawSolarRecords;
-      let rawWindRecords;
-
-      if (cachedSolar?.payload && cachedWind?.payload) {
-        rawSolarRecords = cachedSolar.payload;
-        rawWindRecords = cachedWind.payload;
-      } else {
-        const [solarResponse, windResponse] = await Promise.all([
-          fetch(buildUrl(PROXY_ENDPOINT, { dataset: "solar", wkt, interval: "15" })),
-          fetch(buildUrl(PROXY_ENDPOINT, { dataset: "wind", wkt, interval: "15" })),
-        ]);
-
-        if (!solarResponse.ok || !windResponse.ok) {
-          throw new Error("Unable to load weather data for selected location.");
-        }
-
-        const [solarCsv, windCsv] = await Promise.all([solarResponse.text(), windResponse.text()]);
-        rawSolarRecords = parseCsv(solarCsv);
-        rawWindRecords = parseCsv(windCsv);
-        void supabaseService.upsertNrelCache({ projectId: currentProject.id, dataset: "solar", dateKey: selectedDateKey, payload: rawSolarRecords });
-        void supabaseService.upsertNrelCache({ projectId: currentProject.id, dataset: "wind", dateKey: selectedDateKey, payload: rawWindRecords });
-      }
+      const { rawSolarRecords, rawWindRecords, timeZone } = await withRetry(() =>
+        loadPersistedOrRemoteWeather({ forceRefresh })
+      );
 
       const [targetYear] = selectedDateKey.split("-");
       const normalizedSolarRecords = normalizeRecordYears(rawSolarRecords, targetYear);
       const normalizedWindRecords = normalizeRecordYears(rawWindRecords, targetYear);
 
-      const timeZone = await fetchTimeZone({ lat: currentProject.lat, lng: currentProject.lng });
       weatherDay.timeZone = timeZone;
 
       const solarRecords = alignRecordsForFacilityTimeZone(normalizedSolarRecords, timeZone);
@@ -629,6 +685,9 @@
             ? `No ${missingStreams[0]} weather rows matched selected date after alignment. Check timezone/year normalization.`
             : "No solar/wind weather rows matched selected date after alignment. Check timezone/year normalization.";
       }
+      if (assetsRefreshWeatherButton && forceRefresh) {
+        setSyncMessage("Weather cache refreshed.", false);
+      }
     } catch (error) {
       weatherDay.loaded = false;
       weatherDay.error = error.message || "Unable to fetch weather data.";
@@ -643,6 +702,7 @@
       scheduleRecompute();
     }
   };
+
 
   const areaPath = (values, baseline, yScale, width, height) => {
     const stepX = width / (POINTS_PER_DAY - 1);
@@ -1027,6 +1087,21 @@
         })
         .catch(() => setSyncMessage("Could not save selected date.", true));
       void fetchWeatherForDay();
+    });
+  }
+
+
+  if (assetsRefreshWeatherButton) {
+    assetsRefreshWeatherButton.addEventListener("click", async () => {
+      assetsRefreshWeatherButton.disabled = true;
+      setSyncMessage("Refreshing weather data…", false);
+      try {
+        await fetchWeatherForDay({ forceRefresh: true });
+      } catch (error) {
+        setSyncMessage("Unable to refresh weather data.", true);
+      } finally {
+        assetsRefreshWeatherButton.disabled = false;
+      }
     });
   }
 

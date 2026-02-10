@@ -108,3 +108,10 @@ The Add Assets screen persists user-created assets in local storage under:
   - `wind`: array of saved wind asset model objects
 
 These are restored when returning to the Add Assets page.
+
+
+## NREL weather cache
+
+- Weather payloads are persisted in `nrel_cache` keyed by `project_id`, `dataset`, `date_key`, `source_year`, and `interval_minutes`.
+- Cache rows store raw/normalized-compatible JSON payloads plus `fetched_at`, `wkt`, `timezone`, and `source` metadata for traceability.
+- UI loads cached payloads first and refreshes from `/api/nrel-proxy` when cache is stale (24h TTL) or when the **Refresh Weather Data** action is used.

@@ -131,23 +131,39 @@
       saveArray(DB_STORAGE_KEYS.assets, rows);
       return true;
     },
-    async getNrelCache(projectId, dataset, dateKey) {
+    async getNrelCache(projectId, dataset, dateKey, options = {}) {
+      const { sourceYear = null, intervalMinutes = null } = options;
       return (
         loadArray(DB_STORAGE_KEYS.nrelCache).find(
-          (entry) => entry.project_id === projectId && entry.dataset === dataset && entry.date_key === dateKey
+          (entry) =>
+            entry.project_id === projectId &&
+            entry.dataset === dataset &&
+            entry.date_key === dateKey &&
+            (sourceYear == null || Number(entry.source_year) === Number(sourceYear)) &&
+            (intervalMinutes == null || Number(entry.interval_minutes) === Number(intervalMinutes))
         ) || null
       );
     },
     async upsertNrelCache(payload) {
       const rows = loadArray(DB_STORAGE_KEYS.nrelCache);
       const keyMatch = (entry) =>
-        entry.project_id === payload.projectId && entry.dataset === payload.dataset && entry.date_key === payload.dateKey;
+        entry.project_id === payload.projectId &&
+        entry.dataset === payload.dataset &&
+        entry.date_key === payload.dateKey &&
+        Number(entry.source_year) === Number(payload.sourceYear) &&
+        Number(entry.interval_minutes) === Number(payload.intervalMinutes);
       const index = rows.findIndex(keyMatch);
       const row = {
         id: index >= 0 ? rows[index].id : uid(),
         project_id: payload.projectId,
         dataset: payload.dataset,
         date_key: payload.dateKey,
+        source_year: payload.sourceYear,
+        interval_minutes: payload.intervalMinutes,
+        wkt: payload.wkt || null,
+        timezone: payload.timezone || null,
+        source: payload.source || 'nrel_proxy',
+        fetched_at: payload.fetchedAt || new Date().toISOString(),
         payload: payload.payload,
         updated_at: new Date().toISOString(),
       };
@@ -205,14 +221,21 @@
       if (error) throw error;
       return true;
     },
-    async getNrelCache(projectId, dataset, dateKey) {
-      const { data, error } = await client
+    async getNrelCache(projectId, dataset, dateKey, options = {}) {
+      const { sourceYear = null, intervalMinutes = null } = options;
+      let query = client
         .from("nrel_cache")
         .select("*")
         .eq("project_id", projectId)
         .eq("dataset", dataset)
-        .eq("date_key", dateKey)
-        .maybeSingle();
+        .eq("date_key", dateKey);
+      if (sourceYear != null) {
+        query = query.eq("source_year", sourceYear);
+      }
+      if (intervalMinutes != null) {
+        query = query.eq("interval_minutes", intervalMinutes);
+      }
+      const { data, error } = await query.order('fetched_at', { ascending: false }).limit(1).maybeSingle();
       if (error) throw error;
       return data || null;
     },
@@ -221,10 +244,20 @@
         project_id: payload.projectId,
         dataset: payload.dataset,
         date_key: payload.dateKey,
+        source_year: payload.sourceYear,
+        interval_minutes: payload.intervalMinutes,
+        wkt: payload.wkt || null,
+        timezone: payload.timezone || null,
+        source: payload.source || 'nrel_proxy',
+        fetched_at: payload.fetchedAt || new Date().toISOString(),
         payload: payload.payload,
         updated_at: new Date().toISOString(),
       };
-      const { data, error } = await client.from("nrel_cache").upsert(row).select().single();
+      const { data, error } = await client
+        .from("nrel_cache")
+        .upsert(row, { onConflict: 'project_id,dataset,date_key,source_year,interval_minutes' })
+        .select()
+        .single();
       if (error) throw error;
       return data;
     },
@@ -242,7 +275,7 @@
   const listAssets = async (projectId) => dataService().listAssets(projectId);
   const upsertAsset = async (payload) => dataService().upsertAsset(payload);
   const deleteAsset = async (assetId) => dataService().deleteAsset(assetId);
-  const getNrelCache = async (projectId, dataset, dateKey) => dataService().getNrelCache(projectId, dataset, dateKey);
+  const getNrelCache = async (projectId, dataset, dateKey, options) => dataService().getNrelCache(projectId, dataset, dateKey, options);
   const upsertNrelCache = async (payload) => dataService().upsertNrelCache(payload);
 
   const setLastOpenedProjectId = (projectId) => {
