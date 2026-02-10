@@ -1,0 +1,103 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Add Generation Assets</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <main class="page assets-page">
+      <section class="card assets-card">
+        <header class="assets-header">
+          <h1>Add Generation Assets</h1>
+          <a class="btn btn--primary assets-back" href="index.html">
+            <span aria-hidden="true">←</span>
+            Back
+          </a>
+        </header>
+        <section class="assets-summary">
+          <div class="assets-facility">
+            <h2>[Facility Name]</h2>
+            <div class="assets-map">
+              <div class="assets-map__image" role="img" aria-label="Facility map preview"></div>
+            </div>
+          </div>
+          <div class="assets-inputs">
+            <div class="assets-column">
+              <h3>Solar Assets</h3>
+              <p class="assets-subtitle">Basic</p>
+              <div class="assets-fields">
+                <label class="assets-label">square meters</label>
+                <input class="assets-input" type="text" />
+                <label class="assets-label">angle</label>
+                <input class="assets-input" type="text" />
+                <label class="assets-label">xyz</label>
+                <input class="assets-input" type="text" />
+              </div>
+              <p class="assets-subtitle assets-subtitle--muted">Advanced</p>
+            </div>
+            <div class="assets-column">
+              <h3>Wind Assets</h3>
+              <p class="assets-subtitle">Basic</p>
+              <div class="assets-fields">
+                <label class="assets-label">Hub Height</label>
+                <input class="assets-input" type="text" />
+                <label class="assets-label">Rating</label>
+                <input class="assets-input" type="text" />
+                <label class="assets-label">Direction</label>
+                <input class="assets-input" type="text" />
+                <label class="assets-label">xyz</label>
+                <input class="assets-input" type="text" />
+              </div>
+              <p class="assets-subtitle assets-subtitle--muted">Advanced</p>
+            </div>
+          </div>
+        </section>
+        <div class="assets-divider"></div>
+        <section class="assets-charts">
+          <div>
+            <h3>Typical Generation</h3>
+            <div class="assets-chart">
+              <div class="assets-chart__label">Energy</div>
+              <div class="assets-chart__visual">
+                <div class="assets-chart__solar"></div>
+                <div class="assets-chart__wind"></div>
+              </div>
+              <div class="assets-chart__ticks">
+                <span>1</span>
+                <span>2</span>
+                <span>3</span>
+                <span>4</span>
+                <span>5</span>
+                <span>6</span>
+                <span>7</span>
+                <span>8</span>
+                <span>9</span>
+                <span>10</span>
+                <span>11</span>
+                <span>12</span>
+                <span>13</span>
+                <span>14</span>
+                <span>15</span>
+                <span>16</span>
+                <span>17</span>
+                <span>18</span>
+                <span>19</span>
+                <span>20</span>
+                <span>21</span>
+                <span>22</span>
+                <span>23</span>
+                <span>24</span>
+              </div>
+            </div>
+          </div>
+          <div>
+            <h3>Annual Average</h3>
+            <div class="assets-chart assets-chart--empty"></div>
+          </div>
+        </section>
+      </section>
+    </main>
+  </body>
+</html>
