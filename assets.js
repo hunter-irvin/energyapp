@@ -1,4 +1,5 @@
 (() => {
+  const POINTS_PER_DAY = 96;
   const facilityNameEl = document.querySelector("[data-facility-name]");
   const facilityLocationEl = document.querySelector("[data-facility-location]");
   const solarList = document.getElementById("solar-assets");
@@ -10,6 +11,8 @@
   const deleteModal = document.getElementById("delete-asset-modal");
   const confirmDeleteButton = document.getElementById("confirm-delete-asset");
   const mapContainer = document.getElementById("assets-map");
+  const generationChart = document.getElementById("generation-chart");
+  const generationAxis = document.getElementById("generation-axis");
 
   const facility = JSON.parse(localStorage.getItem("energyapp.facility") || "{}");
   if (facilityNameEl) {
@@ -24,6 +27,149 @@
   let solarCount = 0;
   let windCount = 0;
   let pendingDeleteCard = null;
+
+  const numberOrDefault = (value, fallback) => {
+    const n = Number(value);
+    return Number.isFinite(n) ? n : fallback;
+  };
+
+  const collectAssetValues = (card, prefix, defaults) => {
+    const fields = card.querySelectorAll(`[data-${prefix}-field]`);
+    const values = { ...defaults };
+    fields.forEach((field) => {
+      const key = field.dataset[`${prefix}Field`];
+      if (!key) {
+        return;
+      }
+      if (field.type === "number") {
+        values[key] = numberOrDefault(field.value, defaults[key]);
+      } else if (field.tagName === "SELECT") {
+        if (field.value === "true" || field.value === "false") {
+          values[key] = field.value === "true";
+        } else {
+          values[key] = field.value;
+        }
+      } else {
+        values[key] = field.value;
+      }
+    });
+    return values;
+  };
+
+  const buildSolarProfile = (asset) => {
+    const profile = new Float64Array(POINTS_PER_DAY);
+    const capacity = Math.max(0, numberOrDefault(asset.capacity_ac_kw, 0));
+    const availability = Math.max(0, Math.min(1, numberOrDefault(asset.availability_frac, 0.99)));
+    const losses = Math.max(0, Math.min(0.9, numberOrDefault(asset.system_losses_frac, 0.14)));
+
+    for (let i = 0; i < POINTS_PER_DAY; i += 1) {
+      const hour = i / 4;
+      const sun = Math.max(0, Math.sin(((hour - 6) / 12) * Math.PI));
+      const kw = capacity * sun * (1 - losses) * availability;
+      profile[i] = Math.max(0, kw);
+    }
+    return profile;
+  };
+
+  const buildWindProfile = (asset, seed = 0) => {
+    const profile = new Float64Array(POINTS_PER_DAY);
+    const ratedPower = Math.max(0, numberOrDefault(asset.rated_power_kw, 0));
+    const turbines = Math.max(1, Math.round(numberOrDefault(asset.num_turbines, 1)));
+    const availability = Math.max(0, Math.min(1, numberOrDefault(asset.availability_frac, 0.97)));
+    const wakeLoss = Math.max(0, Math.min(0.5, numberOrDefault(asset.wake_losses_frac, 0)));
+    const electricalLoss = Math.max(0, Math.min(0.5, numberOrDefault(asset.electrical_losses_frac, 0.02)));
+
+    for (let i = 0; i < POINTS_PER_DAY; i += 1) {
+      const hour = i / 4;
+      const gust = 0.58 + 0.22 * Math.sin((hour / 24) * Math.PI * 2 + seed) + 0.1 * Math.cos((hour / 12) * Math.PI);
+      const base = Math.max(0.08, Math.min(1, gust));
+      const kw = ratedPower * turbines * base * (1 - wakeLoss) * (1 - electricalLoss) * availability;
+      profile[i] = Math.max(0, kw);
+    }
+    return profile;
+  };
+
+  const sumProfiles = (profiles) => {
+    const total = new Float64Array(POINTS_PER_DAY);
+    profiles.forEach((profile) => {
+      for (let i = 0; i < POINTS_PER_DAY; i += 1) {
+        total[i] += profile[i];
+      }
+    });
+    return total;
+  };
+
+  const areaPath = (values, baseline, yScale, width, height) => {
+    const stepX = width / (POINTS_PER_DAY - 1);
+    let path = "";
+    for (let i = 0; i < POINTS_PER_DAY; i += 1) {
+      const x = i * stepX;
+      const y = height - (values[i] + baseline[i]) * yScale;
+      path += i === 0 ? `M ${x} ${y}` : ` L ${x} ${y}`;
+    }
+    for (let i = POINTS_PER_DAY - 1; i >= 0; i -= 1) {
+      const x = i * stepX;
+      const y = height - baseline[i] * yScale;
+      path += ` L ${x} ${y}`;
+    }
+    return `${path} Z`;
+  };
+
+  const linePath = (values, yScale, width, height) => {
+    const stepX = width / (POINTS_PER_DAY - 1);
+    let path = "";
+    for (let i = 0; i < POINTS_PER_DAY; i += 1) {
+      const x = i * stepX;
+      const y = height - values[i] * yScale;
+      path += i === 0 ? `M ${x} ${y}` : ` L ${x} ${y}`;
+    }
+    return path;
+  };
+
+  const renderChart = () => {
+    if (!generationChart) {
+      return;
+    }
+
+    const solarAssets = Array.from(solarList?.querySelectorAll(".asset-card") || []).map((card) =>
+      collectAssetValues(card, "solar", solarDefaults || {})
+    );
+    const windAssets = Array.from(windList?.querySelectorAll(".asset-card") || []).map((card, index) =>
+      ({ values: collectAssetValues(card, "wind", windDefaults || {}), seed: index * 0.35 })
+    );
+
+    const solarKw = sumProfiles(solarAssets.map((asset) => buildSolarProfile(asset)));
+    const windKw = sumProfiles(windAssets.map(({ values, seed }) => buildWindProfile(values, seed)));
+    const totalKw = new Float64Array(POINTS_PER_DAY);
+    for (let i = 0; i < POINTS_PER_DAY; i += 1) {
+      totalKw[i] = solarKw[i] + windKw[i];
+    }
+
+    const maxValue = Math.max(1, ...totalKw);
+    const width = 1000;
+    const height = 240;
+    const yScale = height / maxValue;
+    const zero = new Float64Array(POINTS_PER_DAY);
+
+    generationChart.innerHTML = `
+      <path d="${areaPath(windKw, zero, yScale, width, height)}" fill="rgba(92, 211, 232, 0.50)" stroke="rgba(92, 211, 232, 0.95)" stroke-width="1" />
+      <path d="${areaPath(solarKw, windKw, yScale, width, height)}" fill="rgba(242, 201, 76, 0.60)" stroke="rgba(247, 215, 125, 0.95)" stroke-width="1" />
+      <path d="${linePath(totalKw, yScale, width, height)}" fill="none" stroke="#ffffff" stroke-width="2" />
+    `;
+
+    if (generationAxis) {
+      generationAxis.innerHTML = ["00:00", "06:00", "12:00", "18:00", "24:00"]
+        .map((label) => `<span>${label}</span>`)
+        .join("");
+    }
+  };
+
+  const wireFieldChanges = (card) => {
+    card.querySelectorAll("input, select").forEach((field) => {
+      field.addEventListener("input", renderChart);
+      field.addEventListener("change", renderChart);
+    });
+  };
 
   const populateFields = (container, defaults, prefix) => {
     const fields = container.querySelectorAll(`[data-${prefix}-field]`);
@@ -51,6 +197,7 @@
         const collapsed = section.classList.toggle("is-collapsed");
         toggle.setAttribute("aria-expanded", String(!collapsed));
         toggle.textContent = collapsed ? "▸" : "▾";
+        renderChart();
       });
     });
   };
@@ -66,7 +213,6 @@
     });
   };
 
-
   if (deleteModal) {
     deleteModal.addEventListener("close", () => {
       pendingDeleteCard = null;
@@ -81,6 +227,7 @@
         pendingDeleteCard = null;
       }
       deleteModal?.close();
+      renderChart();
     });
   }
 
@@ -106,7 +253,9 @@
     }
     wireSectionToggles(card);
     wireDelete(card);
+    wireFieldChanges(card);
     list.appendChild(card);
+    renderChart();
   };
 
   if (addSolarButton) {
@@ -136,4 +285,6 @@
       L.marker([mapState.center.lat, mapState.center.lng]).addTo(map);
     }
   }
+
+  renderChart();
 })();

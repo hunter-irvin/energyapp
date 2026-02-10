@@ -29,68 +29,37 @@
             <div class="assets-column">
               <div class="assets-column__header">
                 <h3>Solar Assets</h3>
-                <button class="btn btn--primary assets-add" id="add-solar" type="button">
-                  Add Solar
-                </button>
+                <button class="btn btn--primary assets-add" id="add-solar" type="button">Add Solar</button>
               </div>
               <div class="assets-list" id="solar-assets"></div>
             </div>
             <div class="assets-column">
               <div class="assets-column__header">
                 <h3>Wind Assets</h3>
-                <button class="btn btn--primary assets-add" id="add-wind" type="button">
-                  Add Wind
-                </button>
+                <button class="btn btn--primary assets-add" id="add-wind" type="button">Add Wind</button>
               </div>
               <div class="assets-list" id="wind-assets"></div>
             </div>
           </div>
         </section>
         <div class="assets-divider"></div>
-        <section class="assets-charts">
-          <div>
+        <section class="assets-chart-section">
+          <div class="assets-chart-header">
             <h3>Typical Generation</h3>
-            <div class="assets-chart">
-              <div class="assets-chart__label">Energy</div>
-              <div class="assets-chart__visual">
-                <div class="assets-chart__solar"></div>
-                <div class="assets-chart__wind"></div>
-              </div>
-              <div class="assets-chart__ticks">
-                <span>1</span>
-                <span>2</span>
-                <span>3</span>
-                <span>4</span>
-                <span>5</span>
-                <span>6</span>
-                <span>7</span>
-                <span>8</span>
-                <span>9</span>
-                <span>10</span>
-                <span>11</span>
-                <span>12</span>
-                <span>13</span>
-                <span>14</span>
-                <span>15</span>
-                <span>16</span>
-                <span>17</span>
-                <span>18</span>
-                <span>19</span>
-                <span>20</span>
-                <span>21</span>
-                <span>22</span>
-                <span>23</span>
-                <span>24</span>
-              </div>
-            </div>
+            <p class="assets-chart-legend">
+              <span class="legend-chip legend-chip--solar">Solar</span>
+              <span class="legend-chip legend-chip--wind">Wind</span>
+              <span class="legend-chip legend-chip--total">Total</span>
+            </p>
           </div>
-          <div>
-            <h3>Annual Average</h3>
-            <div class="assets-chart assets-chart--empty"></div>
+          <div class="assets-chart-frame">
+            <svg id="generation-chart" class="generation-chart" viewBox="0 0 1000 260" preserveAspectRatio="none" aria-label="Typical generation chart"></svg>
           </div>
+          <div class="assets-chart-axis" id="generation-axis"></div>
         </section>
       </section>
     </main>
+
     <template id="solar-asset-template">
       <div class="asset-card" data-asset-type="solar">
         <button class="asset-delete" type="button" aria-label="Delete asset">×</button>
@@ -98,9 +67,7 @@
         <div class="asset-section asset-section--basic">
           <div class="asset-section__header">
             <p class="assets-subtitle">Basic</p>
-            <button class="asset-section-toggle" type="button" aria-expanded="true" aria-label="Collapse basic fields">
-              ▾
-            </button>
+            <button class="asset-section-toggle" type="button" aria-expanded="true" aria-label="Collapse basic fields">▾</button>
           </div>
           <div class="asset-section__body assets-fields">
             <label class="assets-label">Capacity (AC kW)</label>
@@ -121,9 +88,7 @@
         <div class="asset-section asset-section--advanced is-collapsed">
           <div class="asset-section__header">
             <p class="assets-subtitle assets-subtitle--muted">Advanced</p>
-            <button class="asset-section-toggle" type="button" aria-expanded="false" aria-label="Expand advanced fields">
-              ▸
-            </button>
+            <button class="asset-section-toggle" type="button" aria-expanded="false" aria-label="Expand advanced fields">▸</button>
           </div>
           <div class="asset-section__body assets-fields">
             <label class="assets-label">System Losses (frac) <span class="assets-optional">(Optional)</span></label>
@@ -143,6 +108,7 @@
         </div>
       </div>
     </template>
+
     <template id="wind-asset-template">
       <div class="asset-card" data-asset-type="wind">
         <button class="asset-delete" type="button" aria-label="Delete asset">×</button>
@@ -150,9 +116,7 @@
         <div class="asset-section asset-section--basic">
           <div class="asset-section__header">
             <p class="assets-subtitle">Basic</p>
-            <button class="asset-section-toggle" type="button" aria-expanded="true" aria-label="Collapse basic fields">
-              ▾
-            </button>
+            <button class="asset-section-toggle" type="button" aria-expanded="true" aria-label="Collapse basic fields">▾</button>
           </div>
           <div class="asset-section__body assets-fields">
             <label class="assets-label">Rated Power (kW)</label>
@@ -168,9 +132,7 @@
         <div class="asset-section asset-section--advanced is-collapsed">
           <div class="asset-section__header">
             <p class="assets-subtitle assets-subtitle--muted">Advanced</p>
-            <button class="asset-section-toggle" type="button" aria-expanded="false" aria-label="Expand advanced fields">
-              ▸
-            </button>
+            <button class="asset-section-toggle" type="button" aria-expanded="false" aria-label="Expand advanced fields">▸</button>
           </div>
           <div class="asset-section__body assets-fields">
             <label class="assets-label">Cut-in (m/s) <span class="assets-optional">(Optional)</span></label>
@@ -200,6 +162,7 @@
         </div>
       </div>
     </template>
+
     <dialog class="delete-modal" id="delete-asset-modal">
       <form method="dialog" class="delete-modal__content">
         <h3>Delete asset?</h3>
@@ -210,7 +173,8 @@
         </div>
       </form>
     </dialog>
-<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
     <script src="models.js"></script>
     <script src="assets.js"></script>
   </body>
