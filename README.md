@@ -6,7 +6,7 @@ This section documents how the **Add Assets** page computes expected generation 
 
 ### Time & Data Flow
 
-1. Facility location is loaded from local storage (`energyapp.facility`).
+1. Facility location is loaded from the active project record (`projects.location_lat` / `projects.location_lng`) via `EnergySupabaseService` (with local fallback if Supabase is not configured).
 2. Solar and wind 15-minute weather rows are fetched from `/api/nrel-proxy`.
 3. Weather rows are normalized to facility-local day alignment (including year normalization to selected day year).
 4. A selected day is sliced into 96 quarter-hour points.
@@ -99,19 +99,101 @@ For each 15-minute point:
 - `shear_exponent_alpha` (unitless)
 - `reference_height_m` (m)
 
-### Local Persistence (Add Assets page)
+### Persistence Architecture
 
-The Add Assets screen persists user-created assets in local storage under:
+EnergyApp now treats Supabase/Postgres as the canonical persistence layer when configured, with a local browser fallback only when Supabase is not configured.
 
-- `energyapp.assetsState`:
-  - `solar`: array of saved solar asset model objects
-  - `wind`: array of saved wind asset model objects
+#### Project lifecycle
 
-These are restored when returning to the Add Assets page.
+1. User opens the app and `migrateLegacyLocalData()` runs once.
+2. If database-backed projects already exist, migration is skipped.
+3. If only legacy local keys exist (`energyapp.facility`, `energyapp.assetsState`), the app creates a single project and imports those assets.
+4. Project-scoped UX state (selected date/map state) is copied to project-scoped local keys.
+5. Subsequent CRUD uses `projects` + `assets` tables through Supabase when env vars are present; otherwise fallback storage keys `energyapp.db.*` are used locally.
 
+#### Facility, assets, and NREL cache storage model
 
-## NREL weather cache
+- `projects` stores facility/project metadata (`id`, `name`, `location_lat`, `location_lng`, `selected_date`, `map_state`, timestamps).
+- `assets` stores one row per solar/wind asset with a required `project_id` FK (`ON DELETE CASCADE`) and JSON `model` payload.
+- `nrel_cache` stores weather payloads keyed by `project_id + dataset + date_key + source_year + interval_minutes` plus metadata (`wkt`, `timezone`, `source`, `fetched_at`).
+- `assets.project_id` and `nrel_cache.project_id` are non-null and cascade-delete with their parent project.
+- Row-shape constraints remain enforced even with open policies:
+  - `assets.asset_type` must be `solar` or `wind`
+  - `nrel_cache.dataset` must be `solar` or `wind`
+
+#### Public anon/no-auth behavior implications
+
+- RLS is enabled on `projects`, `assets`, and `nrel_cache`.
+- Policies are intentionally permissive for role `anon` (`USING true`, `WITH CHECK true`) to support a no-login experience.
+- **Important:** data is intentionally public-editable and not tenant-isolated in this mode. Any client with the anon key can read/write all rows.
+
+### Required configuration (frontend/server)
+
+#### Frontend Supabase variables
+
+Define these globals before `supabase-client.js` loads (for example in a script tag or templated HTML):
+
+- `window.ENERGYAPP_SUPABASE_URL`
+- `window.ENERGYAPP_SUPABASE_ANON_KEY`
+
+If either value is missing, the app falls back to local browser persistence.
+
+#### Where keys are read in code
+
+- Supabase client bootstrapping reads `window.ENERGYAPP_SUPABASE_URL` and `window.ENERGYAPP_SUPABASE_ANON_KEY` in `getClient()`.
+- The resulting client powers `projects`, `assets`, and `nrel_cache` CRUD in `supabaseDb(...)`.
+- Server-side `/api/nrel-proxy` currently does not read Supabase credentials; it only proxies NREL weather requests.
+
+### Database setup
+
+1. Create a Supabase project.
+2. Run the bootstrap SQL script in the SQL editor:
+
+```sql
+-- file: supabase/bootstrap.sql
+```
+
+3. (Optional but recommended) Also apply tracked migrations from `supabase/migrations/` in order for environment parity.
+
+The bootstrap script creates:
+
+- `projects`, `assets`, `nrel_cache` tables
+- non-null FKs + cascade deletes
+- dataset/asset-type constraints
+- RLS enabled on all three tables
+- permissive `anon` policies for full CRUD
+
+### Data migration from localStorage
+
+The one-time migration lives in `migrateLegacyLocalData()` and is triggered on project/app boot.
+
+Migrated legacy keys:
+
+- `energyapp.facility` → `projects`
+- `energyapp.assetsState` → `assets`
+- `energyapp.selectedDate` and `energyapp.mapState` → project-scoped UI keys
+
+Migration guard:
+
+- `energyapp.legacyMigration.v1 = done`
+
+Rollback notes:
+
+- The migration does **not** delete legacy localStorage keys.
+- To retry migration in a dev browser, clear `energyapp.legacyMigration.v1` and (if needed) clear DB rows created by the prior run.
+- If Supabase is unreachable or not configured, runtime storage falls back to local `energyapp.db.projects`, `energyapp.db.assets`, and `energyapp.db.nrelCache` keys.
+
+### NREL weather cache
 
 - Weather payloads are persisted in `nrel_cache` keyed by `project_id`, `dataset`, `date_key`, `source_year`, and `interval_minutes`.
 - Cache rows store raw/normalized-compatible JSON payloads plus `fetched_at`, `wkt`, `timezone`, and `source` metadata for traceability.
 - UI loads cached payloads first and refreshes from `/api/nrel-proxy` when cache is stale (24h TTL) or when the **Refresh Weather Data** action is used.
+
+### Backlog: future auth/ownership hardening
+
+If requirements move away from no-auth/public editing, plan a follow-up migration to:
+
+- introduce authenticated users and ownership columns (e.g., `owner_user_id`)
+- replace permissive anon policies with ownership-aware RLS
+- add tenant isolation and scoped reads/writes
+- rotate/restrict existing anon usage patterns
