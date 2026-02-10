@@ -52,8 +52,13 @@
     loading: false,
     loaded: false,
     error: "",
+    timeZone: "UTC",
     solar: [],
     wind: [],
+    matchedSolarRows: 0,
+    matchedWindRows: 0,
+    firstMatchedTimestamp: null,
+    lastMatchedTimestamp: null,
   };
 
   const pad2 = (value) => String(value).padStart(2, "0");
@@ -76,6 +81,67 @@
       url.searchParams.set(key, value);
     });
     return url.toString();
+  };
+
+  const fetchTimeZone = async ({ lat, lng }) => {
+    const url = new URL("https://timeapi.io/api/TimeZone/coordinate");
+    url.searchParams.set("latitude", lat);
+    url.searchParams.set("longitude", lng);
+    try {
+      const response = await fetch(url.toString());
+      if (!response.ok) {
+        return "UTC";
+      }
+      const payload = await response.json();
+      return payload?.timeZone || "UTC";
+    } catch (error) {
+      return "UTC";
+    }
+  };
+
+  const getTimeZoneFormatter = (timeZone) =>
+    new Intl.DateTimeFormat("en-US", {
+      timeZone,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit",
+      hour12: false,
+    });
+
+  const normalizeRecordsToTimeZone = (records, timeZone) => {
+    if (!timeZone || timeZone === "UTC") {
+      return records;
+    }
+    const formatter = getTimeZoneFormatter(timeZone);
+    return records.map((record) => {
+      const year = Number(record.year);
+      const month = Number(record.month);
+      const day = Number(record.day);
+      const hour = Number(record.hour ?? 0);
+      const minute = Number(record.minute ?? 0);
+      if (![year, month, day, hour, minute].every(Number.isFinite)) {
+        return record;
+      }
+      const utcDate = new Date(Date.UTC(year, month - 1, day, hour, minute, 0));
+      const parts = formatter.formatToParts(utcDate);
+      const byType = parts.reduce((acc, part) => {
+        acc[part.type] = part.value;
+        return acc;
+      }, {});
+      return {
+        ...record,
+        year: String(Number(byType.year)),
+        month: String(Number(byType.month)),
+        day: String(Number(byType.day)),
+        hour: String(Number(byType.hour)),
+        minute: String(Number(byType.minute)),
+        second: String(Number(byType.second || 0)),
+        normalized_timestamp: `${byType.year}-${byType.month}-${byType.day}T${byType.hour}:${byType.minute}:00`,
+      };
+    });
   };
 
   const parseCsv = (csvText) => {
@@ -154,6 +220,9 @@
     dayRecords.forEach((record) => {
       const hour = Number(record.hour ?? 0);
       const minute = Number(record.minute ?? 0);
+      if (!Number.isFinite(hour) || !Number.isFinite(minute)) {
+        return;
+      }
       byMinute.set(hour * 60 + minute, record);
     });
 
@@ -165,15 +234,28 @@
       points.push(mapFn(byMinute.get(key), `${dateKey}T${pad2(hour)}:${pad2(minute)}:00`));
     }
 
-    return points;
+    return {
+      points,
+      matchedCount: dayRecords.length,
+      firstMatchedTimestamp: dayRecords[0]?.normalized_timestamp || dayRecords[0]?.timestamp || null,
+      lastMatchedTimestamp:
+        dayRecords[dayRecords.length - 1]?.normalized_timestamp ||
+        dayRecords[dayRecords.length - 1]?.timestamp ||
+        null,
+    };
   };
 
   const setNoWeatherLoaded = () => {
     weatherDay.loaded = false;
     weatherDay.loading = false;
     weatherDay.error = "";
+    weatherDay.timeZone = "UTC";
     weatherDay.solar = [];
     weatherDay.wind = [];
+    weatherDay.matchedSolarRows = 0;
+    weatherDay.matchedWindRows = 0;
+    weatherDay.firstMatchedTimestamp = null;
+    weatherDay.lastMatchedTimestamp = null;
   };
 
   const fetchWeatherForDay = async () => {
@@ -199,14 +281,20 @@
       }
 
       const [solarCsv, windCsv] = await Promise.all([solarResponse.text(), windResponse.text()]);
-      const solarRecords = parseCsv(solarCsv);
-      const windRecords = parseCsv(windCsv);
+      const rawSolarRecords = parseCsv(solarCsv);
+      const rawWindRecords = parseCsv(windCsv);
+
+      const timeZone = await fetchTimeZone({ lat: facility.lat, lng: facility.lng });
+      weatherDay.timeZone = timeZone;
+
+      const solarRecords = normalizeRecordsToTimeZone(rawSolarRecords, timeZone);
+      const windRecords = normalizeRecordsToTimeZone(rawWindRecords, timeZone);
 
       const windSpeedKey = pickWindSpeedKey(windRecords);
       const windTemperatureKey = pickWindTemperatureKey(windRecords);
       const windPressureKey = pickWindPressureKey(windRecords);
 
-      weatherDay.solar = sliceDay(solarRecords, selectedDateKey, (record, timestamp) => ({
+      const solarSlice = sliceDay(solarRecords, selectedDateKey, (record, timestamp) => ({
         timestamp,
         ghi: toNumber(record?.ghi, 0),
         dni: toNumber(record?.dni, 0),
@@ -214,19 +302,39 @@
         air_temperature: toNumber(record?.air_temperature, 20),
       }));
 
-      weatherDay.wind = sliceDay(windRecords, selectedDateKey, (record, timestamp) => ({
+      const windSlice = sliceDay(windRecords, selectedDateKey, (record, timestamp) => ({
         timestamp,
         [windSpeedKey]: toNumber(record?.[windSpeedKey], 0),
         ...(windTemperatureKey ? { [windTemperatureKey]: toNumber(record?.[windTemperatureKey], NaN) } : {}),
         ...(windPressureKey ? { [windPressureKey]: toNumber(record?.[windPressureKey], NaN) } : {}),
       }));
 
-      weatherDay.loaded = weatherDay.solar.length === POINTS_PER_DAY && weatherDay.wind.length === POINTS_PER_DAY;
+      weatherDay.solar = solarSlice.points;
+      weatherDay.wind = windSlice.points;
+      weatherDay.matchedSolarRows = solarSlice.matchedCount;
+      weatherDay.matchedWindRows = windSlice.matchedCount;
+      weatherDay.firstMatchedTimestamp = solarSlice.firstMatchedTimestamp || windSlice.firstMatchedTimestamp;
+      weatherDay.lastMatchedTimestamp = solarSlice.lastMatchedTimestamp || windSlice.lastMatchedTimestamp;
+
+      weatherDay.loaded =
+        weatherDay.solar.length === POINTS_PER_DAY &&
+        weatherDay.wind.length === POINTS_PER_DAY &&
+        weatherDay.matchedSolarRows > 0 &&
+        weatherDay.matchedWindRows > 0;
+
+      if (!weatherDay.loaded) {
+        weatherDay.error =
+          "No weather rows matched selected date after alignment. Check timezone/year normalization.";
+      }
     } catch (error) {
       weatherDay.loaded = false;
       weatherDay.error = error.message || "Unable to fetch weather data.";
       weatherDay.solar = [];
       weatherDay.wind = [];
+      weatherDay.matchedSolarRows = 0;
+      weatherDay.matchedWindRows = 0;
+      weatherDay.firstMatchedTimestamp = null;
+      weatherDay.lastMatchedTimestamp = null;
     } finally {
       weatherDay.loading = false;
       scheduleRecompute();
@@ -273,8 +381,13 @@
         loaded: weatherDay.loaded,
         loading: weatherDay.loading,
         error: weatherDay.error || null,
+        timeZone: weatherDay.timeZone,
         solarPoints: weatherDay.solar.length,
         windPoints: weatherDay.wind.length,
+        matchedSolarRows: weatherDay.matchedSolarRows,
+        matchedWindRows: weatherDay.matchedWindRows,
+        firstMatchedTimestamp: weatherDay.firstMatchedTimestamp,
+        lastMatchedTimestamp: weatherDay.lastMatchedTimestamp,
       },
       solarAssets: solarDebug,
       windAssets: windDebug,
