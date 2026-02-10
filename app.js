@@ -31,6 +31,7 @@ const openAssetsLink = document.getElementById("open-assets-link");
 const supabaseService = window.EnergySupabaseService;
 const queryParams = new URLSearchParams(window.location.search);
 const selectedProjectId = queryParams.get("projectId");
+const isValidProjectId = (value) => typeof value === "string" && /^[a-zA-Z0-9-]+$/.test(value);
 
 const SOLAR_YEAR = "2014";
 const WIND_YEAR = "2014";
@@ -75,19 +76,28 @@ L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
 }).addTo(map);
 
 
-const getSelectedDateStorageKey = (projectId) => supabaseService.buildScopedUiStorageKey(projectId, "selectedDate");
-const getMapStorageKey = (projectId) => supabaseService.buildScopedUiStorageKey(projectId, "mapState");
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
-const loadProjectMapState = (projectId) =>
-  JSON.parse(localStorage.getItem(getMapStorageKey(projectId)) || "null");
-
-const persistMapState = () => {
-  if (!currentProject) {
-    return;
+const withRetry = async (operation, { retries = 2, delayMs = 400 } = {}) => {
+  let lastError = null;
+  for (let attempt = 0; attempt <= retries; attempt += 1) {
+    try {
+      return await operation();
+    } catch (error) {
+      lastError = error;
+      if (attempt === retries) {
+        break;
+      }
+      await sleep(delayMs * (attempt + 1));
+    }
   }
+  throw lastError;
+};
+
+const getMapState = () => {
   const center = map.getCenter();
   const bounds = map.getBounds();
-  const state = {
+  return {
     center: { lat: center.lat, lng: center.lng },
     zoom: map.getZoom(),
     bounds: {
@@ -97,12 +107,23 @@ const persistMapState = () => {
       west: bounds.getWest(),
     },
   };
-  localStorage.setItem(getMapStorageKey(currentProject.id), JSON.stringify(state));
 };
 
-const setProjectDate = (projectId) => {
-  const storedSelectedDate = localStorage.getItem(getSelectedDateStorageKey(projectId));
-  const parsedStoredDate = storedSelectedDate ? new Date(`${storedSelectedDate}T00:00:00`) : null;
+const persistMapState = async () => {
+  if (!currentProject) {
+    return;
+  }
+  const state = getMapState();
+  currentProject = { ...currentProject, mapState: state };
+  try {
+    currentProject = await withRetry(() => supabaseService.updateProject(currentProject.id, { mapState: state }));
+  } catch (error) {
+    setStatus({ loading: false, error: "Could not save map position. Retrying may help." });
+  }
+};
+
+const setProjectDate = (project) => {
+  const parsedStoredDate = project?.selectedDate ? new Date(`${project.selectedDate}T00:00:00`) : null;
   selectedDate = parsedStoredDate && !Number.isNaN(parsedStoredDate.getTime()) ? parsedStoredDate : new Date(DEFAULT_DATE);
   if (datePickerInput) {
     datePickerInput.value = formatDateKey(selectedDate);
@@ -133,14 +154,14 @@ const applyProjectToUi = (project) => {
     }
   }
 
-  const mapState = loadProjectMapState(project.id);
+  const mapState = project.mapState || null;
   if (mapState?.center && typeof mapState.zoom === "number") {
     map.setView([mapState.center.lat, mapState.center.lng], mapState.zoom);
   } else if (project.lat != null && project.lng != null) {
     map.setView([project.lat, project.lng], 10);
   }
 
-  setProjectDate(project.id);
+  setProjectDate(project);
 };
 
 const updateLocation = async (latlng) => {
@@ -149,8 +170,12 @@ const updateLocation = async (latlng) => {
   }
   const { lat, lng } = latlng;
   locationValue.textContent = `${lat.toFixed(4)}, ${lng.toFixed(4)}`;
-  persistMapState();
-  currentProject = await supabaseService.updateProject(currentProject.id, { lat, lng });
+  currentProject = { ...currentProject, lat, lng };
+  try {
+    currentProject = await withRetry(() => supabaseService.updateProject(currentProject.id, { lat, lng, mapState: getMapState() }));
+  } catch (error) {
+    setStatus({ loading: false, error: "Unable to save location. Please retry." });
+  }
 };
 
 const setStatus = ({ loading = false, loadingMessage = "", success = "", error = "" }) => {
@@ -1022,14 +1047,20 @@ if (datePickerButton && datePickerInput) {
 }
 
 if (datePickerInput) {
-  datePickerInput.addEventListener("change", (event) => {
+  datePickerInput.addEventListener("change", async (event) => {
     const nextDate = new Date(event.target.value);
     if (Number.isNaN(nextDate.getTime())) {
       return;
     }
     selectedDate = nextDate;
     if (currentProject) {
-      localStorage.setItem(getSelectedDateStorageKey(currentProject.id), formatDateKey(selectedDate));
+      try {
+        currentProject = await withRetry(() =>
+          supabaseService.updateProject(currentProject.id, { selectedDate: formatDateKey(selectedDate) })
+        );
+      } catch (error) {
+        setStatus({ loading: false, error: "Unable to save date selection. Please retry." });
+      }
     }
     updateView();
   });
@@ -1157,12 +1188,12 @@ const loadProjectWeather = async () => {
 const init = async () => {
   await supabaseService.migrateLegacyLocalData();
 
-  if (!selectedProjectId) {
+  if (!selectedProjectId || !isValidProjectId(selectedProjectId)) {
     window.location.href = "projects.html";
     return;
   }
 
-  const project = await supabaseService.getProject(selectedProjectId);
+  const project = await withRetry(() => supabaseService.getProject(selectedProjectId));
   if (!project) {
     window.location.href = "projects.html";
     return;

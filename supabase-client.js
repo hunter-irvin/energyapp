@@ -48,6 +48,8 @@
     name: project.name || "Untitled Facility",
     location_lat: project.lat ?? null,
     location_lng: project.lng ?? null,
+    selected_date: project.selectedDate || null,
+    map_state: project.mapState || null,
     created_at: project.created_at || new Date().toISOString(),
     updated_at: new Date().toISOString(),
   });
@@ -57,6 +59,8 @@
     name: row.name || "Untitled Facility",
     lat: row.location_lat == null ? null : Number(row.location_lat),
     lng: row.location_lng == null ? null : Number(row.location_lng),
+    selectedDate: row.selected_date || null,
+    mapState: row.map_state || null,
     createdAt: row.created_at || null,
     updatedAt: row.updated_at || null,
   });
@@ -178,6 +182,8 @@
       if (Object.prototype.hasOwnProperty.call(patch, "name")) updatePayload.name = patch.name;
       if (Object.prototype.hasOwnProperty.call(patch, "lat")) updatePayload.location_lat = patch.lat;
       if (Object.prototype.hasOwnProperty.call(patch, "lng")) updatePayload.location_lng = patch.lng;
+      if (Object.prototype.hasOwnProperty.call(patch, "selectedDate")) updatePayload.selected_date = patch.selectedDate;
+      if (Object.prototype.hasOwnProperty.call(patch, "mapState")) updatePayload.map_state = patch.mapState;
       updatePayload.updated_at = new Date().toISOString();
       const { data, error } = await client.from("projects").update(updatePayload).eq("id", projectId).select().single();
       if (error) throw error;

@@ -27,6 +27,7 @@
 
   const queryParams = new URLSearchParams(window.location.search);
   const selectedProjectId = queryParams.get("projectId");
+  const isValidProjectId = (value) => typeof value === "string" && /^[a-zA-Z0-9-]+$/.test(value);
 
   let currentProject = null;
   let selectedDateKey = DEFAULT_DATE_KEY;
@@ -111,13 +112,28 @@
     return Number.isFinite(numeric) ? numeric : fallback;
   };
 
+  const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
-  const safeParse = (value, fallback) => {
-    try {
-      return JSON.parse(value);
-    } catch (error) {
-      return fallback;
+  const withRetry = async (operation, { retries = 2, delayMs = 400 } = {}) => {
+    let lastError = null;
+    for (let attempt = 0; attempt <= retries; attempt += 1) {
+      try {
+        return await operation();
+      } catch (error) {
+        lastError = error;
+        if (attempt === retries) break;
+        await sleep(delayMs * (attempt + 1));
+      }
     }
+    throw lastError;
+  };
+
+  const setSyncMessage = (message, isError = false) => {
+    if (!generationDebugOutput) {
+      return;
+    }
+    generationDebugOutput.textContent = message;
+    generationDebugOutput.style.color = isError ? "#ffb4b4" : "";
   };
 
   const formatKw = (value) => `${Number(value || 0).toFixed(2)} kW`;
@@ -809,13 +825,32 @@
     }
   };
 
+  const persistAsset = async (entry, type) => {
+    if (!currentProject) {
+      return;
+    }
+    entry.syncing = true;
+    try {
+      const saved = await withRetry(() =>
+        supabaseService.upsertAsset({ id: entry.id, projectId: currentProject.id, type, model: entry.model })
+      );
+      entry.id = saved.id;
+      entry.model = saved.model;
+      entry.syncing = false;
+      setSyncMessage("", false);
+    } catch (error) {
+      entry.syncing = false;
+      setSyncMessage("Sync failed. Changes will retry on the next edit.", true);
+    }
+  };
+
   const wireFieldChanges = (card, entry, prefix, type) => {
     const model = entry.model;
     card.querySelectorAll("input, select").forEach((field) => {
       const handler = () => {
         updateModelFromField(model, field, prefix);
-        void supabaseService.upsertAsset({ id: entry.id, projectId: currentProject.id, type, model });
         scheduleRecompute();
+        void persistAsset(entry, type);
       };
       field.addEventListener("input", handler);
       field.addEventListener("change", handler);
@@ -871,9 +906,21 @@
     if (index < 0) {
       return;
     }
-    list[index].card.remove();
-    list.splice(index, 1);
-    await supabaseService.deleteAsset(id);
+    const [entry] = list.splice(index, 1);
+    entry.card.remove();
+    scheduleRecompute();
+    try {
+      await withRetry(() => supabaseService.deleteAsset(id));
+      setSyncMessage("", false);
+    } catch (error) {
+      list.splice(index, 0, entry);
+      const listEl = type === "solar" ? solarList : windList;
+      if (listEl) {
+        listEl.insertBefore(entry.card, listEl.children[index] || null);
+      }
+      setSyncMessage("Delete failed. Please retry.", true);
+      scheduleRecompute();
+    }
   };
 
   if (deleteModal) {
@@ -890,11 +937,10 @@
         void removeAsset(pendingDeleteType, pendingDeleteId);
       }
       deleteModal?.close();
-      scheduleRecompute();
     });
   }
 
-  const addAsset = (type, restoredModel = null, restoredId = null) => {
+  const addAsset = (type, restoredModel = null, restoredId = null, options = {}) => {
     const isSolar = type === "solar";
     const template = isSolar ? solarTemplate : windTemplate;
     const listEl = isSolar ? solarList : windList;
@@ -935,10 +981,10 @@
     (isSolar ? solarAssets : windAssets).push(entry);
     wireFieldChanges(card, entry, isSolar ? "solar" : "wind", type);
 
-    if (currentProject) {
-      void supabaseService.upsertAsset({ id: assetId, projectId: currentProject.id, type, model: defaultModel });
-    }
     scheduleRecompute();
+    if (currentProject && options.persist !== false) {
+      void persistAsset(entry, type);
+    }
   };
 
   if (addSolarButton) {
@@ -974,7 +1020,12 @@
         return;
       }
       selectedDateKey = value;
-      localStorage.setItem(supabaseService.buildScopedUiStorageKey(currentProject.id, "selectedDate"), value);
+      void withRetry(() => supabaseService.updateProject(currentProject.id, { selectedDate: value }))
+        .then((project) => {
+          currentProject = project;
+          setSyncMessage("", false);
+        })
+        .catch(() => setSyncMessage("Could not save selected date.", true));
       void fetchWeatherForDay();
     });
   }
@@ -984,17 +1035,17 @@
       return;
     }
     const savedAssets = await supabaseService.listAssets(currentProject.id);
-    savedAssets.forEach((asset) => addAsset(asset.type, asset.model, asset.id));
+    savedAssets.forEach((asset) => addAsset(asset.type, asset.model, asset.id, { persist: false }));
   };
 
   const initProject = async () => {
     await supabaseService.migrateLegacyLocalData();
-    if (!selectedProjectId) {
+    if (!selectedProjectId || !isValidProjectId(selectedProjectId)) {
       window.location.href = "projects.html";
       return;
     }
 
-    currentProject = await supabaseService.getProject(selectedProjectId);
+    currentProject = await withRetry(() => supabaseService.getProject(selectedProjectId));
     if (!currentProject) {
       window.location.href = "projects.html";
       return;
@@ -1004,8 +1055,7 @@
       backToFacilityLink.href = `index.html?projectId=${encodeURIComponent(currentProject.id)}`;
     }
 
-    selectedDateKey =
-      localStorage.getItem(supabaseService.buildScopedUiStorageKey(currentProject.id, "selectedDate")) || DEFAULT_DATE_KEY;
+    selectedDateKey = currentProject.selectedDate || DEFAULT_DATE_KEY;
 
     if (assetsDatePickerInput) {
       assetsDatePickerInput.value = selectedDateKey;
@@ -1025,9 +1075,7 @@
       const map = L.map(mapContainer, { zoomControl: false, attributionControl: false });
       L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png").addTo(map);
 
-      const mapState = JSON.parse(
-        localStorage.getItem(supabaseService.buildScopedUiStorageKey(currentProject.id, "mapState")) || "null"
-      );
+      const mapState = currentProject.mapState || null;
       if (mapState?.bounds) {
         const bounds = [
           [mapState.bounds.south, mapState.bounds.west],
