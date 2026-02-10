@@ -2,7 +2,7 @@
   const POINTS_PER_DAY = 96;
   const PROXY_ENDPOINT = "/api/nrel-proxy";
   const DEFAULT_DATE_KEY = "2014-02-09";
-  const ASSETS_STORAGE_KEY = "energyapp.assetsState";
+  const supabaseService = window.EnergySupabaseService;
 
   const facilityNameEl = document.querySelector("[data-facility-name]");
   const facilityLocationEl = document.querySelector("[data-facility-location]");
@@ -22,16 +22,14 @@
   const assetsDatePickerButton = document.getElementById("assets-date-picker-button");
   const assetsDatePickerInput = document.getElementById("assets-date-picker");
   const generationDebugOutput = document.getElementById("generation-debug-output");
+  const projectNameEl = document.getElementById("assets-project-name");
+  const backToFacilityLink = document.getElementById("back-to-facility");
 
-  const facility = JSON.parse(localStorage.getItem("energyapp.facility") || "{}");
-  let selectedDateKey = localStorage.getItem("energyapp.selectedDate") || DEFAULT_DATE_KEY;
+  const queryParams = new URLSearchParams(window.location.search);
+  const selectedProjectId = queryParams.get("projectId");
 
-  if (facilityNameEl) {
-    facilityNameEl.textContent = facility.name || "Untitled Facility";
-  }
-  if (facilityLocationEl && facility.lat != null && facility.lng != null) {
-    facilityLocationEl.textContent = `${facility.lat.toFixed(4)}, ${facility.lng.toFixed(4)}`;
-  }
+  let currentProject = null;
+  let selectedDateKey = DEFAULT_DATE_KEY;
 
   const solarDefaults = window.EnergyModels?.DEFAULT_SOLAR_ASSET || {};
   const windDefaults = window.EnergyModels?.DEFAULT_WIND_ASSET || {};
@@ -120,14 +118,6 @@
     } catch (error) {
       return fallback;
     }
-  };
-
-  const persistAssetsState = () => {
-    const payload = {
-      solar: solarAssets.map((entry) => entry.model),
-      wind: windAssets.map((entry) => entry.model),
-    };
-    localStorage.setItem(ASSETS_STORAGE_KEY, JSON.stringify(payload));
   };
 
   const formatKw = (value) => `${Number(value || 0).toFixed(2)} kW`;
@@ -527,7 +517,7 @@
   };
 
   const fetchWeatherForDay = async () => {
-    if (facility.lat == null || facility.lng == null) {
+    if (!currentProject || currentProject.lat == null || currentProject.lng == null) {
       setNoWeatherLoaded();
       scheduleRecompute();
       return;
@@ -538,25 +528,40 @@
     renderChart();
 
     try {
-      const wkt = `POINT(${facility.lng} ${facility.lat})`;
-      const [solarResponse, windResponse] = await Promise.all([
-        fetch(buildUrl(PROXY_ENDPOINT, { dataset: "solar", wkt, interval: "15" })),
-        fetch(buildUrl(PROXY_ENDPOINT, { dataset: "wind", wkt, interval: "15" })),
+      const wkt = `POINT(${currentProject.lng} ${currentProject.lat})`;
+      const [cachedSolar, cachedWind] = await Promise.all([
+        supabaseService.getNrelCache(currentProject.id, "solar", selectedDateKey),
+        supabaseService.getNrelCache(currentProject.id, "wind", selectedDateKey),
       ]);
 
-      if (!solarResponse.ok || !windResponse.ok) {
-        throw new Error("Unable to load weather data for selected location.");
-      }
+      let rawSolarRecords;
+      let rawWindRecords;
 
-      const [solarCsv, windCsv] = await Promise.all([solarResponse.text(), windResponse.text()]);
-      const rawSolarRecords = parseCsv(solarCsv);
-      const rawWindRecords = parseCsv(windCsv);
+      if (cachedSolar?.payload && cachedWind?.payload) {
+        rawSolarRecords = cachedSolar.payload;
+        rawWindRecords = cachedWind.payload;
+      } else {
+        const [solarResponse, windResponse] = await Promise.all([
+          fetch(buildUrl(PROXY_ENDPOINT, { dataset: "solar", wkt, interval: "15" })),
+          fetch(buildUrl(PROXY_ENDPOINT, { dataset: "wind", wkt, interval: "15" })),
+        ]);
+
+        if (!solarResponse.ok || !windResponse.ok) {
+          throw new Error("Unable to load weather data for selected location.");
+        }
+
+        const [solarCsv, windCsv] = await Promise.all([solarResponse.text(), windResponse.text()]);
+        rawSolarRecords = parseCsv(solarCsv);
+        rawWindRecords = parseCsv(windCsv);
+        void supabaseService.upsertNrelCache({ projectId: currentProject.id, dataset: "solar", dateKey: selectedDateKey, payload: rawSolarRecords });
+        void supabaseService.upsertNrelCache({ projectId: currentProject.id, dataset: "wind", dateKey: selectedDateKey, payload: rawWindRecords });
+      }
 
       const [targetYear] = selectedDateKey.split("-");
       const normalizedSolarRecords = normalizeRecordYears(rawSolarRecords, targetYear);
       const normalizedWindRecords = normalizeRecordYears(rawWindRecords, targetYear);
 
-      const timeZone = await fetchTimeZone({ lat: facility.lat, lng: facility.lng });
+      const timeZone = await fetchTimeZone({ lat: currentProject.lat, lng: currentProject.lng });
       weatherDay.timeZone = timeZone;
 
       const solarRecords = alignRecordsForFacilityTimeZone(normalizedSolarRecords, timeZone);
@@ -804,11 +809,12 @@
     }
   };
 
-  const wireFieldChanges = (card, model, prefix) => {
+  const wireFieldChanges = (card, entry, prefix, type) => {
+    const model = entry.model;
     card.querySelectorAll("input, select").forEach((field) => {
       const handler = () => {
         updateModelFromField(model, field, prefix);
-        persistAssetsState();
+        void supabaseService.upsertAsset({ id: entry.id, projectId: currentProject.id, type, model });
         scheduleRecompute();
       };
       field.addEventListener("input", handler);
@@ -859,7 +865,7 @@
     });
   };
 
-  const removeAsset = (type, id) => {
+  const removeAsset = async (type, id) => {
     const list = type === "solar" ? solarAssets : windAssets;
     const index = list.findIndex((entry) => entry.id === id);
     if (index < 0) {
@@ -867,7 +873,7 @@
     }
     list[index].card.remove();
     list.splice(index, 1);
-    persistAssetsState();
+    await supabaseService.deleteAsset(id);
   };
 
   if (deleteModal) {
@@ -881,7 +887,7 @@
     confirmDeleteButton.addEventListener("click", (event) => {
       event.preventDefault();
       if (pendingDeleteId && pendingDeleteType) {
-        removeAsset(pendingDeleteType, pendingDeleteId);
+        void removeAsset(pendingDeleteType, pendingDeleteId);
       }
       deleteModal?.close();
       scheduleRecompute();
@@ -917,7 +923,6 @@
 
     wireSectionToggles(card);
     wireDelete(card, type, assetId);
-    wireFieldChanges(card, defaultModel, isSolar ? "solar" : "wind");
 
     listEl.appendChild(card);
 
@@ -928,8 +933,11 @@
       series: new Float64Array(POINTS_PER_DAY),
     };
     (isSolar ? solarAssets : windAssets).push(entry);
+    wireFieldChanges(card, entry, isSolar ? "solar" : "wind", type);
 
-    persistAssetsState();
+    if (currentProject) {
+      void supabaseService.upsertAsset({ id: assetId, projectId: currentProject.id, type, model: defaultModel });
+    }
     scheduleRecompute();
   };
 
@@ -962,48 +970,89 @@
   if (assetsDatePickerInput) {
     assetsDatePickerInput.addEventListener("change", (event) => {
       const value = event.target.value;
-      if (!value) {
+      if (!value || !currentProject) {
         return;
       }
       selectedDateKey = value;
-      localStorage.setItem("energyapp.selectedDate", value);
-      fetchWeatherForDay();
+      localStorage.setItem(supabaseService.buildScopedUiStorageKey(currentProject.id, "selectedDate"), value);
+      void fetchWeatherForDay();
     });
   }
 
-  if (mapContainer && window.L) {
-    const map = L.map(mapContainer, { zoomControl: false, attributionControl: false });
-    L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png").addTo(map);
-
-    const mapState = JSON.parse(localStorage.getItem("energyapp.mapState") || "null");
-    if (mapState?.bounds) {
-      const bounds = [
-        [mapState.bounds.south, mapState.bounds.west],
-        [mapState.bounds.north, mapState.bounds.east],
-      ];
-      map.fitBounds(bounds, { padding: [10, 10] });
-    } else if (mapState?.center && typeof mapState.zoom === "number") {
-      map.setView([mapState.center.lat, mapState.center.lng], mapState.zoom);
-    } else {
-      map.setView([39.742, -105.1786], 10);
+  const restoreProjectAssets = async () => {
+    if (!currentProject) {
+      return;
     }
+    const savedAssets = await supabaseService.listAssets(currentProject.id);
+    savedAssets.forEach((asset) => addAsset(asset.type, asset.model, asset.id));
+  };
 
-    if (mapState?.center) {
-      L.marker([mapState.center.lat, mapState.center.lng]).addTo(map);
-    }
-  }
-
-  const restoreAssetsState = () => {
-    const saved = safeParse(localStorage.getItem(ASSETS_STORAGE_KEY) || "null", null);
-    if (!saved) {
+  const initProject = async () => {
+    await supabaseService.migrateLegacyLocalData();
+    if (!selectedProjectId) {
+      window.location.href = "projects.html";
       return;
     }
 
-    (saved.solar || []).forEach((model) => addAsset("solar", model));
-    (saved.wind || []).forEach((model) => addAsset("wind", model));
+    currentProject = await supabaseService.getProject(selectedProjectId);
+    if (!currentProject) {
+      window.location.href = "projects.html";
+      return;
+    }
+
+    if (backToFacilityLink) {
+      backToFacilityLink.href = `index.html?projectId=${encodeURIComponent(currentProject.id)}`;
+    }
+
+    selectedDateKey =
+      localStorage.getItem(supabaseService.buildScopedUiStorageKey(currentProject.id, "selectedDate")) || DEFAULT_DATE_KEY;
+
+    if (assetsDatePickerInput) {
+      assetsDatePickerInput.value = selectedDateKey;
+    }
+
+    if (projectNameEl) {
+      projectNameEl.textContent = currentProject.name || "Untitled Facility";
+    }
+    if (facilityNameEl) {
+      facilityNameEl.textContent = currentProject.name || "Untitled Facility";
+    }
+    if (facilityLocationEl && currentProject.lat != null && currentProject.lng != null) {
+      facilityLocationEl.textContent = `${currentProject.lat.toFixed(4)}, ${currentProject.lng.toFixed(4)}`;
+    }
+
+    if (mapContainer && window.L) {
+      const map = L.map(mapContainer, { zoomControl: false, attributionControl: false });
+      L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png").addTo(map);
+
+      const mapState = JSON.parse(
+        localStorage.getItem(supabaseService.buildScopedUiStorageKey(currentProject.id, "mapState")) || "null"
+      );
+      if (mapState?.bounds) {
+        const bounds = [
+          [mapState.bounds.south, mapState.bounds.west],
+          [mapState.bounds.north, mapState.bounds.east],
+        ];
+        map.fitBounds(bounds, { padding: [10, 10] });
+      } else if (mapState?.center && typeof mapState.zoom === "number") {
+        map.setView([mapState.center.lat, mapState.center.lng], mapState.zoom);
+      } else if (currentProject.lat != null && currentProject.lng != null) {
+        map.setView([currentProject.lat, currentProject.lng], 10);
+      } else {
+        map.setView([39.742, -105.1786], 10);
+      }
+
+      if (mapState?.center) {
+        L.marker([mapState.center.lat, mapState.center.lng]).addTo(map);
+      } else if (currentProject.lat != null && currentProject.lng != null) {
+        L.marker([currentProject.lat, currentProject.lng]).addTo(map);
+      }
+    }
+
+    await restoreProjectAssets();
+    scheduleRecompute();
+    await fetchWeatherForDay();
   };
 
-  restoreAssetsState();
-  scheduleRecompute();
-  fetchWeatherForDay();
+  void initProject();
 })();

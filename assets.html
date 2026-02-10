@@ -12,7 +12,12 @@
       <section class="card assets-card">
         <header class="assets-header">
           <h1>Add Generation Assets</h1>
-          <a class="btn btn--primary assets-back" href="index.html">
+          <div class="project-controls">
+            <label for="assets-project-name">Project</label>
+            <strong id="assets-project-name">-</strong>
+            <a class="btn" href="projects.html">All Projects</a>
+          </div>
+          <a class="btn btn--primary assets-back" id="back-to-facility" href="index.html">
             <span aria-hidden="true">←</span>
             Back
           </a>
@@ -187,6 +192,8 @@
     </dialog>
 
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+    <script src="supabase-client.js"></script>
     <script src="models.js"></script>
     <script src="generation.js"></script>
     <script src="assets.js"></script>
