@@ -292,7 +292,9 @@
     const solarKw = window.EnergyGeneration?.sumSolarAssets
       ? window.EnergyGeneration.sumSolarAssets(solarAssets, weatherDay.solar)
       : sumProfiles(solarAssets.map((asset) => buildSolarProfile(asset, weatherDay.solar)));
-    const windKw = sumProfiles(windAssets.map((asset) => buildWindProfile(asset, weatherDay.wind)));
+    const windKw = window.EnergyGeneration?.sumWindAssets
+      ? window.EnergyGeneration.sumWindAssets(windAssets, weatherDay.wind)
+      : sumProfiles(windAssets.map((asset) => buildWindProfile(asset, weatherDay.wind)));
     const totalKw = new Float64Array(POINTS_PER_DAY);
     for (let i = 0; i < POINTS_PER_DAY; i += 1) {
       totalKw[i] = solarKw[i] + windKw[i];
