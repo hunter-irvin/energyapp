@@ -63,16 +63,70 @@
 
   const pad2 = (value) => String(value).padStart(2, "0");
   const cleanText = (value) => String(value || "").replace(/^\ufeff/, "").trim();
-  const normalizeHeader = (header) =>
-    cleanText(header)
+  const normalizeHeader = (header) => {
+    const cleaned = cleanText(header)
       .toLowerCase()
       .replace(/\(.*?\)/g, "")
       .replace(/[^a-z0-9]+/g, "_")
       .replace(/^_+|_+$/g, "");
 
+    if (!cleaned) {
+      return cleaned;
+    }
+
+    if (cleaned.includes("wind") && cleaned.includes("speed") && cleaned.includes("20")) {
+      return "windspeed_20m";
+    }
+    if (cleaned.includes("wind") && cleaned.includes("speed") && cleaned.includes("80")) {
+      return "windspeed_80m";
+    }
+    if (cleaned.includes("wind") && cleaned.includes("speed") && cleaned.includes("100")) {
+      return "windspeed_100m";
+    }
+    if (cleaned.includes("wind") && cleaned.includes("speed") && cleaned.includes("120")) {
+      return "windspeed_120m";
+    }
+    if (cleaned.includes("temperature") && cleaned.includes("100")) {
+      return "temperature_100m";
+    }
+    if (cleaned.includes("pressure") && cleaned.includes("100")) {
+      return "pressure_100m";
+    }
+    if (cleaned.includes("air") && cleaned.includes("temperature")) {
+      return "air_temperature";
+    }
+
+    return cleaned;
+  };
+
   const toNumber = (value, fallback = 0) => {
     const numeric = Number(value);
     return Number.isFinite(numeric) ? numeric : fallback;
+  };
+
+  const hasZoneInTimestamp = (timestampLike) => /(?:z|[+-]\d{2}:?\d{2})$/i.test(cleanText(timestampLike));
+
+  const parseTimestampParts = (timestampLike) => {
+    const raw = cleanText(timestampLike);
+    if (!raw) {
+      return null;
+    }
+
+    const withT = raw.includes("T") ? raw : raw.replace(" ", "T");
+    const match = withT.match(/^(\d{4})-(\d{1,2})-(\d{1,2})[T ](\d{1,2}):(\d{1,2})(?::(\d{1,2}))?/);
+    if (!match) {
+      return null;
+    }
+
+    const [, year, month, day, hour, minute, second = "0"] = match;
+    return {
+      year: String(Number(year)),
+      month: String(Number(month)),
+      day: String(Number(day)),
+      hour: String(Number(hour)),
+      minute: String(Number(minute)),
+      second: String(Number(second)),
+    };
   };
 
   const toUtcDate = (timestampLike) => {
@@ -81,7 +135,7 @@
       return null;
     }
     const withT = raw.includes("T") ? raw : raw.replace(" ", "T");
-    const hasZone = /(?:z|[+-]\d{2}:?\d{2})$/i.test(withT);
+    const hasZone = hasZoneInTimestamp(withT);
     const primary = new Date(hasZone ? withT : `${withT}Z`);
     if (!Number.isNaN(primary.getTime())) {
       return primary;
@@ -100,6 +154,20 @@
     }
     const timestampLike =
       record.timestamp || record.time || record.datetime || record.date_time || record.local_time || record.utc_time;
+    if (!timestampLike) {
+      return record;
+    }
+
+    if (!hasZoneInTimestamp(timestampLike)) {
+      const localParts = parseTimestampParts(timestampLike);
+      if (localParts) {
+        return {
+          ...record,
+          ...localParts,
+        };
+      }
+    }
+
     const utcDate = toUtcDate(timestampLike);
     if (!utcDate) {
       return record;
