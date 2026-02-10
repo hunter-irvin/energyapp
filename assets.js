@@ -238,6 +238,12 @@
     }));
   };
 
+
+  const normalizeRecordYears = (records, targetYear) =>
+    records.map((record) =>
+      record.year && String(record.year) !== String(targetYear) ? { ...record, year: String(targetYear) } : record
+    );
+
   const parseCsv = (csvText) => {
     const lines = csvText
       .split(/\r?\n/)
@@ -378,11 +384,15 @@
       const rawSolarRecords = parseCsv(solarCsv);
       const rawWindRecords = parseCsv(windCsv);
 
+      const [targetYear] = selectedDateKey.split("-");
+      const normalizedSolarRecords = normalizeRecordYears(rawSolarRecords, targetYear);
+      const normalizedWindRecords = normalizeRecordYears(rawWindRecords, targetYear);
+
       const timeZone = await fetchTimeZone({ lat: facility.lat, lng: facility.lng });
       weatherDay.timeZone = timeZone;
 
-      const solarRecords = alignRecordsForFacilityTimeZone(rawSolarRecords, timeZone);
-      const windRecords = alignRecordsForFacilityTimeZone(rawWindRecords, timeZone);
+      const solarRecords = alignRecordsForFacilityTimeZone(normalizedSolarRecords, timeZone);
+      const windRecords = alignRecordsForFacilityTimeZone(normalizedWindRecords, timeZone);
 
       const windSpeedKey = pickWindSpeedKey(windRecords);
       const windTemperatureKey = pickWindTemperatureKey(windRecords);
