@@ -262,6 +262,66 @@ body {
   gap: 36px;
 }
 
+.assets-column__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.assets-add {
+  font-size: 12px;
+  padding: 6px 12px;
+}
+
+.assets-list {
+  display: grid;
+  gap: 12px;
+}
+
+.asset-card {
+  border: 1px solid rgba(82, 113, 183, 0.4);
+  border-radius: 12px;
+  padding: 12px;
+  background: rgba(6, 18, 46, 0.5);
+}
+
+.asset-card__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.asset-card__header .assets-label {
+  display: grid;
+  gap: 6px;
+  text-transform: uppercase;
+}
+
+.asset-name {
+  width: 100%;
+}
+
+.asset-collapse {
+  border: none;
+  background: rgba(6, 22, 60, 0.6);
+  color: #d8e6ff;
+  border-radius: 999px;
+  width: 28px;
+  height: 28px;
+  cursor: pointer;
+}
+
+.asset-card.is-collapsed .asset-card__body {
+  display: none;
+}
+
+.asset-card.is-collapsed .asset-collapse {
+  transform: rotate(-90deg);
+}
+
 .assets-column h3 {
   margin: 0 0 6px;
   font-size: 15px;

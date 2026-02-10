@@ -54,6 +54,37 @@ const tableState = {
 };
 let currentSeries = null;
 
+const MAP_STORAGE_KEY = "energyapp.mapState";
+const FACILITY_STORAGE_KEY = "energyapp.facility";
+const DATA_STORAGE_KEY = "energyapp.dataStore";
+
+let selectionMode = false;
+let marker = null;
+let hoverMarker = null;
+
+const persistDataStore = () => {
+  sessionStorage.setItem(
+    DATA_STORAGE_KEY,
+    JSON.stringify({
+      dataStore,
+      windMetricState,
+      locationTimeZone,
+    })
+  );
+};
+
+const hydrateDataStore = () => {
+  const stored = JSON.parse(sessionStorage.getItem(DATA_STORAGE_KEY) || "null");
+  if (!stored?.dataStore) {
+    return;
+  }
+  dataStore.raw15 = stored.dataStore.raw15 || { solar: [], wind: [] };
+  dataStore.hourly = stored.dataStore.hourly || { solar: [], wind: [] };
+  dataStore.daily = stored.dataStore.daily || { solar: [], wind: [] };
+  windMetricState = stored.windMetricState || windMetricState;
+  locationTimeZone = stored.locationTimeZone || locationTimeZone;
+};
+
 const map = L.map("map", {
   zoomControl: false,
 }).setView([39.742, -105.1786], 10);
@@ -67,12 +98,21 @@ if (storedMapState?.center && typeof storedMapState.zoom === "number") {
   map.setView([storedMapState.center.lat, storedMapState.center.lng], storedMapState.zoom);
 }
 
-let selectionMode = false;
-let marker = null;
-let hoverMarker = null;
+const storedFacility = JSON.parse(localStorage.getItem(FACILITY_STORAGE_KEY) || "null");
+if (storedFacility?.lat != null && storedFacility?.lng != null) {
+  locationValue.textContent = `${storedFacility.lat.toFixed(4)}, ${storedFacility.lng.toFixed(4)}`;
+  marker = L.marker([storedFacility.lat, storedFacility.lng], { draggable: true }).addTo(map);
+  marker.on("dragend", (dragEvent) => {
+    updateLocation(dragEvent.target.getLatLng());
+  });
+}
 
-const MAP_STORAGE_KEY = "energyapp.mapState";
-const FACILITY_STORAGE_KEY = "energyapp.facility";
+const facilityNameInput = document.getElementById("facility-name");
+if (facilityNameInput && storedFacility?.name) {
+  facilityNameInput.value = storedFacility.name;
+}
+
+hydrateDataStore();
 
 const persistMapState = () => {
   const center = map.getCenter();
@@ -145,8 +185,8 @@ const runLoadingStep = async (stepIndex, totalSteps, label, action) => {
     magicInterval = setInterval(() => {
       showingMagic = !showingMagic;
       updateText(showingMagic ? "Performing magic" : label);
-    }, 500);
-  }, 500);
+    }, 2000);
+  }, 2000);
 
   const progressTimer = setInterval(() => {
     stepProgress = Math.min(stepProgress + 6, 90);
@@ -870,6 +910,7 @@ const fetchDataset = async ({ lat, lng }) => {
         "temperature_20m",
         "pressure_20m",
       ]);
+      persistDataStore();
 
       return { solarRecords: nextSolarRecords, windRecords: nextWindRecords };
     }
@@ -973,7 +1014,6 @@ if (chartDisplay) {
   chartDisplay.addEventListener("mouseleave", hideChartTooltip);
 }
 
-const facilityNameInput = document.getElementById("facility-name");
 if (facilityNameInput) {
   facilityNameInput.addEventListener("input", (event) => {
     const facility = JSON.parse(localStorage.getItem(FACILITY_STORAGE_KEY) || "{}");
