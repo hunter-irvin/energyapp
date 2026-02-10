@@ -33,6 +33,21 @@
     localStorage.setItem(key, JSON.stringify(value));
   };
 
+  const isQuotaExceededError = (error) =>
+    error && (error.name === "QuotaExceededError" || error.name === "NS_ERROR_DOM_QUOTA_REACHED");
+
+  const trySaveArray = (key, value) => {
+    try {
+      saveArray(key, value);
+      return true;
+    } catch (error) {
+      if (isQuotaExceededError(error)) {
+        return false;
+      }
+      throw error;
+    }
+  };
+
   const getClient = () => {
     const sdk = window.supabase;
     const url = window.ENERGYAPP_SUPABASE_URL;
@@ -172,8 +187,22 @@
       } else {
         rows.push({ ...row, created_at: new Date().toISOString() });
       }
-      saveArray(DB_STORAGE_KEYS.nrelCache, rows);
-      return rows.find(keyMatch);
+
+      if (trySaveArray(DB_STORAGE_KEYS.nrelCache, rows)) {
+        return rows.find(keyMatch);
+      }
+
+      const boundedRows = rows
+        .filter((entry) => entry.project_id === payload.projectId)
+        .sort((a, b) => new Date(b.fetched_at || 0).getTime() - new Date(a.fetched_at || 0).getTime())
+        .slice(0, 2);
+
+      if (trySaveArray(DB_STORAGE_KEYS.nrelCache, boundedRows)) {
+        return boundedRows.find(keyMatch) || row;
+      }
+
+      console.warn('NREL cache payload exceeded localStorage quota; skipping local persistence for this payload.');
+      return { ...row, persisted: false };
     },
   };
 
