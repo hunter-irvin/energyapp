@@ -480,6 +480,18 @@ const findSolarSample = (records) =>
   records[0] ||
   null;
 
+const findWindSample = (records) =>
+  records.find(
+    (record) =>
+      Number(record.hour) === 12 &&
+      Number(record.minute) === 0 &&
+      Number(record[DEFAULT_WIND_SPEED_METRIC] ?? record[FALLBACK_WIND_SPEED_METRIC]) > 0
+  ) ||
+  records.find((record) => Number(record.hour) === 12 && Number(record.minute) === 0) ||
+  records.find((record) => Number(record[DEFAULT_WIND_SPEED_METRIC] ?? record[FALLBACK_WIND_SPEED_METRIC]) > 0) ||
+  records[0] ||
+  null;
+
 const buildHourlyAggregation = (records, metrics) => {
   const buckets = new Map();
   records.forEach((record) => {
