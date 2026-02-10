@@ -1,5 +1,8 @@
 (() => {
   const POINTS_PER_DAY = 96;
+  const PROXY_ENDPOINT = "/api/nrel-proxy";
+  const DEFAULT_DATE_KEY = "2014-02-09";
+
   const facilityNameEl = document.querySelector("[data-facility-name]");
   const facilityLocationEl = document.querySelector("[data-facility-location]");
   const solarList = document.getElementById("solar-assets");
@@ -28,9 +31,146 @@
   let windCount = 0;
   let pendingDeleteCard = null;
 
+  const selectedDateKey = localStorage.getItem("energyapp.selectedDate") || DEFAULT_DATE_KEY;
+  const weatherDay = {
+    loading: false,
+    error: "",
+    solar: Array.from({ length: POINTS_PER_DAY }, (_, i) => ({ timestamp: i, ghi: 0, air_temperature: 20 })),
+    wind: Array.from({ length: POINTS_PER_DAY }, (_, i) => ({ timestamp: i, windspeed: 0 })),
+  };
+
+  const pad2 = (value) => String(value).padStart(2, "0");
+  const cleanText = (value) => String(value || "").replace(/^\ufeff/, "").trim();
+  const normalizeHeader = (header) =>
+    cleanText(header)
+      .toLowerCase()
+      .replace(/\(.*?\)/g, "")
+      .replace(/[^a-z0-9]+/g, "_")
+      .replace(/^_+|_+$/g, "");
+
   const numberOrDefault = (value, fallback) => {
     const n = Number(value);
     return Number.isFinite(n) ? n : fallback;
+  };
+
+  const buildUrl = (base, params) => {
+    const url = new URL(base, window.location.origin);
+    Object.entries(params).forEach(([key, value]) => {
+      url.searchParams.set(key, value);
+    });
+    return url.toString();
+  };
+
+  const parseCsv = (csvText) => {
+    const lines = csvText
+      .split(/\r?\n/)
+      .map((line) => cleanText(line))
+      .filter(Boolean);
+
+    if (!lines.length) {
+      return [];
+    }
+
+    const headerIndex = lines.findIndex((line) => {
+      const lower = line.toLowerCase();
+      return lower.startsWith("year,") || lower.startsWith("timestamp,") || lower.startsWith("time,");
+    });
+
+    if (headerIndex < 0) {
+      return [];
+    }
+
+    const headers = lines[headerIndex].split(",").map((value) => normalizeHeader(value));
+    return lines.slice(headerIndex + 1).map((line) => {
+      const cols = line.split(",");
+      const record = {};
+      headers.forEach((header, index) => {
+        const raw = cleanText(cols[index]);
+        if (raw === "") {
+          record[header] = null;
+          return;
+        }
+        const numeric = Number(raw);
+        record[header] = Number.isNaN(numeric) ? raw : numeric;
+      });
+      return record;
+    });
+  };
+
+  const pickWindSpeedKey = (records) => {
+    if (!records.length) {
+      return "windspeed_100m";
+    }
+    const keys = Object.keys(records[0]).filter((key) => /^windspeed_\d+m$/.test(key));
+    if (keys.includes("windspeed_100m")) {
+      return "windspeed_100m";
+    }
+    return keys[0] || "windspeed_100m";
+  };
+
+  const sliceDay = (records, dateKey, mapFn) => {
+    const [yy, mm, dd] = dateKey.split("-").map(Number);
+    const dayRecords = records.filter((record) =>
+      Number(record.year) === yy && Number(record.month) === mm && Number(record.day) === dd
+    );
+
+    const byMinute = new Map();
+    dayRecords.forEach((record) => {
+      const hour = Number(record.hour ?? 0);
+      const minute = Number(record.minute ?? 0);
+      byMinute.set(hour * 60 + minute, record);
+    });
+
+    const points = [];
+    for (let i = 0; i < POINTS_PER_DAY; i += 1) {
+      const hour = Math.floor((i * 15) / 60);
+      const minute = (i * 15) % 60;
+      const key = hour * 60 + minute;
+      points.push(
+        mapFn(byMinute.get(key), `${dateKey}T${pad2(hour)}:${pad2(minute)}:00`)
+      );
+    }
+    return points;
+  };
+
+  const fetchWeatherForDay = async () => {
+    if (facility.lat == null || facility.lng == null) {
+      return;
+    }
+
+    weatherDay.loading = true;
+    weatherDay.error = "";
+    renderChart();
+
+    try {
+      const wkt = `POINT(${facility.lng} ${facility.lat})`;
+      const [solarCsv, windCsv] = await Promise.all([
+        fetch(buildUrl(PROXY_ENDPOINT, { dataset: "solar", wkt, interval: "15" })).then((r) => r.text()),
+        fetch(buildUrl(PROXY_ENDPOINT, { dataset: "wind", wkt, interval: "15" })).then((r) => r.text()),
+      ]);
+
+      const solarRecords = parseCsv(solarCsv);
+      const windRecords = parseCsv(windCsv);
+      const windSpeedKey = pickWindSpeedKey(windRecords);
+
+      weatherDay.solar = sliceDay(solarRecords, selectedDateKey, (record, timestamp) => ({
+        timestamp,
+        ghi: numberOrDefault(record?.ghi, 0),
+        dni: numberOrDefault(record?.dni, 0),
+        dhi: numberOrDefault(record?.dhi, 0),
+        air_temperature: numberOrDefault(record?.air_temperature, 20),
+      }));
+
+      weatherDay.wind = sliceDay(windRecords, selectedDateKey, (record, timestamp) => ({
+        timestamp,
+        windspeed: numberOrDefault(record?.[windSpeedKey], 0),
+      }));
+    } catch (error) {
+      weatherDay.error = error.message || "Unable to fetch weather data.";
+    } finally {
+      weatherDay.loading = false;
+      renderChart();
+    }
   };
 
   const collectAssetValues = (card, prefix, defaults) => {
@@ -56,22 +196,21 @@
     return values;
   };
 
-  const buildSolarProfile = (asset) => {
+  const buildSolarProfile = (asset, solarSlice) => {
     const profile = new Float64Array(POINTS_PER_DAY);
     const capacity = Math.max(0, numberOrDefault(asset.capacity_ac_kw, 0));
     const availability = Math.max(0, Math.min(1, numberOrDefault(asset.availability_frac, 0.99)));
     const losses = Math.max(0, Math.min(0.9, numberOrDefault(asset.system_losses_frac, 0.14)));
 
     for (let i = 0; i < POINTS_PER_DAY; i += 1) {
-      const hour = i / 4;
-      const sun = Math.max(0, Math.sin(((hour - 6) / 12) * Math.PI));
-      const kw = capacity * sun * (1 - losses) * availability;
-      profile[i] = Math.max(0, kw);
+      const ghi = Math.max(0, numberOrDefault(solarSlice[i]?.ghi, 0));
+      const irradianceFactor = Math.min(1.2, ghi / 1000);
+      profile[i] = Math.max(0, capacity * irradianceFactor * (1 - losses) * availability);
     }
     return profile;
   };
 
-  const buildWindProfile = (asset, seed = 0) => {
+  const buildWindProfile = (asset, windSlice) => {
     const profile = new Float64Array(POINTS_PER_DAY);
     const ratedPower = Math.max(0, numberOrDefault(asset.rated_power_kw, 0));
     const turbines = Math.max(1, Math.round(numberOrDefault(asset.num_turbines, 1)));
@@ -80,11 +219,9 @@
     const electricalLoss = Math.max(0, Math.min(0.5, numberOrDefault(asset.electrical_losses_frac, 0.02)));
 
     for (let i = 0; i < POINTS_PER_DAY; i += 1) {
-      const hour = i / 4;
-      const gust = 0.58 + 0.22 * Math.sin((hour / 24) * Math.PI * 2 + seed) + 0.1 * Math.cos((hour / 12) * Math.PI);
-      const base = Math.max(0.08, Math.min(1, gust));
-      const kw = ratedPower * turbines * base * (1 - wakeLoss) * (1 - electricalLoss) * availability;
-      profile[i] = Math.max(0, kw);
+      const speed = Math.max(0, numberOrDefault(windSlice[i]?.windspeed, 0));
+      const fraction = Math.min(1, speed / 12);
+      profile[i] = Math.max(0, ratedPower * turbines * fraction * (1 - wakeLoss) * (1 - electricalLoss) * availability);
     }
     return profile;
   };
@@ -131,15 +268,25 @@
       return;
     }
 
+    if (weatherDay.loading) {
+      generationChart.innerHTML = '<text x="20" y="26" fill="#c7d7f4" font-size="14">Loading weather data…</text>';
+      return;
+    }
+
+    if (weatherDay.error) {
+      generationChart.innerHTML = `<text x="20" y="26" fill="#ffb3b3" font-size="13">${weatherDay.error}</text>`;
+      return;
+    }
+
     const solarAssets = Array.from(solarList?.querySelectorAll(".asset-card") || []).map((card) =>
       collectAssetValues(card, "solar", solarDefaults || {})
     );
-    const windAssets = Array.from(windList?.querySelectorAll(".asset-card") || []).map((card, index) =>
-      ({ values: collectAssetValues(card, "wind", windDefaults || {}), seed: index * 0.35 })
+    const windAssets = Array.from(windList?.querySelectorAll(".asset-card") || []).map((card) =>
+      collectAssetValues(card, "wind", windDefaults || {})
     );
 
-    const solarKw = sumProfiles(solarAssets.map((asset) => buildSolarProfile(asset)));
-    const windKw = sumProfiles(windAssets.map(({ values, seed }) => buildWindProfile(values, seed)));
+    const solarKw = sumProfiles(solarAssets.map((asset) => buildSolarProfile(asset, weatherDay.solar)));
+    const windKw = sumProfiles(windAssets.map((asset) => buildWindProfile(asset, weatherDay.wind)));
     const totalKw = new Float64Array(POINTS_PER_DAY);
     for (let i = 0; i < POINTS_PER_DAY; i += 1) {
       totalKw[i] = solarKw[i] + windKw[i];
@@ -287,4 +434,5 @@
   }
 
   renderChart();
+  fetchWeatherForDay();
 })();

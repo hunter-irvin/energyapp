@@ -30,7 +30,10 @@ const SOLAR_YEAR = "2014";
 const WIND_YEAR = "2014";
 const PROXY_ENDPOINT = "/api/nrel-proxy";
 const DEFAULT_DATE = new Date(2014, 1, 9);
-let selectedDate = new Date(DEFAULT_DATE);
+const SELECTED_DATE_STORAGE_KEY = "energyapp.selectedDate";
+const storedSelectedDate = localStorage.getItem(SELECTED_DATE_STORAGE_KEY);
+const parsedStoredDate = storedSelectedDate ? new Date(`${storedSelectedDate}T00:00:00`) : null;
+let selectedDate = parsedStoredDate && !Number.isNaN(parsedStoredDate.getTime()) ? parsedStoredDate : new Date(DEFAULT_DATE);
 const DEFAULT_WIND_SPEED_METRIC = "windspeed_20m";
 const DEFAULT_WIND_DIR_METRIC = "winddirection_20m";
 const FALLBACK_WIND_SPEED_METRIC = "windspeed_100m";
@@ -970,6 +973,7 @@ if (datePickerInput) {
       return;
     }
     selectedDate = nextDate;
+    localStorage.setItem(SELECTED_DATE_STORAGE_KEY, formatDateKey(selectedDate));
     updateView();
   });
 }
