@@ -278,6 +278,7 @@
     }
 
     const sample = records.slice(0, 48);
+    const hasTimestampValues = sample.some((record) => Boolean(getTimestampLike(record)));
     const hasZonedTimestamp = sample.some((record) => {
       const timestampLike = getTimestampLike(record);
       return timestampLike && TIMESTAMP_WITH_ZONE_RE.test(timestampLike);
@@ -287,8 +288,14 @@
       return "absolute";
     }
 
-    const hasLocalDateParts = sample.some((record) => hasDiscreteDateParts(record));
-    if (hasLocalDateParts) {
+    const hasDateParts = sample.some((record) => hasDiscreteDateParts(record));
+    if (hasDateParts && !hasTimestampValues) {
+      // Match Facility Settings behavior for NREL-style year/month/day/hour/minute rows:
+      // interpret these as UTC source records that must be shifted to facility local time.
+      return "absolute";
+    }
+
+    if (hasDateParts) {
       return "local_wall_clock";
     }
 
