@@ -184,6 +184,60 @@
     });
   };
 
+
+  const TIMESTAMP_WITH_ZONE_RE = /(?:z|[+-]\d{2}:?\d{2})$/i;
+
+  const getTimestampLike = (record) =>
+    cleanText(
+      record?.timestamp || record?.time || record?.datetime || record?.date_time || record?.local_time || record?.utc_time
+    );
+
+  const hasDiscreteDateParts = (record) =>
+    [record?.year, record?.month, record?.day, record?.hour, record?.minute].every((value) =>
+      Number.isFinite(Number(value))
+    );
+
+  const buildNormalizedTimestamp = (record) => {
+    if (hasDiscreteDateParts(record)) {
+      return `${pad2(record.year)}-${pad2(record.month)}-${pad2(record.day)}T${pad2(record.hour)}:${pad2(record.minute)}:00`;
+    }
+    return getTimestampLike(record) || null;
+  };
+
+  const detectRecordTimeBasis = (records) => {
+    if (!records.length) {
+      return "unknown";
+    }
+
+    const sample = records.slice(0, 48);
+    const hasZonedTimestamp = sample.some((record) => {
+      const timestampLike = getTimestampLike(record);
+      return timestampLike && TIMESTAMP_WITH_ZONE_RE.test(timestampLike);
+    });
+
+    if (hasZonedTimestamp) {
+      return "absolute";
+    }
+
+    const hasLocalDateParts = sample.some((record) => hasDiscreteDateParts(record));
+    if (hasLocalDateParts) {
+      return "local_wall_clock";
+    }
+
+    return "local_wall_clock";
+  };
+
+  const alignRecordsForFacilityTimeZone = (records, timeZone) => {
+    const timeBasis = detectRecordTimeBasis(records);
+    if (timeBasis === "absolute") {
+      return normalizeRecordsToTimeZone(records, timeZone);
+    }
+    return records.map((record) => ({
+      ...record,
+      normalized_timestamp: record.normalized_timestamp || buildNormalizedTimestamp(record),
+    }));
+  };
+
   const parseCsv = (csvText) => {
     const lines = csvText
       .split(/\r?\n/)
@@ -327,8 +381,8 @@
       const timeZone = await fetchTimeZone({ lat: facility.lat, lng: facility.lng });
       weatherDay.timeZone = timeZone;
 
-      const solarRecords = normalizeRecordsToTimeZone(rawSolarRecords, timeZone);
-      const windRecords = normalizeRecordsToTimeZone(rawWindRecords, timeZone);
+      const solarRecords = alignRecordsForFacilityTimeZone(rawSolarRecords, timeZone);
+      const windRecords = alignRecordsForFacilityTimeZone(rawWindRecords, timeZone);
 
       const windSpeedKey = pickWindSpeedKey(windRecords);
       const windTemperatureKey = pickWindTemperatureKey(windRecords);
