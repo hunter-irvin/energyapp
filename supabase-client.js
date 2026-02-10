@@ -33,6 +33,21 @@
     localStorage.setItem(key, JSON.stringify(value));
   };
 
+  const isQuotaExceededError = (error) =>
+    error && (error.name === "QuotaExceededError" || error.name === "NS_ERROR_DOM_QUOTA_REACHED");
+
+  const trySaveArray = (key, value) => {
+    try {
+      saveArray(key, value);
+      return true;
+    } catch (error) {
+      if (isQuotaExceededError(error)) {
+        return false;
+      }
+      throw error;
+    }
+  };
+
   const getClient = () => {
     const sdk = window.supabase;
     const url = window.ENERGYAPP_SUPABASE_URL;
@@ -48,6 +63,8 @@
     name: project.name || "Untitled Facility",
     location_lat: project.lat ?? null,
     location_lng: project.lng ?? null,
+    selected_date: project.selectedDate || null,
+    map_state: project.mapState || null,
     created_at: project.created_at || new Date().toISOString(),
     updated_at: new Date().toISOString(),
   });
@@ -57,6 +74,8 @@
     name: row.name || "Untitled Facility",
     lat: row.location_lat == null ? null : Number(row.location_lat),
     lng: row.location_lng == null ? null : Number(row.location_lng),
+    selectedDate: row.selected_date || null,
+    mapState: row.map_state || null,
     createdAt: row.created_at || null,
     updatedAt: row.updated_at || null,
   });
@@ -127,23 +146,39 @@
       saveArray(DB_STORAGE_KEYS.assets, rows);
       return true;
     },
-    async getNrelCache(projectId, dataset, dateKey) {
+    async getNrelCache(projectId, dataset, dateKey, options = {}) {
+      const { sourceYear = null, intervalMinutes = null } = options;
       return (
         loadArray(DB_STORAGE_KEYS.nrelCache).find(
-          (entry) => entry.project_id === projectId && entry.dataset === dataset && entry.date_key === dateKey
+          (entry) =>
+            entry.project_id === projectId &&
+            entry.dataset === dataset &&
+            entry.date_key === dateKey &&
+            (sourceYear == null || Number(entry.source_year) === Number(sourceYear)) &&
+            (intervalMinutes == null || Number(entry.interval_minutes) === Number(intervalMinutes))
         ) || null
       );
     },
     async upsertNrelCache(payload) {
       const rows = loadArray(DB_STORAGE_KEYS.nrelCache);
       const keyMatch = (entry) =>
-        entry.project_id === payload.projectId && entry.dataset === payload.dataset && entry.date_key === payload.dateKey;
+        entry.project_id === payload.projectId &&
+        entry.dataset === payload.dataset &&
+        entry.date_key === payload.dateKey &&
+        Number(entry.source_year) === Number(payload.sourceYear) &&
+        Number(entry.interval_minutes) === Number(payload.intervalMinutes);
       const index = rows.findIndex(keyMatch);
       const row = {
         id: index >= 0 ? rows[index].id : uid(),
         project_id: payload.projectId,
         dataset: payload.dataset,
         date_key: payload.dateKey,
+        source_year: payload.sourceYear,
+        interval_minutes: payload.intervalMinutes,
+        wkt: payload.wkt || null,
+        timezone: payload.timezone || null,
+        source: payload.source || 'nrel_proxy',
+        fetched_at: payload.fetchedAt || new Date().toISOString(),
         payload: payload.payload,
         updated_at: new Date().toISOString(),
       };
@@ -152,8 +187,22 @@
       } else {
         rows.push({ ...row, created_at: new Date().toISOString() });
       }
-      saveArray(DB_STORAGE_KEYS.nrelCache, rows);
-      return rows.find(keyMatch);
+
+      if (trySaveArray(DB_STORAGE_KEYS.nrelCache, rows)) {
+        return rows.find(keyMatch);
+      }
+
+      const boundedRows = rows
+        .filter((entry) => entry.project_id === payload.projectId)
+        .sort((a, b) => new Date(b.fetched_at || 0).getTime() - new Date(a.fetched_at || 0).getTime())
+        .slice(0, 2);
+
+      if (trySaveArray(DB_STORAGE_KEYS.nrelCache, boundedRows)) {
+        return boundedRows.find(keyMatch) || row;
+      }
+
+      console.warn('NREL cache payload exceeded localStorage quota; skipping local persistence for this payload.');
+      return { ...row, persisted: false };
     },
   };
 
@@ -178,6 +227,8 @@
       if (Object.prototype.hasOwnProperty.call(patch, "name")) updatePayload.name = patch.name;
       if (Object.prototype.hasOwnProperty.call(patch, "lat")) updatePayload.location_lat = patch.lat;
       if (Object.prototype.hasOwnProperty.call(patch, "lng")) updatePayload.location_lng = patch.lng;
+      if (Object.prototype.hasOwnProperty.call(patch, "selectedDate")) updatePayload.selected_date = patch.selectedDate;
+      if (Object.prototype.hasOwnProperty.call(patch, "mapState")) updatePayload.map_state = patch.mapState;
       updatePayload.updated_at = new Date().toISOString();
       const { data, error } = await client.from("projects").update(updatePayload).eq("id", projectId).select().single();
       if (error) throw error;
@@ -199,14 +250,21 @@
       if (error) throw error;
       return true;
     },
-    async getNrelCache(projectId, dataset, dateKey) {
-      const { data, error } = await client
+    async getNrelCache(projectId, dataset, dateKey, options = {}) {
+      const { sourceYear = null, intervalMinutes = null } = options;
+      let query = client
         .from("nrel_cache")
         .select("*")
         .eq("project_id", projectId)
         .eq("dataset", dataset)
-        .eq("date_key", dateKey)
-        .maybeSingle();
+        .eq("date_key", dateKey);
+      if (sourceYear != null) {
+        query = query.eq("source_year", sourceYear);
+      }
+      if (intervalMinutes != null) {
+        query = query.eq("interval_minutes", intervalMinutes);
+      }
+      const { data, error } = await query.order('fetched_at', { ascending: false }).limit(1).maybeSingle();
       if (error) throw error;
       return data || null;
     },
@@ -215,10 +273,20 @@
         project_id: payload.projectId,
         dataset: payload.dataset,
         date_key: payload.dateKey,
+        source_year: payload.sourceYear,
+        interval_minutes: payload.intervalMinutes,
+        wkt: payload.wkt || null,
+        timezone: payload.timezone || null,
+        source: payload.source || 'nrel_proxy',
+        fetched_at: payload.fetchedAt || new Date().toISOString(),
         payload: payload.payload,
         updated_at: new Date().toISOString(),
       };
-      const { data, error } = await client.from("nrel_cache").upsert(row).select().single();
+      const { data, error } = await client
+        .from("nrel_cache")
+        .upsert(row, { onConflict: 'project_id,dataset,date_key,source_year,interval_minutes' })
+        .select()
+        .single();
       if (error) throw error;
       return data;
     },
@@ -236,7 +304,7 @@
   const listAssets = async (projectId) => dataService().listAssets(projectId);
   const upsertAsset = async (payload) => dataService().upsertAsset(payload);
   const deleteAsset = async (assetId) => dataService().deleteAsset(assetId);
-  const getNrelCache = async (projectId, dataset, dateKey) => dataService().getNrelCache(projectId, dataset, dateKey);
+  const getNrelCache = async (projectId, dataset, dateKey, options) => dataService().getNrelCache(projectId, dataset, dateKey, options);
   const upsertNrelCache = async (payload) => dataService().upsertNrelCache(payload);
 
   const setLastOpenedProjectId = (projectId) => {

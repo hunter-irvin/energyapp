@@ -25,7 +25,10 @@
             </div>
             <div class="field">
               <label>Location</label>
-              <button class="btn btn--primary" id="select-map">Select on Map</button>
+              <div class="project-actions">
+                <button class="btn btn--primary" id="select-map">Select on Map</button>
+                <button class="btn" id="refresh-weather-data" type="button">Refresh Weather Data</button>
+              </div>
               <div class="status status--loading" id="loading-status" hidden>
                 <span class="status__text" id="loading-text">Loading data for 2024…</span>
                 <div class="loading-bars">

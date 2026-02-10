@@ -2,6 +2,10 @@
   const POINTS_PER_DAY = 96;
   const PROXY_ENDPOINT = "/api/nrel-proxy";
   const DEFAULT_DATE_KEY = "2014-02-09";
+  const NREL_CACHE_DATE_KEY = "all";
+  const NREL_SOURCE_YEAR = 2014;
+  const NREL_INTERVAL_MINUTES = 15;
+  const NREL_CACHE_TTL_MS = 1000 * 60 * 60 * 24;
   const supabaseService = window.EnergySupabaseService;
 
   const facilityNameEl = document.querySelector("[data-facility-name]");
@@ -21,12 +25,14 @@
   const generationTooltip = document.getElementById("generation-tooltip");
   const assetsDatePickerButton = document.getElementById("assets-date-picker-button");
   const assetsDatePickerInput = document.getElementById("assets-date-picker");
+  const assetsRefreshWeatherButton = document.getElementById("assets-refresh-weather");
   const generationDebugOutput = document.getElementById("generation-debug-output");
   const projectNameEl = document.getElementById("assets-project-name");
   const backToFacilityLink = document.getElementById("back-to-facility");
 
   const queryParams = new URLSearchParams(window.location.search);
   const selectedProjectId = queryParams.get("projectId");
+  const isValidProjectId = (value) => typeof value === "string" && /^[a-zA-Z0-9-]+$/.test(value);
 
   let currentProject = null;
   let selectedDateKey = DEFAULT_DATE_KEY;
@@ -111,13 +117,28 @@
     return Number.isFinite(numeric) ? numeric : fallback;
   };
 
+  const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
-  const safeParse = (value, fallback) => {
-    try {
-      return JSON.parse(value);
-    } catch (error) {
-      return fallback;
+  const withRetry = async (operation, { retries = 2, delayMs = 400 } = {}) => {
+    let lastError = null;
+    for (let attempt = 0; attempt <= retries; attempt += 1) {
+      try {
+        return await operation();
+      } catch (error) {
+        lastError = error;
+        if (attempt === retries) break;
+        await sleep(delayMs * (attempt + 1));
+      }
     }
+    throw lastError;
+  };
+
+  const setSyncMessage = (message, isError = false) => {
+    if (!generationDebugOutput) {
+      return;
+    }
+    generationDebugOutput.textContent = message;
+    generationDebugOutput.style.color = isError ? "#ffb4b4" : "";
   };
 
   const formatKw = (value) => `${Number(value || 0).toFixed(2)} kW`;
@@ -516,52 +537,103 @@
     weatherDay.lastMatchedTimestamp = null;
   };
 
-  const fetchWeatherForDay = async () => {
+  const isFreshCache = (cacheRow) => {
+    if (!cacheRow?.fetched_at) {
+      return false;
+    }
+    const fetchedAt = new Date(cacheRow.fetched_at).getTime();
+    return Number.isFinite(fetchedAt) && Date.now() - fetchedAt <= NREL_CACHE_TTL_MS;
+  };
+
+  const loadPersistedOrRemoteWeather = async ({ forceRefresh = false } = {}) => {
+    if (currentProject?.lat == null || currentProject?.lng == null) {
+      throw new Error("Project location is required to load weather data.");
+    }
+
+    const wkt = `POINT(${currentProject.lng} ${currentProject.lat})`;
+    const cacheLookup = { sourceYear: NREL_SOURCE_YEAR, intervalMinutes: NREL_INTERVAL_MINUTES };
+    const [cachedSolar, cachedWind] = await Promise.all([
+      supabaseService.getNrelCache(currentProject.id, "solar", NREL_CACHE_DATE_KEY, cacheLookup),
+      supabaseService.getNrelCache(currentProject.id, "wind", NREL_CACHE_DATE_KEY, cacheLookup),
+    ]);
+
+    if (!forceRefresh && isFreshCache(cachedSolar) && isFreshCache(cachedWind) && cachedSolar?.payload && cachedWind?.payload) {
+      return {
+        rawSolarRecords: cachedSolar.payload,
+        rawWindRecords: cachedWind.payload,
+        timeZone: cachedSolar.timezone || cachedWind.timezone || (await fetchTimeZone({ lat: currentProject.lat, lng: currentProject.lng })),
+      };
+    }
+
+    const [solarResponse, windResponse] = await Promise.all([
+      fetch(buildUrl(PROXY_ENDPOINT, { dataset: "solar", wkt, interval: String(NREL_INTERVAL_MINUTES) })),
+      fetch(buildUrl(PROXY_ENDPOINT, { dataset: "wind", wkt, interval: String(NREL_INTERVAL_MINUTES) })),
+    ]);
+
+    if (!solarResponse.ok || !windResponse.ok) {
+      throw new Error("Unable to load weather data for selected location.");
+    }
+
+    const [solarCsv, windCsv] = await Promise.all([solarResponse.text(), windResponse.text()]);
+    const rawSolarRecords = parseCsv(solarCsv);
+    const rawWindRecords = parseCsv(windCsv);
+    const timeZone = await fetchTimeZone({ lat: currentProject.lat, lng: currentProject.lng });
+    const fetchedAt = new Date().toISOString();
+
+    await Promise.all([
+      supabaseService.upsertNrelCache({
+        projectId: currentProject.id,
+        dataset: "solar",
+        dateKey: NREL_CACHE_DATE_KEY,
+        sourceYear: NREL_SOURCE_YEAR,
+        intervalMinutes: NREL_INTERVAL_MINUTES,
+        wkt,
+        timezone: timeZone,
+        source: "nrel_proxy",
+        fetchedAt,
+        payload: rawSolarRecords,
+      }),
+      supabaseService.upsertNrelCache({
+        projectId: currentProject.id,
+        dataset: "wind",
+        dateKey: NREL_CACHE_DATE_KEY,
+        sourceYear: NREL_SOURCE_YEAR,
+        intervalMinutes: NREL_INTERVAL_MINUTES,
+        wkt,
+        timezone: timeZone,
+        source: "nrel_proxy",
+        fetchedAt,
+        payload: rawWindRecords,
+      }),
+    ]);
+
+    return { rawSolarRecords, rawWindRecords, timeZone };
+  };
+
+  const fetchWeatherForDay = async (options = {}) => {
+    const { forceRefresh = false } = options;
     if (!currentProject || currentProject.lat == null || currentProject.lng == null) {
-      setNoWeatherLoaded();
+      weatherDay.loaded = false;
+      weatherDay.error = "Set a facility location before adding assets.";
+      weatherDay.solar = [];
+      weatherDay.wind = [];
       scheduleRecompute();
       return;
     }
 
     weatherDay.loading = true;
     weatherDay.error = "";
-    renderChart();
+    scheduleRecompute();
 
     try {
-      const wkt = `POINT(${currentProject.lng} ${currentProject.lat})`;
-      const [cachedSolar, cachedWind] = await Promise.all([
-        supabaseService.getNrelCache(currentProject.id, "solar", selectedDateKey),
-        supabaseService.getNrelCache(currentProject.id, "wind", selectedDateKey),
-      ]);
-
-      let rawSolarRecords;
-      let rawWindRecords;
-
-      if (cachedSolar?.payload && cachedWind?.payload) {
-        rawSolarRecords = cachedSolar.payload;
-        rawWindRecords = cachedWind.payload;
-      } else {
-        const [solarResponse, windResponse] = await Promise.all([
-          fetch(buildUrl(PROXY_ENDPOINT, { dataset: "solar", wkt, interval: "15" })),
-          fetch(buildUrl(PROXY_ENDPOINT, { dataset: "wind", wkt, interval: "15" })),
-        ]);
-
-        if (!solarResponse.ok || !windResponse.ok) {
-          throw new Error("Unable to load weather data for selected location.");
-        }
-
-        const [solarCsv, windCsv] = await Promise.all([solarResponse.text(), windResponse.text()]);
-        rawSolarRecords = parseCsv(solarCsv);
-        rawWindRecords = parseCsv(windCsv);
-        void supabaseService.upsertNrelCache({ projectId: currentProject.id, dataset: "solar", dateKey: selectedDateKey, payload: rawSolarRecords });
-        void supabaseService.upsertNrelCache({ projectId: currentProject.id, dataset: "wind", dateKey: selectedDateKey, payload: rawWindRecords });
-      }
+      const { rawSolarRecords, rawWindRecords, timeZone } = await withRetry(() =>
+        loadPersistedOrRemoteWeather({ forceRefresh })
+      );
 
       const [targetYear] = selectedDateKey.split("-");
       const normalizedSolarRecords = normalizeRecordYears(rawSolarRecords, targetYear);
       const normalizedWindRecords = normalizeRecordYears(rawWindRecords, targetYear);
 
-      const timeZone = await fetchTimeZone({ lat: currentProject.lat, lng: currentProject.lng });
       weatherDay.timeZone = timeZone;
 
       const solarRecords = alignRecordsForFacilityTimeZone(normalizedSolarRecords, timeZone);
@@ -613,6 +685,9 @@
             ? `No ${missingStreams[0]} weather rows matched selected date after alignment. Check timezone/year normalization.`
             : "No solar/wind weather rows matched selected date after alignment. Check timezone/year normalization.";
       }
+      if (assetsRefreshWeatherButton && forceRefresh) {
+        setSyncMessage("Weather cache refreshed.", false);
+      }
     } catch (error) {
       weatherDay.loaded = false;
       weatherDay.error = error.message || "Unable to fetch weather data.";
@@ -627,6 +702,7 @@
       scheduleRecompute();
     }
   };
+
 
   const areaPath = (values, baseline, yScale, width, height) => {
     const stepX = width / (POINTS_PER_DAY - 1);
@@ -809,13 +885,32 @@
     }
   };
 
+  const persistAsset = async (entry, type) => {
+    if (!currentProject) {
+      return;
+    }
+    entry.syncing = true;
+    try {
+      const saved = await withRetry(() =>
+        supabaseService.upsertAsset({ id: entry.id, projectId: currentProject.id, type, model: entry.model })
+      );
+      entry.id = saved.id;
+      entry.model = saved.model;
+      entry.syncing = false;
+      setSyncMessage("", false);
+    } catch (error) {
+      entry.syncing = false;
+      setSyncMessage("Sync failed. Changes will retry on the next edit.", true);
+    }
+  };
+
   const wireFieldChanges = (card, entry, prefix, type) => {
     const model = entry.model;
     card.querySelectorAll("input, select").forEach((field) => {
       const handler = () => {
         updateModelFromField(model, field, prefix);
-        void supabaseService.upsertAsset({ id: entry.id, projectId: currentProject.id, type, model });
         scheduleRecompute();
+        void persistAsset(entry, type);
       };
       field.addEventListener("input", handler);
       field.addEventListener("change", handler);
@@ -871,9 +966,21 @@
     if (index < 0) {
       return;
     }
-    list[index].card.remove();
-    list.splice(index, 1);
-    await supabaseService.deleteAsset(id);
+    const [entry] = list.splice(index, 1);
+    entry.card.remove();
+    scheduleRecompute();
+    try {
+      await withRetry(() => supabaseService.deleteAsset(id));
+      setSyncMessage("", false);
+    } catch (error) {
+      list.splice(index, 0, entry);
+      const listEl = type === "solar" ? solarList : windList;
+      if (listEl) {
+        listEl.insertBefore(entry.card, listEl.children[index] || null);
+      }
+      setSyncMessage("Delete failed. Please retry.", true);
+      scheduleRecompute();
+    }
   };
 
   if (deleteModal) {
@@ -890,11 +997,10 @@
         void removeAsset(pendingDeleteType, pendingDeleteId);
       }
       deleteModal?.close();
-      scheduleRecompute();
     });
   }
 
-  const addAsset = (type, restoredModel = null, restoredId = null) => {
+  const addAsset = (type, restoredModel = null, restoredId = null, options = {}) => {
     const isSolar = type === "solar";
     const template = isSolar ? solarTemplate : windTemplate;
     const listEl = isSolar ? solarList : windList;
@@ -935,10 +1041,10 @@
     (isSolar ? solarAssets : windAssets).push(entry);
     wireFieldChanges(card, entry, isSolar ? "solar" : "wind", type);
 
-    if (currentProject) {
-      void supabaseService.upsertAsset({ id: assetId, projectId: currentProject.id, type, model: defaultModel });
-    }
     scheduleRecompute();
+    if (currentProject && options.persist !== false) {
+      void persistAsset(entry, type);
+    }
   };
 
   if (addSolarButton) {
@@ -974,8 +1080,28 @@
         return;
       }
       selectedDateKey = value;
-      localStorage.setItem(supabaseService.buildScopedUiStorageKey(currentProject.id, "selectedDate"), value);
+      void withRetry(() => supabaseService.updateProject(currentProject.id, { selectedDate: value }))
+        .then((project) => {
+          currentProject = project;
+          setSyncMessage("", false);
+        })
+        .catch(() => setSyncMessage("Could not save selected date.", true));
       void fetchWeatherForDay();
+    });
+  }
+
+
+  if (assetsRefreshWeatherButton) {
+    assetsRefreshWeatherButton.addEventListener("click", async () => {
+      assetsRefreshWeatherButton.disabled = true;
+      setSyncMessage("Refreshing weather data…", false);
+      try {
+        await fetchWeatherForDay({ forceRefresh: true });
+      } catch (error) {
+        setSyncMessage("Unable to refresh weather data.", true);
+      } finally {
+        assetsRefreshWeatherButton.disabled = false;
+      }
     });
   }
 
@@ -984,17 +1110,17 @@
       return;
     }
     const savedAssets = await supabaseService.listAssets(currentProject.id);
-    savedAssets.forEach((asset) => addAsset(asset.type, asset.model, asset.id));
+    savedAssets.forEach((asset) => addAsset(asset.type, asset.model, asset.id, { persist: false }));
   };
 
   const initProject = async () => {
     await supabaseService.migrateLegacyLocalData();
-    if (!selectedProjectId) {
+    if (!selectedProjectId || !isValidProjectId(selectedProjectId)) {
       window.location.href = "projects.html";
       return;
     }
 
-    currentProject = await supabaseService.getProject(selectedProjectId);
+    currentProject = await withRetry(() => supabaseService.getProject(selectedProjectId));
     if (!currentProject) {
       window.location.href = "projects.html";
       return;
@@ -1004,8 +1130,7 @@
       backToFacilityLink.href = `index.html?projectId=${encodeURIComponent(currentProject.id)}`;
     }
 
-    selectedDateKey =
-      localStorage.getItem(supabaseService.buildScopedUiStorageKey(currentProject.id, "selectedDate")) || DEFAULT_DATE_KEY;
+    selectedDateKey = currentProject.selectedDate || DEFAULT_DATE_KEY;
 
     if (assetsDatePickerInput) {
       assetsDatePickerInput.value = selectedDateKey;
@@ -1025,9 +1150,7 @@
       const map = L.map(mapContainer, { zoomControl: false, attributionControl: false });
       L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png").addTo(map);
 
-      const mapState = JSON.parse(
-        localStorage.getItem(supabaseService.buildScopedUiStorageKey(currentProject.id, "mapState")) || "null"
-      );
+      const mapState = currentProject.mapState || null;
       if (mapState?.bounds) {
         const bounds = [
           [mapState.bounds.south, mapState.bounds.west],
