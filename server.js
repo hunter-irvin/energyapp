@@ -53,14 +53,22 @@ const serveStatic = (req, res) => {
 
     const ext = path.extname(filePath);
     if (ext === ".html") {
-      // Inject Supabase credentials into HTML before supabase-client.js loads
+      // Inject Supabase credentials into HTML as early as possible (in head)
       let html = data.toString();
       const credentialsScript = `<script>
 window.ENERGYAPP_SUPABASE_URL = ${JSON.stringify(SUPABASE_URL)};
 window.ENERGYAPP_SUPABASE_ANON_KEY = ${JSON.stringify(SUPABASE_ANON_KEY)};
 </script>`;
-      // Insert before the first script tag
-      html = html.replace(/<script/, credentialsScript + "\n    <script");
+      // Insert right after <head> tag opens (most reliable injection point)
+      // This ensures credentials are available before ANY script execution
+      if (html.includes("<head>")) {
+        html = html.replace("<head>", "<head>\n    " + credentialsScript);
+      } else if (html.includes("<HEAD>")) {
+        html = html.replace("<HEAD>", "<HEAD>\n    " + credentialsScript);
+      } else {
+        // Fallback: inject before first script tag if no head found
+        html = html.replace(/<script/i, credentialsScript + "\n    <script");
+      }
       res.writeHead(200, { "Content-Type": mimeTypes[ext] || "text/plain" });
       res.end(html);
     } else {
