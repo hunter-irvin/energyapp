@@ -160,13 +160,13 @@
     const lines = ticks
       .map(
         ({ y }) =>
-          `<line x1="0" y1="${y.toFixed(2)}" x2="${width}" y2="${y.toFixed(2)}" stroke="rgba(141, 171, 230, 0.24)" stroke-width="1" />`
+          `<line x1="0" y1="${y.toFixed(2)}" x2="${width}" y2="${y.toFixed(2)}" stroke="rgba(200, 200, 200, 0.35)" stroke-width="1" />`
       )
       .join("");
     const labels = ticks
       .map(({ value, y }) => {
         const rounded = value >= 100 ? Math.round(value) : Number(value.toFixed(1));
-        return `<text x="8" y="${Math.max(12, y - 4).toFixed(2)}" fill="#9fc0ff" font-size="11">${rounded}</text>`;
+        return `<text x="8" y="${Math.max(12, y - 4).toFixed(2)}" fill="#666666" font-size="11">${rounded}</text>`;
       })
       .join("");
     return { lines, labels };
@@ -767,14 +767,14 @@
 
     if (weatherDay.loading) {
       hideTooltip();
-      generationChart.innerHTML = '<text x="20" y="26" fill="#c7d7f4" font-size="14">Loading weather data…</text>';
+      generationChart.innerHTML = '<text x="20" y="26" fill="#666666" font-size="14">Loading weather data…</text>';
       return;
     }
 
     if (!weatherDay.loaded) {
       hideTooltip();
       const message = weatherDay.error || "No weather data loaded.";
-      generationChart.innerHTML = `<text x="20" y="26" fill="#ffb3b3" font-size="13">${message}</text>`;
+      generationChart.innerHTML = `<text x="20" y="26" fill="#c85a5a" font-size="13">${message}</text>`;
       if (generationAxis) {
         generationAxis.innerHTML = "";
       }
@@ -837,10 +837,10 @@
     generationChart.innerHTML = `
       <g class="generation-grid">${gridLines}</g>
       <g class="generation-grid-labels">${gridLabels}</g>
-      <text x="20" y="132" fill="#9fc0ff" font-size="11" transform="rotate(-90 20 132)">Generation (kW)</text>
-      <path d="${areaPath(windKw, zero, yScale, width, height)}" fill="rgba(92, 211, 232, 0.50)" stroke="rgba(92, 211, 232, 0.95)" stroke-width="1" />
-      <path d="${areaPath(solarKw, windKw, yScale, width, height)}" fill="rgba(242, 201, 76, 0.60)" stroke="rgba(247, 215, 125, 0.95)" stroke-width="1" />
-      <path d="${linePath(totalKw, yScale, width, height)}" fill="none" stroke="#ffffff" stroke-width="2" />
+      <text x="20" y="132" fill="#999999" font-size="11" transform="rotate(-90 20 132)">Generation (kW)</text>
+      <path d="${areaPath(windKw, zero, yScale, width, height)}" fill="rgba(31, 119, 180, 0.35)" stroke="rgba(31, 119, 180, 0.8)" stroke-width="1" />
+      <path d="${areaPath(solarKw, windKw, yScale, width, height)}" fill="rgba(249, 168, 37, 0.50)" stroke="rgba(249, 168, 37, 0.85)" stroke-width="1" />
+      <path d="${linePath(totalKw, yScale, width, height)}" fill="none" stroke="#000000" stroke-width="2" />
     `;
 
     chartState.solarKw = solarKw;
