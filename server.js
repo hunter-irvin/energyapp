@@ -13,12 +13,17 @@ const SOLAR_ENDPOINT =
 const WIND_ENDPOINT =
   "https://developer.nrel.gov/api/wind-toolkit/v2/wind/wtk-download.csv";
 
+// Supabase configuration
+const SUPABASE_URL = process.env.SUPABASE_URL || "https://wdsvqjbqftoxzlovyuzk.supabase.co";
+const SUPABASE_ANON_KEY = process.env.SUPABASE_ANON_KEY || "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Indkc3ZxamJxZnRveHpsb3Z5dXprIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzA1NjU4MjYsImV4cCI6MjA4NjE0MTgyNn0.fqx_Gh7kdSrpnh21Pd_EA1Mp4TnwfTn7dmrqP_ZCUl0";
+
 const cache = new Map();
 
 const mimeTypes = {
   ".html": "text/html; charset=utf-8",
   ".css": "text/css; charset=utf-8",
   ".js": "application/javascript; charset=utf-8",
+  ".json": "application/json; charset=utf-8",
   ".png": "image/png",
   ".jpg": "image/jpeg",
   ".svg": "image/svg+xml",
@@ -33,10 +38,21 @@ const sendJsonError = (res, status, message) => {
 };
 
 const serveStatic = (req, res) => {
-  const requestPath = req.url === "/" ? "/index.html" : req.url;
-  const filePath = path.join(__dirname, requestPath);
+  let pathname = "/";
+  try {
+    const parsedUrl = new URL(req.url, `http://${req.headers.host || "localhost"}`);
+    pathname = decodeURIComponent(parsedUrl.pathname || "/");
+  } catch (error) {
+    sendJsonError(res, 400, "Invalid request URL.");
+    return;
+  }
 
-  if (!filePath.startsWith(__dirname)) {
+  const requestPath = pathname === "/" ? "/index.html" : pathname;
+  const relativePath = requestPath.replace(/^\/+/, "");
+  const rootDir = path.resolve(__dirname);
+  const filePath = path.resolve(rootDir, relativePath);
+
+  if (!filePath.startsWith(rootDir + path.sep) && filePath !== rootDir) {
     sendJsonError(res, 403, "Forbidden.");
     return;
   }
@@ -47,9 +63,30 @@ const serveStatic = (req, res) => {
       return;
     }
 
-    const ext = path.extname(filePath);
-    res.writeHead(200, { "Content-Type": mimeTypes[ext] || "text/plain" });
-    res.end(data);
+    const ext = path.extname(filePath).toLowerCase();
+    if (ext === ".html") {
+      // Inject Supabase credentials into HTML as early as possible (in head)
+      let html = data.toString();
+      const credentialsScript = `<script>
+window.ENERGYAPP_SUPABASE_URL = ${JSON.stringify(SUPABASE_URL)};
+window.ENERGYAPP_SUPABASE_ANON_KEY = ${JSON.stringify(SUPABASE_ANON_KEY)};
+</script>`;
+      // Insert right after <head> tag opens (most reliable injection point)
+      // This ensures credentials are available before ANY script execution
+      if (html.includes("<head>")) {
+        html = html.replace("<head>", "<head>\n    " + credentialsScript);
+      } else if (html.includes("<HEAD>")) {
+        html = html.replace("<HEAD>", "<HEAD>\n    " + credentialsScript);
+      } else {
+        // Fallback: inject before first script tag if no head found
+        html = html.replace(/<script/i, credentialsScript + "\n    <script");
+      }
+      res.writeHead(200, { "Content-Type": mimeTypes[ext] || "text/plain" });
+      res.end(html);
+    } else {
+      res.writeHead(200, { "Content-Type": mimeTypes[ext] || "text/plain" });
+      res.end(data);
+    }
   });
 };
 
@@ -142,6 +179,40 @@ const handleProxy = async (req, res) => {
 const server = http.createServer((req, res) => {
   if (req.url.startsWith("/api/nrel-proxy")) {
     handleProxy(req, res);
+    return;
+  }
+
+  if (req.url === "/api/runtime-config") {
+    res.writeHead(200, {
+      "Content-Type": "application/json; charset=utf-8",
+      "Cache-Control": "no-store",
+      "Access-Control-Allow-Origin": "*",
+    });
+    res.end(
+      JSON.stringify({
+        supabaseUrl: SUPABASE_URL,
+        supabaseAnonKey: SUPABASE_ANON_KEY,
+      })
+    );
+    return;
+  }
+
+  // Diagnostic endpoint to help debug Supabase integration
+  if (req.url === "/api/diagnostics") {
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({
+      timestamp: new Date().toISOString(),
+      supabase: {
+        url: SUPABASE_URL,
+        anonKeyPresent: !!SUPABASE_ANON_KEY,
+        anonKeyLength: SUPABASE_ANON_KEY?.length || 0,
+      },
+      server: {
+        nodeVersion: process.version,
+        env: process.env.NODE_ENV || 'development',
+      },
+      message: 'If supabase.url and anonKeyPresent are true, credentials should be injected into HTML. Check browser console for "[Supabase Client Init]" message.',
+    }, null, 2));
     return;
   }
 
