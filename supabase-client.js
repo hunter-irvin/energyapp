@@ -64,51 +64,83 @@
     }
   };
 
-  const getClient = () => {
-    const sdk = window.supabase;
-    const url = window.ENERGYAPP_SUPABASE_URL;
-    const anonKey = window.ENERGYAPP_SUPABASE_ANON_KEY;
-    
-    // Debug logging
-    if (!sdk || !url || !anonKey) {
-      const missing = [];
-      if (!sdk) missing.push('window.supabase');
-      if (!url) missing.push('window.ENERGYAPP_SUPABASE_URL');
-      if (!anonKey) missing.push('window.ENERGYAPP_SUPABASE_ANON_KEY');
-      
-      const reason = missing.length === 3 
-        ? 'All credentials missing'
-        : `Missing: ${missing.join(', ')}`;
-      
-      backendStatus.type = 'localStorage';
-      backendStatus.isWorking = false;
-      backendStatus.lastError = reason;
-      
-      console.warn('[Supabase Client] Missing required credentials or SDK. Falling back to localStorage.', {
-        missing,
-        hasSDK: !!sdk,
-        hasURL: !!url,
-        hasKey: !!anonKey,
-      });
-      return null;
+  let clientCache = null;
+  let clientInitPromise = null;
+
+  const getClient = async () => {
+    // Return cached client if available
+    if (clientCache) {
+      return clientCache;
     }
-    
-    try {
-      const client = sdk.createClient(url, anonKey);
-      backendStatus.type = 'supabase';
-      backendStatus.isWorking = true;
-      backendStatus.lastError = null;
-      backendStatus.errorCode = null;
-      console.log('[Supabase Client] Successfully initialized Supabase client', { url });
-      return client;
-    } catch (error) {
-      backendStatus.type = 'localStorage';
-      backendStatus.isWorking = false;
-      backendStatus.lastError = error.message;
-      backendStatus.errorCode = error.code || 'INIT_ERROR';
-      console.error('[Supabase Client] Error creating Supabase client:', error);
-      return null;
+
+    // If already initializing, wait for that promise
+    if (clientInitPromise) {
+      return clientInitPromise;
     }
+
+    // Initialize the client with retry logic
+    clientInitPromise = (async () => {
+      const url = window.ENERGYAPP_SUPABASE_URL;
+      const anonKey = window.ENERGYAPP_SUPABASE_ANON_KEY;
+
+      // Verify credentials are injected (should be immediate)
+      if (!url || !anonKey) {
+        const missing = [];
+        if (!url) missing.push('window.ENERGYAPP_SUPABASE_URL');
+        if (!anonKey) missing.push('window.ENERGYAPP_SUPABASE_ANON_KEY');
+
+        const reason = `Missing credentials: ${missing.join(', ')}`;
+        backendStatus.type = 'localStorage';
+        backendStatus.isWorking = false;
+        backendStatus.lastError = reason;
+        backendStatus.errorCode = 'MISSING_CREDENTIALS';
+
+        console.error('[Supabase Client] Credentials not injected:', reason);
+        return null;
+      }
+
+      // Wait for Supabase SDK to load (retry up to 50 times with 100ms intervals = 5 seconds)
+      let retries = 0;
+      const maxRetries = 50;
+      while (!window.supabase && retries < maxRetries) {
+        await new Promise(resolve => setTimeout(resolve, 100));
+        retries++;
+      }
+
+      if (!window.supabase) {
+        const reason = 'Supabase SDK failed to load from CDN after 5 seconds';
+        backendStatus.type = 'localStorage';
+        backendStatus.isWorking = false;
+        backendStatus.lastError = reason;
+        backendStatus.errorCode = 'SDK_LOAD_TIMEOUT';
+
+        console.error('[Supabase Client]', reason);
+        return null;
+      }
+
+      try {
+        const sdk = window.supabase;
+        const client = sdk.createClient(url, anonKey);
+        backendStatus.type = 'supabase';
+        backendStatus.isWorking = true;
+        backendStatus.lastError = null;
+        backendStatus.errorCode = null;
+
+        clientCache = client;
+        console.log('[Supabase Client] Successfully initialized Supabase client', { url });
+        return client;
+      } catch (error) {
+        backendStatus.type = 'localStorage';
+        backendStatus.isWorking = false;
+        backendStatus.lastError = error.message;
+        backendStatus.errorCode = error.code || 'INIT_ERROR';
+
+        console.error('[Supabase Client] Error creating Supabase client:', error);
+        return null;
+      }
+    })();
+
+    return clientInitPromise;
   };
 
   const toProjectRow = (project) => ({
@@ -349,8 +381,8 @@
     },
   });
 
-  const dataService = () => {
-    const client = getClient();
+  const dataService = async () => {
+    const client = await getClient();
     const service = client ? supabaseDb(client) : localDb;
     const backend = client ? 'Supabase' : 'localStorage (fallback)';
     
@@ -365,7 +397,8 @@
 
   const createProject = async (payload) => {
     try {
-      const result = await dataService().createProject(payload);
+      const service = await dataService();
+      const result = await service.createProject(payload);
       // Successful operation, clear any persistent errors
       backendStatus.lastError = null;
       backendStatus.errorCode = null;
@@ -380,7 +413,8 @@
   
   const getProject = async (projectId) => {
     try {
-      const result = await dataService().getProject(projectId);
+      const service = await dataService();
+      const result = await service.getProject(projectId);
       backendStatus.lastError = null;
       backendStatus.errorCode = null;
       return result;
@@ -394,7 +428,8 @@
   
   const updateProject = async (projectId, patch) => {
     try {
-      const result = await dataService().updateProject(projectId, patch);
+      const service = await dataService();
+      const result = await service.updateProject(projectId, patch);
       backendStatus.lastError = null;
       backendStatus.errorCode = null;
       return result;
@@ -408,7 +443,8 @@
   
   const listProjects = async () => {
     try {
-      const result = await dataService().listProjects();
+      const service = await dataService();
+      const result = await service.listProjects();
       backendStatus.lastError = null;
       backendStatus.errorCode = null;
       return result;
@@ -422,7 +458,8 @@
   
   const upsertAsset = async (payload) => {
     try {
-      const result = await dataService().upsertAsset(payload);
+      const service = await dataService();
+      const result = await service.upsertAsset(payload);
       backendStatus.lastError = null;
       backendStatus.errorCode = null;
       return result;
@@ -436,7 +473,8 @@
   
   const deleteAsset = async (assetId) => {
     try {
-      const result = await dataService().deleteAsset(assetId);
+      const service = await dataService();
+      const result = await service.deleteAsset(assetId);
       backendStatus.lastError = null;
       backendStatus.errorCode = null;
       return result;
@@ -450,7 +488,8 @@
   
   const listAssets = async (projectId) => {
     try {
-      const result = await dataService().listAssets(projectId);
+      const service = await dataService();
+      const result = await service.listAssets(projectId);
       backendStatus.lastError = null;
       backendStatus.errorCode = null;
       return result;
@@ -464,7 +503,8 @@
   
   const getNrelCache = async (projectId, dataset, dateKey, options) => {
     try {
-      const result = await dataService().getNrelCache(projectId, dataset, dateKey, options);
+      const service = await dataService();
+      const result = await service.getNrelCache(projectId, dataset, dateKey, options);
       backendStatus.lastError = null;
       backendStatus.errorCode = null;
       return result;
@@ -478,7 +518,8 @@
   
   const upsertNrelCache = async (payload) => {
     try {
-      const result = await dataService().upsertNrelCache(payload);
+      const service = await dataService();
+      const result = await service.upsertNrelCache(payload);
       backendStatus.lastError = null;
       backendStatus.errorCode = null;
       return result;
