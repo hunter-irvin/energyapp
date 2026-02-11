@@ -7,6 +7,14 @@
     supabaseVersion: window.supabase?.version || 'unknown',
   });
 
+  // Track backend status for UI error reporting
+  let backendStatus = {
+    type: 'unknown', // 'supabase', 'localStorage', or 'unknown'
+    isWorking: null, // true, false, or null (untested)
+    lastError: null, // Last error message if fallback occurred
+    errorCode: null, // Supabase error code if available
+  };
+
   const LAST_PROJECT_STORAGE_KEY = "energyapp.lastOpenedProjectId";
   const MIGRATION_STORAGE_KEY = "energyapp.legacyMigration.v1";
   const LEGACY_KEYS = {
@@ -67,6 +75,15 @@
       if (!sdk) missing.push('window.supabase');
       if (!url) missing.push('window.ENERGYAPP_SUPABASE_URL');
       if (!anonKey) missing.push('window.ENERGYAPP_SUPABASE_ANON_KEY');
+      
+      const reason = missing.length === 3 
+        ? 'All credentials missing'
+        : `Missing: ${missing.join(', ')}`;
+      
+      backendStatus.type = 'localStorage';
+      backendStatus.isWorking = false;
+      backendStatus.lastError = reason;
+      
       console.warn('[Supabase Client] Missing required credentials or SDK. Falling back to localStorage.', {
         missing,
         hasSDK: !!sdk,
@@ -78,9 +95,17 @@
     
     try {
       const client = sdk.createClient(url, anonKey);
+      backendStatus.type = 'supabase';
+      backendStatus.isWorking = true;
+      backendStatus.lastError = null;
+      backendStatus.errorCode = null;
       console.log('[Supabase Client] Successfully initialized Supabase client', { url });
       return client;
     } catch (error) {
+      backendStatus.type = 'localStorage';
+      backendStatus.isWorking = false;
+      backendStatus.lastError = error.message;
+      backendStatus.errorCode = error.code || 'INIT_ERROR';
       console.error('[Supabase Client] Error creating Supabase client:', error);
       return null;
     }
@@ -328,23 +353,26 @@
     const client = getClient();
     const service = client ? supabaseDb(client) : localDb;
     const backend = client ? 'Supabase' : 'localStorage (fallback)';
+    
+    // Update status to reflect actual backend being used this call
+    if (!client) {
+      backendStatus.type = 'localStorage';
+    }
+    
     console.debug('[EnergySupabaseService] Using persistence backend:', backend);
     return service;
   };
 
-  const listProjects = async () => {
-    try {
-      return await dataService().listProjects();
-    } catch (error) {
-      console.error('[EnergySupabaseService] Error listing projects:', error);
-      throw error;
-    }
-  };
-  
   const createProject = async (payload) => {
     try {
-      return await dataService().createProject(payload);
+      const result = await dataService().createProject(payload);
+      // Successful operation, clear any persistent errors
+      backendStatus.lastError = null;
+      backendStatus.errorCode = null;
+      return result;
     } catch (error) {
+      backendStatus.lastError = error.message || String(error);
+      backendStatus.errorCode = error.code || error.status || 'CREATE_ERROR';
       console.error('[EnergySupabaseService] Error creating project:', error);
       throw error;
     }
@@ -352,8 +380,13 @@
   
   const getProject = async (projectId) => {
     try {
-      return await dataService().getProject(projectId);
+      const result = await dataService().getProject(projectId);
+      backendStatus.lastError = null;
+      backendStatus.errorCode = null;
+      return result;
     } catch (error) {
+      backendStatus.lastError = error.message || String(error);
+      backendStatus.errorCode = error.code || error.status || 'GET_ERROR';
       console.error('[EnergySupabaseService] Error getting project:', error);
       throw error;
     }
@@ -361,26 +394,41 @@
   
   const updateProject = async (projectId, patch) => {
     try {
-      return await dataService().updateProject(projectId, patch);
+      const result = await dataService().updateProject(projectId, patch);
+      backendStatus.lastError = null;
+      backendStatus.errorCode = null;
+      return result;
     } catch (error) {
+      backendStatus.lastError = error.message || String(error);
+      backendStatus.errorCode = error.code || error.status || 'UPDATE_ERROR';
       console.error('[EnergySupabaseService] Error updating project:', error);
       throw error;
     }
   };
   
-  const listAssets = async (projectId) => {
+  const listProjects = async () => {
     try {
-      return await dataService().listAssets(projectId);
+      const result = await dataService().listProjects();
+      backendStatus.lastError = null;
+      backendStatus.errorCode = null;
+      return result;
     } catch (error) {
-      console.error('[EnergySupabaseService] Error listing assets:', error);
+      backendStatus.lastError = error.message || String(error);
+      backendStatus.errorCode = error.code || error.status || 'LIST_ERROR';
+      console.error('[EnergySupabaseService] Error listing projects:', error);
       throw error;
     }
   };
   
   const upsertAsset = async (payload) => {
     try {
-      return await dataService().upsertAsset(payload);
+      const result = await dataService().upsertAsset(payload);
+      backendStatus.lastError = null;
+      backendStatus.errorCode = null;
+      return result;
     } catch (error) {
+      backendStatus.lastError = error.message || String(error);
+      backendStatus.errorCode = error.code || error.status || 'UPSERT_ASSET_ERROR';
       console.error('[EnergySupabaseService] Error upserting asset:', error);
       throw error;
     }
@@ -388,17 +436,41 @@
   
   const deleteAsset = async (assetId) => {
     try {
-      return await dataService().deleteAsset(assetId);
+      const result = await dataService().deleteAsset(assetId);
+      backendStatus.lastError = null;
+      backendStatus.errorCode = null;
+      return result;
     } catch (error) {
+      backendStatus.lastError = error.message || String(error);
+      backendStatus.errorCode = error.code || error.status || 'DELETE_ERROR';
       console.error('[EnergySupabaseService] Error deleting asset:', error);
+      throw error;
+    }
+  };
+  
+  const listAssets = async (projectId) => {
+    try {
+      const result = await dataService().listAssets(projectId);
+      backendStatus.lastError = null;
+      backendStatus.errorCode = null;
+      return result;
+    } catch (error) {
+      backendStatus.lastError = error.message || String(error);
+      backendStatus.errorCode = error.code || error.status || 'LIST_ASSETS_ERROR';
+      console.error('[EnergySupabaseService] Error listing assets:', error);
       throw error;
     }
   };
   
   const getNrelCache = async (projectId, dataset, dateKey, options) => {
     try {
-      return await dataService().getNrelCache(projectId, dataset, dateKey, options);
+      const result = await dataService().getNrelCache(projectId, dataset, dateKey, options);
+      backendStatus.lastError = null;
+      backendStatus.errorCode = null;
+      return result;
     } catch (error) {
+      backendStatus.lastError = error.message || String(error);
+      backendStatus.errorCode = error.code || error.status || 'GET_CACHE_ERROR';
       console.error('[EnergySupabaseService] Error getting NREL cache:', error);
       throw error;
     }
@@ -406,8 +478,13 @@
   
   const upsertNrelCache = async (payload) => {
     try {
-      return await dataService().upsertNrelCache(payload);
+      const result = await dataService().upsertNrelCache(payload);
+      backendStatus.lastError = null;
+      backendStatus.errorCode = null;
+      return result;
     } catch (error) {
+      backendStatus.lastError = error.message || String(error);
+      backendStatus.errorCode = error.code || error.status || 'UPSERT_CACHE_ERROR';
       console.error('[EnergySupabaseService] Error upserting NREL cache:', error);
       throw error;
     }
@@ -489,6 +566,11 @@
     getLastOpenedProjectId,
     setLastOpenedProjectId,
     migrateLegacyLocalData,
+    // Status reporting functions
+    getBackendStatus: () => ({ ...backendStatus }),
+    isUsingLocalStorage: () => backendStatus.type === 'localStorage',
+    getLastError: () => backendStatus.lastError,
+    getErrorCode: () => backendStatus.errorCode,
   };
   
   // Verify Supabase is working after all scripts load
