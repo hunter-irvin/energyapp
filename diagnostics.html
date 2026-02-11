@@ -1,0 +1,253 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>EnergyApp - Supabase Diagnostics</title>
+    <style>
+      body {
+        font-family: monospace;
+        margin: 20px;
+        background-color: #f5f5f5;
+      }
+      .section {
+        background-color: white;
+        padding: 20px;
+        margin-bottom: 20px;
+        border-radius: 4px;
+        border-left: 4px solid #666;
+      }
+      .section.success {
+        border-left-color: #4caf50;
+      }
+      .section.error {
+        border-left-color: #f44336;
+      }
+      .section.warning {
+        border-left-color: #ff9800;
+      }
+      h2 {
+        margin-top: 0;
+      }
+      pre {
+        background-color: #f9f9f9;
+        padding: 10px;
+        border-radius: 3px;
+        overflow-x: auto;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>🔍 EnergyApp Supabase Diagnostics</h1>
+    <p>This page tests your Supabase integration and helps troubleshoot issues.</p>
+
+    <div class="section" id="credentials-section">
+      <h2>1. Credentials Injection</h2>
+      <p>Checking if Supabase credentials are injected by the server...</p>
+      <pre id="credentials-output">Loading...</pre>
+    </div>
+
+    <div class="section" id="sdk-section">
+      <h2>2. Supabase SDK Loading</h2>
+      <p>Checking if the Supabase JS SDK loaded from CDN...</p>
+      <pre id="sdk-output">Loading...</pre>
+    </div>
+
+    <div class="section" id="rest-section">
+      <h2>3. Supabase REST API</h2>
+      <p>Testing direct REST API connection (without SDK)...</p>
+      <pre id="rest-output">Testing...</pre>
+    </div>
+
+    <div class="section" id="client-section">
+      <h2>4. Supabase Client Initialization</h2>
+      <p>Attempting to create Supabase client...</p>
+      <pre id="client-output">Testing...</pre>
+    </div>
+
+    <div class="section" id="database-section">
+      <h2>5. Database Query Test</h2>
+      <p>Testing if we can query the projects table...</p>
+      <pre id="database-output">Testing...</pre>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+    <script>
+      const log = (sectionId, status, message, details = null) => {
+        const section = document.getElementById(sectionId);
+        const output = document.getElementById(sectionId.replace('section', 'output'));
+        
+        section.classList.add(status);
+        
+        let html = `<strong style="color: ${status === 'success' ? 'green' : status === 'error' ? 'red' : 'orange'}">${status.toUpperCase()}</strong>\n\n${message}`;
+        
+        if (details) {
+          html += '\n\n' + JSON.stringify(details, null, 2);
+        }
+        
+        output.textContent = html;
+      };
+
+      // Test 1: Credentials
+      setTimeout(() => {
+        const hasURL = !!window.ENERGYAPP_SUPABASE_URL;
+        const hasKey = !!window.ENERGYAPP_SUPABASE_ANON_KEY;
+        
+        if (hasURL && hasKey) {
+          log('credentials-section', 'success', 'Credentials successfully injected!', {
+            url: window.ENERGYAPP_SUPABASE_URL,
+            keyLength: window.ENERGYAPP_SUPABASE_ANON_KEY.length,
+          });
+        } else {
+          log('credentials-section', 'error', 'Credentials not found!', {
+            hasURL,
+            hasKey,
+            windowKeys: Object.keys(window).filter(k => k.includes('ENERGYAPP')),
+          });
+        }
+      }, 100);
+
+      // Test 2: SDK
+      setTimeout(() => {
+        if (window.supabase) {
+          log('sdk-section', 'success', 'Supabase JS SDK loaded successfully!', {
+            hasCreateClient: !!window.supabase.createClient,
+          });
+        } else {
+          log('sdk-section', 'error', 'Supabase JS SDK failed to load from CDN!', {
+            hasSupabase: !!window.supabase,
+            suggestion: 'Check network tab for failed CDN requests. May be blocked by firewall/ad blocker.',
+          });
+        }
+      }, 1000);
+
+      // Test 3: REST API (fetch)
+      setTimeout(async () => {
+        try {
+          const url = window.ENERGYAPP_SUPABASE_URL;
+          if (!url) {
+            log('rest-section', 'error', 'Cannot test: URL not available');
+            return;
+          }
+
+          const response = await fetch(`${url}/rest/v1/projects?limit=1`, {
+            headers: {
+              'apikey': window.ENERGYAPP_SUPABASE_ANON_KEY,
+              'Authorization': `Bearer ${window.ENERGYAPP_SUPABASE_ANON_KEY}`,
+            },
+          });
+
+          const data = await response.json();
+
+          if (response.ok) {
+            log('rest-section', 'success', 'REST API is reachable and responding!', {
+              status: response.status,
+              recordCount: Array.isArray(data) ? data.length : 'N/A',
+            });
+          } else {
+            log('rest-section', 'error', `REST API returned status ${response.status}!`, {
+              status: response.status,
+              error: data.message || response.statusText,
+            });
+          }
+        } catch (error) {
+          log('rest-section', 'error', `REST API test failed: ${error.message}`, {
+            error: error.toString(),
+          });
+        }
+      }, 1500);
+
+      // Test 4: Client
+      setTimeout(() => {
+        try {
+          if (!window.supabase) {
+            log('client-section', 'error', 'Cannot initialize: SDK not loaded');
+            return;
+          }
+
+          const client = window.supabase.createClient(
+            window.ENERGYAPP_SUPABASE_URL,
+            window.ENERGYAPP_SUPABASE_ANON_KEY
+          );
+
+          if (client) {
+            log('client-section', 'success', 'Supabase client created successfully!', {
+              hasFrom: !!client.from,
+              hasRPC: !!client.rpc,
+            });
+          } else {
+            log('client-section', 'error', 'Client creation returned null');
+          }
+        } catch (error) {
+          log('client-section', 'error', `Client creation error: ${error.message}`, {
+            error: error.toString(),
+          });
+        }
+      }, 2000);
+
+      // Test 5: Database Query
+      setTimeout(async () => {
+        try {
+          if (!window.supabase) {
+            log('database-section', 'error', 'Cannot query: SDK not loaded. Trying fetch fallback...', {
+              suggestion: 'Using direct REST API instead',
+            });
+
+            // Try direct REST API
+            const response = await fetch(`${window.ENERGYAPP_SUPABASE_URL}/rest/v1/projects`, {
+              method: 'GET',
+              headers: {
+                'apikey': window.ENERGYAPP_SUPABASE_ANON_KEY,
+                'Authorization': `Bearer ${window.ENERGYAPP_SUPABASE_ANON_KEY}`,
+                'Prefer': 'return=representation',
+              },
+            });
+
+            if (response.ok) {
+              const projects = await response.json();
+              log('database-section', 'success', `Successfully queried projects table via REST API!${projects.length === 0 ? ' (no projects found)' : ''}`, {
+                projectCount: projects.length,
+                example: projects.length > 0 ? projects[0] : null,
+              });
+            } else {
+              log('database-section', 'error', `Failed to query: ${response.status}`);
+            }
+            return;
+          }
+
+          const client = window.supabase.createClient(
+            window.ENERGYAPP_SUPABASE_URL,
+            window.ENERGYAPP_SUPABASE_ANON_KEY
+          );
+
+          const { data, error } = await client
+            .from('projects')
+            .select('*')
+            .limit(1);
+
+          if (error) {
+            log('database-section', 'error', `Query error: ${error.message}`, {
+              error,
+            });
+          } else {
+            log('database-section', 'success', `Successfully queried projects table!${data.length === 0 ? ' (no projects found)' : ''}`, {
+              projectCount: data.length,
+              example: data.length > 0 ? data[0] : null,
+            });
+          }
+        } catch (error) {
+          log('database-section', 'error', `Database test failed: ${error.message}`, {
+            error: error.toString(),
+          });
+        }
+      }, 2500);
+
+      // Additional debug info
+      console.log('[DIAGNOSTICS PAGE] Initial state:', {
+        hasSupabase: !!window.supabase,
+        hasURL: !!window.ENERGYAPP_SUPABASE_URL,
+        hasKey: !!window.ENERGYAPP_SUPABASE_ANON_KEY,
+      });
+    </script>
+  </body>
+</html>

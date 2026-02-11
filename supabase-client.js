@@ -1,4 +1,12 @@
 (() => {
+  // Debug script availability
+  console.log('[Supabase Client Init] Starting initialization', {
+    hasSupabase: !!window.supabase,
+    hasURL: !!window.ENERGYAPP_SUPABASE_URL,
+    hasKey: !!window.ENERGYAPP_SUPABASE_ANON_KEY,
+    supabaseVersion: window.supabase?.version || 'unknown',
+  });
+
   const LAST_PROJECT_STORAGE_KEY = "energyapp.lastOpenedProjectId";
   const MIGRATION_STORAGE_KEY = "energyapp.legacyMigration.v1";
   const LEGACY_KEYS = {
@@ -52,10 +60,30 @@
     const sdk = window.supabase;
     const url = window.ENERGYAPP_SUPABASE_URL;
     const anonKey = window.ENERGYAPP_SUPABASE_ANON_KEY;
+    
+    // Debug logging
     if (!sdk || !url || !anonKey) {
+      const missing = [];
+      if (!sdk) missing.push('window.supabase');
+      if (!url) missing.push('window.ENERGYAPP_SUPABASE_URL');
+      if (!anonKey) missing.push('window.ENERGYAPP_SUPABASE_ANON_KEY');
+      console.warn('[Supabase Client] Missing required credentials or SDK. Falling back to localStorage.', {
+        missing,
+        hasSDK: !!sdk,
+        hasURL: !!url,
+        hasKey: !!anonKey,
+      });
       return null;
     }
-    return sdk.createClient(url, anonKey);
+    
+    try {
+      const client = sdk.createClient(url, anonKey);
+      console.log('[Supabase Client] Successfully initialized Supabase client', { url });
+      return client;
+    } catch (error) {
+      console.error('[Supabase Client] Error creating Supabase client:', error);
+      return null;
+    }
   };
 
   const toProjectRow = (project) => ({
@@ -201,7 +229,11 @@
         return boundedRows.find(keyMatch) || row;
       }
 
-      console.warn('NREL cache payload exceeded localStorage quota; skipping local persistence for this payload.');
+      console.error('[Supabase Client] NREL cache payload exceeded localStorage quota; skipping local persistence for this payload. Weather data will not be cached.', {
+        payloadSize: JSON.stringify(payload.payload).length,
+        projectId: payload.projectId,
+        dataset: payload.dataset,
+      });
       return { ...row, persisted: false };
     },
   };
@@ -294,18 +326,92 @@
 
   const dataService = () => {
     const client = getClient();
-    return client ? supabaseDb(client) : localDb;
+    const service = client ? supabaseDb(client) : localDb;
+    const backend = client ? 'Supabase' : 'localStorage (fallback)';
+    console.debug('[EnergySupabaseService] Using persistence backend:', backend);
+    return service;
   };
 
-  const listProjects = async () => dataService().listProjects();
-  const createProject = async (payload) => dataService().createProject(payload);
-  const getProject = async (projectId) => dataService().getProject(projectId);
-  const updateProject = async (projectId, patch) => dataService().updateProject(projectId, patch);
-  const listAssets = async (projectId) => dataService().listAssets(projectId);
-  const upsertAsset = async (payload) => dataService().upsertAsset(payload);
-  const deleteAsset = async (assetId) => dataService().deleteAsset(assetId);
-  const getNrelCache = async (projectId, dataset, dateKey, options) => dataService().getNrelCache(projectId, dataset, dateKey, options);
-  const upsertNrelCache = async (payload) => dataService().upsertNrelCache(payload);
+  const listProjects = async () => {
+    try {
+      return await dataService().listProjects();
+    } catch (error) {
+      console.error('[EnergySupabaseService] Error listing projects:', error);
+      throw error;
+    }
+  };
+  
+  const createProject = async (payload) => {
+    try {
+      return await dataService().createProject(payload);
+    } catch (error) {
+      console.error('[EnergySupabaseService] Error creating project:', error);
+      throw error;
+    }
+  };
+  
+  const getProject = async (projectId) => {
+    try {
+      return await dataService().getProject(projectId);
+    } catch (error) {
+      console.error('[EnergySupabaseService] Error getting project:', error);
+      throw error;
+    }
+  };
+  
+  const updateProject = async (projectId, patch) => {
+    try {
+      return await dataService().updateProject(projectId, patch);
+    } catch (error) {
+      console.error('[EnergySupabaseService] Error updating project:', error);
+      throw error;
+    }
+  };
+  
+  const listAssets = async (projectId) => {
+    try {
+      return await dataService().listAssets(projectId);
+    } catch (error) {
+      console.error('[EnergySupabaseService] Error listing assets:', error);
+      throw error;
+    }
+  };
+  
+  const upsertAsset = async (payload) => {
+    try {
+      return await dataService().upsertAsset(payload);
+    } catch (error) {
+      console.error('[EnergySupabaseService] Error upserting asset:', error);
+      throw error;
+    }
+  };
+  
+  const deleteAsset = async (assetId) => {
+    try {
+      return await dataService().deleteAsset(assetId);
+    } catch (error) {
+      console.error('[EnergySupabaseService] Error deleting asset:', error);
+      throw error;
+    }
+  };
+  
+  const getNrelCache = async (projectId, dataset, dateKey, options) => {
+    try {
+      return await dataService().getNrelCache(projectId, dataset, dateKey, options);
+    } catch (error) {
+      console.error('[EnergySupabaseService] Error getting NREL cache:', error);
+      throw error;
+    }
+  };
+  
+  const upsertNrelCache = async (payload) => {
+    try {
+      return await dataService().upsertNrelCache(payload);
+    } catch (error) {
+      console.error('[EnergySupabaseService] Error upserting NREL cache:', error);
+      throw error;
+    }
+  };
 
   const setLastOpenedProjectId = (projectId) => {
     if (projectId) {
@@ -384,4 +490,27 @@
     setLastOpenedProjectId,
     migrateLegacyLocalData,
   };
+  
+  // Verify Supabase is working after all scripts load
+  if (typeof document !== 'undefined') {
+    document.addEventListener('DOMContentLoaded', () => {
+      setTimeout(() => {
+        console.log('[Supabase Client Verification] On DOMContentLoaded + 100ms:', {
+          hasSupabase: !!window.supabase,
+          hasURL: !!window.ENERGYAPP_SUPABASE_URL,
+          hasKey: !!window.ENERGYAPP_SUPABASE_ANON_KEY,
+        });
+        
+        if (!window.supabase) {
+          console.error('[ERROR] Supabase JS SDK failed to load from CDN. Check network tab for failures. Application will use localStorage fallback.');
+        }
+        if (!window.ENERGYAPP_SUPABASE_URL) {
+          console.error('[ERROR] Supabase URL not injected by server. Check server configuration.');
+        }
+        if (!window.ENERGYAPP_SUPABASE_ANON_KEY) {
+          console.error('[ERROR] Supabase ANON key not injected by server. Check server configuration.');
+        }
+      }, 100);
+    });
+  }
 })();

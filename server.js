@@ -162,6 +162,25 @@ const server = http.createServer((req, res) => {
     return;
   }
 
+  // Diagnostic endpoint to help debug Supabase integration
+  if (req.url === "/api/diagnostics") {
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({
+      timestamp: new Date().toISOString(),
+      supabase: {
+        url: SUPABASE_URL,
+        anonKeyPresent: !!SUPABASE_ANON_KEY,
+        anonKeyLength: SUPABASE_ANON_KEY?.length || 0,
+      },
+      server: {
+        nodeVersion: process.version,
+        env: process.env.NODE_ENV || 'development',
+      },
+      message: 'If supabase.url and anonKeyPresent are true, credentials should be injected into HTML. Check browser console for "[Supabase Client Init]" message.',
+    }, null, 2));
+    return;
+  }
+
   serveStatic(req, res);
 });
 
