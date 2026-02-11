@@ -728,14 +728,14 @@ const renderChart = (series, maxValues = {}) => {
   chartSvg.innerHTML = `
     <defs>
       <linearGradient id="solar-gradient" x1="0" x2="1" y1="0" y2="0">
-        <stop offset="0%" stop-color="#f7d97d" stop-opacity="0.1"></stop>
-        <stop offset="50%" stop-color="#f7d97d" stop-opacity="0.9"></stop>
-        <stop offset="100%" stop-color="#f7d97d" stop-opacity="0.1"></stop>
+        <stop offset="0%" stop-color="#f9a825" stop-opacity="0.2"></stop>
+        <stop offset="50%" stop-color="#f9a825" stop-opacity="0.8"></stop>
+        <stop offset="100%" stop-color="#f9a825" stop-opacity="0.2"></stop>
       </linearGradient>
       <linearGradient id="wind-gradient" x1="0" x2="1" y1="0" y2="0">
-        <stop offset="0%" stop-color="#53d1e8" stop-opacity="0.4"></stop>
-        <stop offset="50%" stop-color="#53d1e8" stop-opacity="0.9"></stop>
-        <stop offset="100%" stop-color="#53d1e8" stop-opacity="0.4"></stop>
+        <stop offset="0%" stop-color="#1f77b4" stop-opacity="0.3"></stop>
+        <stop offset="50%" stop-color="#1f77b4" stop-opacity="0.8"></stop>
+        <stop offset="100%" stop-color="#1f77b4" stop-opacity="0.3"></stop>
       </linearGradient>
     </defs>
     ${seriesVisibility.solar ? `<path d="${solarPath}" fill="url(#solar-gradient)"></path>` : ""}
