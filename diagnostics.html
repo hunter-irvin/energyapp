@@ -43,7 +43,7 @@
 
     <div class="section" id="credentials-section">
       <h2>1. Credentials Injection</h2>
-      <p>Checking if Supabase credentials are injected by the server...</p>
+      <p>Checking if Supabase credentials are available from any runtime source...</p>
       <pre id="credentials-output">Loading...</pre>
     </div>
 
@@ -72,6 +72,7 @@
     </div>
 
     <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+    <script src="supabase-config.js"></script>
     <script>
       const log = (sectionId, status, message, details = null) => {
         const section = document.getElementById(sectionId);

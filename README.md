@@ -136,13 +136,20 @@ Define these globals before `supabase-client.js` loads (for example in a script 
 - `window.ENERGYAPP_SUPABASE_URL`
 - `window.ENERGYAPP_SUPABASE_ANON_KEY`
 
-If either value is missing, the app falls back to local browser persistence.
+Runtime resolution order:
+
+1. `window.ENERGYAPP_SUPABASE_URL` + `window.ENERGYAPP_SUPABASE_ANON_KEY`
+2. `window.ENERGYAPP_SUPABASE_CONFIG` (or `supabase-config.js` defaults)
+3. `GET /api/runtime-config` (when served by `server.js`)
+
+If no source provides both values, the app falls back to local browser persistence.
 
 #### Where keys are read in code
 
 - Supabase client bootstrapping reads `window.ENERGYAPP_SUPABASE_URL` and `window.ENERGYAPP_SUPABASE_ANON_KEY` in `getClient()`.
 - The resulting client powers `projects`, `assets`, and `nrel_cache` CRUD in `supabaseDb(...)`.
-- Server-side `/api/nrel-proxy` currently does not read Supabase credentials; it only proxies NREL weather requests.
+- Server-side `/api/runtime-config` returns frontend Supabase credentials for runtime fallback initialization.
+- Server-side `/api/nrel-proxy` proxies NREL weather requests.
 
 ### Database setup
 

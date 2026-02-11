@@ -23,6 +23,7 @@ const mimeTypes = {
   ".html": "text/html; charset=utf-8",
   ".css": "text/css; charset=utf-8",
   ".js": "application/javascript; charset=utf-8",
+  ".json": "application/json; charset=utf-8",
   ".png": "image/png",
   ".jpg": "image/jpeg",
   ".svg": "image/svg+xml",
@@ -37,10 +38,21 @@ const sendJsonError = (res, status, message) => {
 };
 
 const serveStatic = (req, res) => {
-  const requestPath = req.url === "/" ? "/index.html" : req.url;
-  const filePath = path.join(__dirname, requestPath);
+  let pathname = "/";
+  try {
+    const parsedUrl = new URL(req.url, `http://${req.headers.host || "localhost"}`);
+    pathname = decodeURIComponent(parsedUrl.pathname || "/");
+  } catch (error) {
+    sendJsonError(res, 400, "Invalid request URL.");
+    return;
+  }
 
-  if (!filePath.startsWith(__dirname)) {
+  const requestPath = pathname === "/" ? "/index.html" : pathname;
+  const relativePath = requestPath.replace(/^\/+/, "");
+  const rootDir = path.resolve(__dirname);
+  const filePath = path.resolve(rootDir, relativePath);
+
+  if (!filePath.startsWith(rootDir + path.sep) && filePath !== rootDir) {
     sendJsonError(res, 403, "Forbidden.");
     return;
   }
@@ -51,7 +63,7 @@ const serveStatic = (req, res) => {
       return;
     }
 
-    const ext = path.extname(filePath);
+    const ext = path.extname(filePath).toLowerCase();
     if (ext === ".html") {
       // Inject Supabase credentials into HTML as early as possible (in head)
       let html = data.toString();
@@ -167,6 +179,21 @@ const handleProxy = async (req, res) => {
 const server = http.createServer((req, res) => {
   if (req.url.startsWith("/api/nrel-proxy")) {
     handleProxy(req, res);
+    return;
+  }
+
+  if (req.url === "/api/runtime-config") {
+    res.writeHead(200, {
+      "Content-Type": "application/json; charset=utf-8",
+      "Cache-Control": "no-store",
+      "Access-Control-Allow-Origin": "*",
+    });
+    res.end(
+      JSON.stringify({
+        supabaseUrl: SUPABASE_URL,
+        supabaseAnonKey: SUPABASE_ANON_KEY,
+      })
+    );
     return;
   }
 
