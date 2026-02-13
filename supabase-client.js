@@ -509,19 +509,19 @@
     return service;
   };
 
-  const listProjects = async () => dataService().listProjects();
-  const createProject = async (payload) => dataService().createProject(payload);
-  const getProject = async (projectId) => dataService().getProject(projectId);
-  const updateProject = async (projectId, patch) => dataService().updateProject(projectId, patch);
-  const listAssets = async (projectId) => dataService().listAssets(projectId);
-  const upsertAsset = async (payload) => dataService().upsertAsset(payload);
-  const deleteAsset = async (assetId) => dataService().deleteAsset(assetId);
+  const listProjects = async () => (await dataService()).listProjects();
+  const createProject = async (payload) => (await dataService()).createProject(payload);
+  const getProject = async (projectId) => (await dataService()).getProject(projectId);
+  const updateProject = async (projectId, patch) => (await dataService()).updateProject(projectId, patch);
+  const listAssets = async (projectId) => (await dataService()).listAssets(projectId);
+  const upsertAsset = async (payload) => (await dataService()).upsertAsset(payload);
+  const deleteAsset = async (assetId) => (await dataService()).deleteAsset(assetId);
   const getWeatherCache = async (projectId, provider, dataset, dateKey, options) =>
-    dataService().getWeatherCache(projectId, provider, dataset, dateKey, options);
-  const upsertWeatherCache = async (payload) => dataService().upsertWeatherCache(payload);
+    (await dataService()).getWeatherCache(projectId, provider, dataset, dateKey, options);
+  const upsertWeatherCache = async (payload) => (await dataService()).upsertWeatherCache(payload);
   const getNrelCache = async (projectId, dataset, dateKey, options) =>
-    dataService().getNrelCache(projectId, dataset, dateKey, options);
-  const upsertNrelCache = async (payload) => dataService().upsertNrelCache(payload);
+    (await dataService()).getNrelCache(projectId, dataset, dateKey, options);
+  const upsertNrelCache = async (payload) => (await dataService()).upsertNrelCache(payload);
 
   const setLastOpenedProjectId = (projectId) => {
     if (projectId) {

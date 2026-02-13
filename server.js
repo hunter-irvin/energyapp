@@ -19,6 +19,9 @@ const WIND_ENDPOINT =
 const OPEN_METEO_FORECAST_ENDPOINT = "https://api.open-meteo.com/v1/forecast";
 const OPEN_METEO_HISTORY_ENDPOINT = "https://historical-forecast-api.open-meteo.com/v1/forecast";
 const ALLOW_INSECURE_OPEN_METEO_TLS = process.env.ENERGYAPP_ALLOW_INSECURE_OPEN_METEO_TLS === "1";
+const SUPABASE_URL = process.env.ENERGYAPP_SUPABASE_URL || process.env.SUPABASE_URL || "";
+const SUPABASE_ANON_KEY =
+  process.env.ENERGYAPP_SUPABASE_ANON_KEY || process.env.SUPABASE_ANON_KEY || "";
 
 const nrelCsvCache = new Map();
 const weatherJsonCache = new Map();
@@ -53,10 +56,6 @@ const sendJson = (res, status, payload, extraHeaders = {}) => {
 const serveStatic = (req, res) => {
   const requestUrl = new URL(req.url, `http://${req.headers.host}`);
   const pathname = decodeURIComponent(requestUrl.pathname);
-  const requestPath = pathname === "/" ? "/index.html" : pathname;
-  const safePath = path.normalize(requestPath).replace(/^(\.\.(\/|\\|$))+/, "");
-  const filePath = path.join(__dirname, safePath);
-
   const requestPath = pathname === "/" ? "/index.html" : pathname;
   const relativePath = requestPath.replace(/^\/+/, "");
   const rootDir = path.resolve(__dirname);
