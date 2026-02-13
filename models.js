@@ -5,9 +5,6 @@
    * @property {number} capacity_ac_kw
    * @property {number} dc_ac_ratio
    * @property {number} capacity_dc_kw
-   * @property {"fixed"|"single_axis_tracker"} mount_type
-   * @property {number} tilt_deg
-   * @property {number} azimuth_deg
    * @property {number} system_losses_frac
    * @property {number} availability_frac
    * @property {boolean} clip_at_ac_capacity
@@ -72,9 +69,6 @@
     name: "Solar 1",
     capacity_ac_kw: 500,
     dc_ac_ratio: 1.2,
-    mount_type: "fixed",
-    tilt_deg: 20,
-    azimuth_deg: 180,
     system_losses_frac: 0.14,
     availability_frac: 0.99,
     clip_at_ac_capacity: true,

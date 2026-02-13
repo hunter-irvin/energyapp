@@ -1,15 +1,16 @@
 (() => {
-  const POINTS_PER_DAY = 96;
-  const PROXY_ENDPOINT = "/api/nrel-proxy";
+  const WEATHER_PROXY_ENDPOINT = "/api/weather-proxy";
   const DEFAULT_DATE_KEY = "2014-02-09";
-  const NREL_CACHE_DATE_KEY = "all";
-  const NREL_SOURCE_YEAR = 2014;
-  const NREL_INTERVAL_MINUTES = 15;
-  const NREL_CACHE_TTL_MS = 1000 * 60 * 60 * 24;
+  const WEATHER_CACHE_DATE_KEY = "all";
+  const WEATHER_INTERVAL_MINUTES = 30;
+  const POINTS_PER_DAY = (24 * 60) / WEATHER_INTERVAL_MINUTES;
+  const WEATHER_CACHE_TTL_MS = 1000 * 60 * 60 * 24;
+  const WEATHER_PROVIDERS = {
+    nrel: "NREL",
+    open_meteo: "Open-Meteo",
+  };
   const supabaseService = window.EnergySupabaseService;
 
-  const facilityNameEl = document.querySelector("[data-facility-name]");
-  const facilityLocationEl = document.querySelector("[data-facility-location]");
   const solarList = document.getElementById("solar-assets");
   const windList = document.getElementById("wind-assets");
   const addSolarButton = document.getElementById("add-solar");
@@ -18,17 +19,22 @@
   const windTemplate = document.getElementById("wind-asset-template");
   const deleteModal = document.getElementById("delete-asset-modal");
   const confirmDeleteButton = document.getElementById("confirm-delete-asset");
-  const mapContainer = document.getElementById("assets-map");
   const generationChart = document.getElementById("generation-chart");
   const generationAxis = document.getElementById("generation-axis");
   const generationChartFrame = document.getElementById("assets-chart-frame");
   const generationTooltip = document.getElementById("generation-tooltip");
+  const generationDonut = document.getElementById("generation-donut");
+  const generationTotalEnergy = document.getElementById("generation-total-energy");
+  const periodButtons = Array.from(document.querySelectorAll("[data-assets-period]"));
   const assetsDatePickerButton = document.getElementById("assets-date-picker-button");
   const assetsDatePickerInput = document.getElementById("assets-date-picker");
-  const assetsRefreshWeatherButton = document.getElementById("assets-refresh-weather");
+  const assetsDateRangeReadout = document.getElementById("assets-date-range-readout");
+  const assetsShiftBackButton = document.getElementById("assets-shift-back");
+  const assetsShiftForwardButton = document.getElementById("assets-shift-forward");
   const generationDebugOutput = document.getElementById("generation-debug-output");
-  const projectNameEl = document.getElementById("assets-project-name");
-  const backToFacilityLink = document.getElementById("back-to-facility");
+  const headerProjectNameInput = document.getElementById("header-project-name");
+  const headerSettingsLink = document.getElementById("header-settings-link");
+  const assetFieldTooltip = document.getElementById("asset-field-tooltip");
 
   const queryParams = new URLSearchParams(window.location.search);
   const selectedProjectId = queryParams.get("projectId");
@@ -36,6 +42,7 @@
 
   let currentProject = null;
   let selectedDateKey = DEFAULT_DATE_KEY;
+  const viewState = { period: "week" };
 
   const solarDefaults = window.EnergyModels?.DEFAULT_SOLAR_ASSET || {};
   const windDefaults = window.EnergyModels?.DEFAULT_WIND_ASSET || {};
@@ -56,12 +63,16 @@
   const windAssets = [];
 
   const chartState = {
-    solarKw: new Float64Array(POINTS_PER_DAY),
-    windKw: new Float64Array(POINTS_PER_DAY),
-    totalKw: new Float64Array(POINTS_PER_DAY),
+    labels: [],
+    solar: [],
+    wind: [],
+    total: [],
+    unit: "kWh",
+    period: "day",
   };
 
   const weatherDay = {
+    provider: "nrel",
     loading: false,
     loaded: false,
     error: "",
@@ -72,6 +83,11 @@
     matchedWindRows: 0,
     firstMatchedTimestamp: null,
     lastMatchedTimestamp: null,
+    allSolar: [],
+    allWind: [],
+    windSpeedKey: "windspeed_100m",
+    windTemperatureKey: null,
+    windPressureKey: null,
   };
 
   const pad2 = (value) => String(value).padStart(2, "0");
@@ -119,6 +135,252 @@
 
   const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
+  const ASSET_FIELD_HELP = {
+    solar: {
+      capacity_ac_kw: {
+        definition: "AC nameplate capacity that caps inverter-side output and scales total solar energy.",
+        tokens: ["C_AC"],
+      },
+      dc_ac_ratio: {
+        definition: "Ratio used to oversize DC array relative to inverter AC capacity in the energy model.",
+        tokens: ["R_DCAC"],
+      },
+      system_losses_frac: {
+        definition:
+          "Fractional all-in derate applied before inverter clipping and interval energy output, including orientation mismatch and other aggregate losses.",
+        tokens: ["L_SYS"],
+      },
+      availability_frac: {
+        definition: "Fraction of time the asset is available to operate, applied directly to interval energy.",
+        tokens: ["A_AVAIL"],
+      },
+      clip_at_ac_capacity: {
+        definition: "When enabled, interval energy uses inverter clipping at AC capacity instead of unconstrained AC output.",
+        tokens: ["CLIP", "C_AC"],
+      },
+      noct_c: {
+        definition: "Nominal operating cell temperature parameter used to estimate cell temperature from weather.",
+        tokens: ["NOCT", "T_CELL"],
+      },
+      temp_coeff_per_c: {
+        definition: "Temperature coefficient that adjusts DC production as cell temperature deviates from 25 degrees C.",
+        tokens: ["GAMMA", "T_CELL"],
+      },
+    },
+    wind: {
+      rated_power_kw: {
+        definition: "Per-turbine nameplate power used as the top scale for converting curve fraction into interval energy.",
+        tokens: ["P_RATED"],
+      },
+      num_turbines: {
+        definition: "Turbine count multiplier applied to wind energy after per-turbine power is estimated.",
+        tokens: ["N_TURB"],
+      },
+      hub_height_m: {
+        definition: "Hub height used to select or extrapolate wind speed to turbine operating elevation.",
+        tokens: ["H_HUB", "V_HUB"],
+      },
+      power_curve_id: {
+        definition: "Lookup ID for the turbine power curve function f(v) used to map effective wind speed to output fraction.",
+        tokens: ["F_V"],
+      },
+      cut_in_mps: {
+        definition: "Minimum effective wind speed where turbine output starts; below this threshold interval energy is zero.",
+        tokens: ["V_IN"],
+      },
+      rated_mps: {
+        definition: "Wind speed near full rated output on the selected power curve.",
+        tokens: ["F_V"],
+      },
+      cut_out_mps: {
+        definition: "Safety cutoff speed where turbine output is forced to zero at and above this threshold.",
+        tokens: ["V_OUT"],
+      },
+      availability_frac: {
+        definition: "Operational availability fraction applied to wind interval energy after losses.",
+        tokens: ["A_AVAIL"],
+      },
+      wake_losses_frac: {
+        definition: "Farm-level wake loss fraction reducing aerodynamic energy capture.",
+        tokens: ["L_WAKE"],
+      },
+      electrical_losses_frac: {
+        definition: "Electrical and collection system loss fraction applied to turbine output.",
+        tokens: ["L_ELEC"],
+      },
+      density_correction_enabled: {
+        definition: "Enables air-density correction to convert hub wind speed into effective speed for power-curve use.",
+        tokens: ["V_EFF", "RHO", "RHO0"],
+      },
+      air_density_std: {
+        definition: "Reference standard air density used as baseline in density-correction scaling.",
+        tokens: ["RHO0"],
+      },
+      shear_exponent_alpha: {
+        definition: "Shear exponent used in the power-law relation from reference-height wind speed to hub height.",
+        tokens: ["ALPHA"],
+      },
+      reference_height_m: {
+        definition: "Reference height for shear extrapolation when an exact hub-height wind-speed column is unavailable.",
+        tokens: ["H_REF"],
+      },
+    },
+  };
+
+  const buildFormulaVariable = (token, highlightSet, label = token) => {
+    const highlighted = highlightSet.has(token) ? " is-highlighted" : "";
+    return `<span class="asset-help__var${highlighted}">${label}</span>`;
+  };
+
+  const buildSolarBasicEnergyFormula = (highlightSet) => {
+    const v = (token, label = token) => buildFormulaVariable(token, highlightSet, label);
+    return [
+      `<span class="asset-field-tooltip__line">${v("E_SOLAR", "E")}<sub>solar,&Delta;t</sub> = ${v("C_AC", "C")}<sub>AC</sub> * (${v("GHI")} / 1000) * (1 - ${v("L_SYS")} ) * ${v("DELTA_T", "&Delta;t")}</span>`,
+    ].join("");
+  };
+
+  const buildSolarAdvancedEnergyFormula = (highlightSet) => {
+    const v = (token, label = token) => buildFormulaVariable(token, highlightSet, label);
+    return [
+      `<span class="asset-field-tooltip__line">${v("E_SOLAR", "E")}<sub>solar,&Delta;t</sub> = ${v("CLIP", "clip")}(${v("P_DCSTC", "P")}<sub>DC,STC</sub> * (${v("GHI")} / 1000) * (1 + ${v("GAMMA", "&gamma;")} * (${v("T_CELL", "T")}<sub>cell</sub> - 25)) * (1 - ${v("L_SYS")} ), ${v("C_AC", "C")}<sub>AC</sub>) * ${v("A_AVAIL", "A")}<sub>avail</sub> * ${v("DELTA_T", "&Delta;t")}</span>`,
+      `<span class="asset-field-tooltip__line">${v("P_DCSTC", "P")}<sub>DC,STC</sub> = ${v("C_AC", "C")}<sub>AC</sub> * ${v("R_DCAC", "R")}<sub>DC/AC</sub></span>`,
+      `<span class="asset-field-tooltip__line">${v("T_CELL", "T")}<sub>cell</sub> = ${v("T_AIR", "T")}<sub>air</sub> + ((${v("NOCT")} - 20) / 800) * ${v("GHI")}</span>`,
+    ].join("");
+  };
+
+  const buildWindBasicEnergyFormula = (highlightSet) => {
+    const v = (token, label = token) => buildFormulaVariable(token, highlightSet, label);
+    return [
+      `<span class="asset-field-tooltip__line">${v("E_WIND", "E")}<sub>wind,&Delta;t</sub> = ${v("P_RATED", "P")}<sub>rated</sub> * ${v("N_TURB", "N")}<sub>turb</sub> * ${v("F_V", "f")}(${v("V_HUB", "v")}<sub>hub</sub>) * ${v("DELTA_T", "&Delta;t")}</span>`,
+      `<span class="asset-field-tooltip__line">${v("V_HUB", "v")}<sub>hub</sub> = ${v("V_REF", "v")}<sub>ref</sub> * (${v("H_HUB", "H")}<sub>hub</sub> / ${v("H_REF", "H")}<sub>ref</sub>)<sup>${v("ALPHA", "&alpha;")}</sup></span>`,
+    ].join("");
+  };
+
+  const buildWindAdvancedEnergyFormula = (highlightSet) => {
+    const v = (token, label = token) => buildFormulaVariable(token, highlightSet, label);
+    return [
+      `<span class="asset-field-tooltip__line">${v("E_WIND", "E")}<sub>wind,&Delta;t</sub> = ${v("P_RATED", "P")}<sub>rated</sub> * ${v("N_TURB", "N")}<sub>turb</sub> * ${v("F_V", "f")}(${v("V_EFF", "v")}<sub>eff</sub>) * (1 - ${v("L_WAKE")} ) * (1 - ${v("L_ELEC")} ) * ${v("A_AVAIL", "A")}<sub>avail</sub> * ${v("DELTA_T", "&Delta;t")}</span>`,
+      `<span class="asset-field-tooltip__line">${v("V_HUB", "v")}<sub>hub</sub> = ${v("V_REF", "v")}<sub>ref</sub> * (${v("H_HUB", "H")}<sub>hub</sub> / ${v("H_REF", "H")}<sub>ref</sub>)<sup>${v("ALPHA", "&alpha;")}</sup></span>`,
+      `<span class="asset-field-tooltip__line">${v("V_EFF", "v")}<sub>eff</sub> = ${v("V_HUB", "v")}<sub>hub</sub> * (${v("RHO", "&rho;")} / ${v("RHO0", "&rho;")}<sub>0</sub>)<sup>1/3</sup>; ${v("F_V", "f")}(${v("V_EFF", "v")}<sub>eff</sub>) = 0 if ${v("V_EFF", "v")}<sub>eff</sub> &lt; ${v("V_IN")} or ${v("V_EFF", "v")}<sub>eff</sub> &ge; ${v("V_OUT")}</span>`,
+    ].join("");
+  };
+
+  const getAssetFieldLabelText = (labelElement) => {
+    const clone = labelElement.cloneNode(true);
+    clone.querySelectorAll(".assets-optional").forEach((node) => node.remove());
+    return clone.textContent?.trim() || "Variable";
+  };
+
+  const positionAssetFieldTooltipAt = (clientX, clientY) => {
+    if (!assetFieldTooltip) {
+      return;
+    }
+    const tooltipRect = assetFieldTooltip.getBoundingClientRect();
+    const offset = 16;
+    let left = clientX + offset;
+    let top = clientY + offset;
+
+    if (left + tooltipRect.width > window.innerWidth - 8) {
+      left = clientX - tooltipRect.width - offset;
+    }
+    if (left < 8) {
+      left = 8;
+    }
+    if (top < 8) {
+      top = 8;
+    }
+    if (top + tooltipRect.height > window.innerHeight - 8) {
+      top = window.innerHeight - tooltipRect.height - 8;
+    }
+
+    assetFieldTooltip.style.left = `${Math.round(left)}px`;
+    assetFieldTooltip.style.top = `${Math.round(top)}px`;
+  };
+
+  const positionAssetFieldTooltip = (anchor) => {
+    if (!anchor) {
+      return;
+    }
+    const rect = anchor.getBoundingClientRect();
+    positionAssetFieldTooltipAt(rect.right, rect.top + rect.height / 2);
+  };
+
+  const showAssetFieldTooltip = (anchor, labelText, type, fieldKey, mouseEvent = null) => {
+    if (!assetFieldTooltip) {
+      return;
+    }
+    const help = ASSET_FIELD_HELP[type]?.[fieldKey];
+    if (!help) {
+      assetFieldTooltip.hidden = true;
+      return;
+    }
+    const card = anchor?.closest?.(".asset-card");
+    const advancedSection = card?.querySelector?.(".asset-section--advanced");
+    const isAdvancedOpen = Boolean(advancedSection && !advancedSection.classList.contains("is-collapsed"));
+    const highlightSet = new Set(help.tokens || []);
+    const formulaHtml =
+      type === "solar"
+        ? isAdvancedOpen
+          ? buildSolarAdvancedEnergyFormula(highlightSet)
+          : buildSolarBasicEnergyFormula(highlightSet)
+        : isAdvancedOpen
+          ? buildWindAdvancedEnergyFormula(highlightSet)
+          : buildWindBasicEnergyFormula(highlightSet);
+    assetFieldTooltip.innerHTML = `
+      <p class="asset-field-tooltip__title">${labelText}</p>
+      <p class="asset-field-tooltip__definition">${help.definition}</p>
+      <p class="asset-field-tooltip__formula">${formulaHtml}</p>
+    `;
+    assetFieldTooltip.hidden = false;
+    if (mouseEvent && Number.isFinite(mouseEvent.clientX) && Number.isFinite(mouseEvent.clientY)) {
+      positionAssetFieldTooltipAt(mouseEvent.clientX, mouseEvent.clientY);
+    } else {
+      positionAssetFieldTooltip(anchor);
+    }
+  };
+
+  const hideAssetFieldTooltip = () => {
+    if (assetFieldTooltip) {
+      assetFieldTooltip.hidden = true;
+    }
+  };
+
+  const wireFieldHelp = (card, type) => {
+    const sectionBodies = card.querySelectorAll(".assets-fields");
+    sectionBodies.forEach((body) => {
+      body.querySelectorAll(".assets-label").forEach((labelElement) => {
+        const fieldElement = labelElement.nextElementSibling;
+        if (!(fieldElement instanceof HTMLInputElement || fieldElement instanceof HTMLSelectElement)) {
+          return;
+        }
+        const datasetKey = type === "solar" ? "solarField" : "windField";
+        const fieldKey = fieldElement.dataset[datasetKey];
+        if (!fieldKey) {
+          return;
+        }
+        const labelText = getAssetFieldLabelText(labelElement);
+        const openTooltip = (eventTarget, event = null) =>
+          showAssetFieldTooltip(eventTarget, labelText, type, fieldKey, event);
+        const followCursor = (event) => {
+          if (!assetFieldTooltip || assetFieldTooltip.hidden) {
+            return;
+          }
+          positionAssetFieldTooltipAt(event.clientX, event.clientY);
+        };
+        labelElement.addEventListener("mouseenter", (event) => openTooltip(labelElement, event));
+        fieldElement.addEventListener("mouseenter", (event) => openTooltip(fieldElement, event));
+        labelElement.addEventListener("mousemove", followCursor);
+        fieldElement.addEventListener("mousemove", followCursor);
+        labelElement.addEventListener("focusin", () => openTooltip(labelElement));
+        fieldElement.addEventListener("focus", () => openTooltip(fieldElement));
+        labelElement.addEventListener("mouseleave", hideAssetFieldTooltip);
+        fieldElement.addEventListener("mouseleave", hideAssetFieldTooltip);
+        labelElement.addEventListener("focusout", hideAssetFieldTooltip);
+        fieldElement.addEventListener("blur", hideAssetFieldTooltip);
+      });
+    });
+  };
+
   const withRetry = async (operation, { retries = 2, delayMs = 400 } = {}) => {
     let lastError = null;
     for (let attempt = 0; attempt <= retries; attempt += 1) {
@@ -141,13 +403,77 @@
     generationDebugOutput.style.color = isError ? "#ffb4b4" : "";
   };
 
-  const formatKw = (value) => `${Number(value || 0).toFixed(2)} kW`;
-
   const formatHourLabel = (index) => {
-    const totalMinutes = index * 15;
+    const totalMinutes = index * WEATHER_INTERVAL_MINUTES;
     const hour = Math.floor(totalMinutes / 60);
     const minute = totalMinutes % 60;
     return `${pad2(hour)}:${pad2(minute)}`;
+  };
+
+  const formatDateKey = (date) =>
+    `${date.getFullYear()}-${pad2(date.getMonth() + 1)}-${pad2(date.getDate())}`;
+
+  const parseDateKey = (dateKey) => {
+    const [year, month, day] = String(dateKey || "").split("-").map(Number);
+    if (![year, month, day].every(Number.isFinite)) {
+      return null;
+    }
+    return new Date(year, month - 1, day);
+  };
+
+  const formatShortDate = (date) => {
+    const yy = String(date.getFullYear()).slice(-2);
+    return `${date.getMonth() + 1}/${date.getDate()}/${yy}`;
+  };
+
+  const getDateRangeForPeriod = (period, selectedDate) => {
+    const start = new Date(selectedDate);
+    start.setHours(0, 0, 0, 0);
+    const end = new Date(start);
+    if (period === "week") {
+      const weekStart = getWeekStart(start);
+      weekStart.setHours(0, 0, 0, 0);
+      const weekEnd = new Date(weekStart);
+      weekEnd.setDate(weekEnd.getDate() + 6);
+      return { start: weekStart, end: weekEnd };
+    }
+    if (period === "month") {
+      const monthStart = new Date(start.getFullYear(), start.getMonth(), 1);
+      const monthEnd = new Date(start.getFullYear(), start.getMonth() + 1, 0);
+      return { start: monthStart, end: monthEnd };
+    }
+    if (period === "year") {
+      const yearStart = new Date(start.getFullYear(), 0, 1);
+      const yearEnd = new Date(start.getFullYear(), 11, 31);
+      return { start: yearStart, end: yearEnd };
+    }
+    return { start, end };
+  };
+
+  const updateDateRangeReadout = () => {
+    if (!assetsDateRangeReadout) {
+      return;
+    }
+    const selectedDate = parseDateKey(selectedDateKey) || new Date();
+    const { start, end } = getDateRangeForPeriod(viewState.period, selectedDate);
+    const startText = formatShortDate(start);
+    const endText = formatShortDate(end);
+    assetsDateRangeReadout.textContent = startText === endText ? startText : `${startText}-${endText}`;
+  };
+
+  const buildRecordDateKey = (record) =>
+    `${record.year}-${pad2(record.month)}-${pad2(record.day)}`;
+
+  const buildRecordMinuteKey = (record) =>
+    `${buildRecordDateKey(record)}T${pad2(record.hour)}:${pad2(record.minute)}`;
+
+  const getWeekStart = (date) => {
+    const start = new Date(date);
+    const day = start.getDay();
+    const diff = (day + 6) % 7;
+    start.setDate(start.getDate() - diff);
+    start.setHours(0, 0, 0, 0);
+    return start;
   };
 
   const buildGridLines = (maxValue, width, height, tickCount = 4) => {
@@ -160,16 +486,62 @@
     const lines = ticks
       .map(
         ({ y }) =>
-          `<line x1="0" y1="${y.toFixed(2)}" x2="${width}" y2="${y.toFixed(2)}" stroke="rgba(200, 200, 200, 0.35)" stroke-width="1" />`
+          `<line x1="0" y1="${y.toFixed(2)}" x2="${width}" y2="${y.toFixed(2)}" stroke="rgba(110, 110, 110, 0.55)" stroke-width="1.2" />`
       )
       .join("");
     const labels = ticks
       .map(({ value, y }) => {
         const rounded = value >= 100 ? Math.round(value) : Number(value.toFixed(1));
-        return `<text x="8" y="${Math.max(12, y - 4).toFixed(2)}" fill="#666666" font-size="11">${rounded}</text>`;
+        return `<text x="8" y="${Math.max(12, y - 4).toFixed(2)}" fill="#2d2d2d" font-size="12" font-weight="600">${rounded}</text>`;
       })
       .join("");
     return { lines, labels };
+  };
+
+  const renderDonut = (solarEnergyKwh = 0, windEnergyKwh = 0, label = "Day Total") => {
+    if (!generationDonut || !generationTotalEnergy) {
+      return;
+    }
+    const total = Math.max(0, solarEnergyKwh) + Math.max(0, windEnergyKwh);
+    generationTotalEnergy.textContent = `${total.toFixed(2)} kWh`;
+
+    const cx = 110;
+    const cy = 110;
+    const r = 78;
+    const strokeWidth = 32;
+    const circumference = 2 * Math.PI * r;
+    const solarRatio = total > 0 ? solarEnergyKwh / total : 0;
+    const solarLen = circumference * solarRatio;
+    const windLen = Math.max(circumference - solarLen, 0);
+
+    generationDonut.innerHTML = `
+      <circle cx="${cx}" cy="${cy}" r="${r}" fill="none" stroke="#ececec" stroke-width="${strokeWidth}" />
+      <circle
+        cx="${cx}"
+        cy="${cy}"
+        r="${r}"
+        fill="none"
+        stroke="#1f77b4"
+        stroke-width="${strokeWidth}"
+        stroke-dasharray="${windLen} ${circumference}"
+        stroke-dashoffset="0"
+        transform="rotate(-90 ${cx} ${cy})"
+      />
+      <circle
+        cx="${cx}"
+        cy="${cy}"
+        r="${r}"
+        fill="none"
+        stroke="#f9a825"
+        stroke-width="${strokeWidth}"
+        stroke-dasharray="${solarLen} ${circumference}"
+        stroke-dashoffset="${-windLen}"
+        transform="rotate(-90 ${cx} ${cy})"
+      />
+      <circle cx="${cx}" cy="${cy}" r="${r - strokeWidth / 2}" fill="#ffffff" />
+      <text x="${cx}" y="${cy - 2}" text-anchor="middle" font-size="12" fill="#666666">${label}</text>
+      <text x="${cx}" y="${cy + 18}" text-anchor="middle" font-size="20" font-weight="700" fill="#000000">${total.toFixed(1)}</text>
+    `;
   };
 
   const hideTooltip = () => {
@@ -179,23 +551,26 @@
   };
 
   const updateTooltip = (event) => {
-    if (!generationChartFrame || !generationTooltip || !chartState.totalKw) {
+    if (!generationChartFrame || !generationTooltip || !chartState.total.length) {
       return;
     }
     const rect = generationChartFrame.getBoundingClientRect();
     const x = event.clientX - rect.left;
     const clampedX = Math.max(0, Math.min(rect.width, x));
     const ratio = rect.width > 0 ? clampedX / rect.width : 0;
-    const index = Math.max(0, Math.min(POINTS_PER_DAY - 1, Math.round(ratio * (POINTS_PER_DAY - 1))));
-    const solarValue = chartState.solarKw[index] || 0;
-    const windValue = chartState.windKw[index] || 0;
-    const totalValue = chartState.totalKw[index] || 0;
+    const pointCount = chartState.total.length;
+    const index = Math.max(0, Math.min(pointCount - 1, Math.round(ratio * (pointCount - 1))));
+    const solarValue = chartState.solar[index] || 0;
+    const windValue = chartState.wind[index] || 0;
+    const totalValue = chartState.total[index] || 0;
+    const label = chartState.labels[index] || "";
+    const unit = getSeriesUnitLabel(chartState.period);
 
     generationTooltip.innerHTML = `
-      <div class="generation-tooltip__time">${formatHourLabel(index)}</div>
-      <div>Solar: ${formatKw(solarValue)}</div>
-      <div>Wind: ${formatKw(windValue)}</div>
-      <div>Total: ${formatKw(totalValue)}</div>
+      <div class="generation-tooltip__time">${label}</div>
+      <div>Solar: ${solarValue.toFixed(2)} ${unit}</div>
+      <div>Wind: ${windValue.toFixed(2)} ${unit}</div>
+      <div>Total: ${totalValue.toFixed(2)} ${unit}</div>
     `;
 
     const offset = 14;
@@ -507,8 +882,8 @@
 
     const points = [];
     for (let i = 0; i < POINTS_PER_DAY; i += 1) {
-      const hour = Math.floor((i * 15) / 60);
-      const minute = (i * 15) % 60;
+      const hour = Math.floor((i * WEATHER_INTERVAL_MINUTES) / 60);
+      const minute = (i * WEATHER_INTERVAL_MINUTES) % 60;
       const key = hour * 60 + minute;
       points.push(mapFn(byMinute.get(key), `${dateKey}T${pad2(hour)}:${pad2(minute)}:00`));
     }
@@ -525,6 +900,7 @@
   };
 
   const setNoWeatherLoaded = () => {
+    weatherDay.provider = currentProject?.weatherProvider || "nrel";
     weatherDay.loaded = false;
     weatherDay.loading = false;
     weatherDay.error = "";
@@ -542,72 +918,83 @@
       return false;
     }
     const fetchedAt = new Date(cacheRow.fetched_at).getTime();
-    return Number.isFinite(fetchedAt) && Date.now() - fetchedAt <= NREL_CACHE_TTL_MS;
+    return Number.isFinite(fetchedAt) && Date.now() - fetchedAt <= WEATHER_CACHE_TTL_MS;
   };
+
+  const getProviderLabel = (provider) => WEATHER_PROVIDERS[provider] || provider;
 
   const loadPersistedOrRemoteWeather = async ({ forceRefresh = false } = {}) => {
     if (currentProject?.lat == null || currentProject?.lng == null) {
       throw new Error("Project location is required to load weather data.");
     }
 
+    const provider = currentProject.weatherProvider || "nrel";
+    const sourceYear = provider === "nrel" ? 2014 : null;
     const wkt = `POINT(${currentProject.lng} ${currentProject.lat})`;
-    const cacheLookup = { sourceYear: NREL_SOURCE_YEAR, intervalMinutes: NREL_INTERVAL_MINUTES };
+    const cacheLookup = { sourceYear, intervalMinutes: WEATHER_INTERVAL_MINUTES };
     const [cachedSolar, cachedWind] = await Promise.all([
-      supabaseService.getNrelCache(currentProject.id, "solar", NREL_CACHE_DATE_KEY, cacheLookup),
-      supabaseService.getNrelCache(currentProject.id, "wind", NREL_CACHE_DATE_KEY, cacheLookup),
+      supabaseService.getWeatherCache(currentProject.id, provider, "solar", WEATHER_CACHE_DATE_KEY, cacheLookup),
+      supabaseService.getWeatherCache(currentProject.id, provider, "wind", WEATHER_CACHE_DATE_KEY, cacheLookup),
     ]);
 
     if (!forceRefresh && isFreshCache(cachedSolar) && isFreshCache(cachedWind) && cachedSolar?.payload && cachedWind?.payload) {
       return {
+        provider,
         rawSolarRecords: cachedSolar.payload,
         rawWindRecords: cachedWind.payload,
         timeZone: cachedSolar.timezone || cachedWind.timezone || (await fetchTimeZone({ lat: currentProject.lat, lng: currentProject.lng })),
       };
     }
 
-    const [solarResponse, windResponse] = await Promise.all([
-      fetch(buildUrl(PROXY_ENDPOINT, { dataset: "solar", wkt, interval: String(NREL_INTERVAL_MINUTES) })),
-      fetch(buildUrl(PROXY_ENDPOINT, { dataset: "wind", wkt, interval: String(NREL_INTERVAL_MINUTES) })),
-    ]);
+    const weatherResponse = await fetch(
+      buildUrl(WEATHER_PROXY_ENDPOINT, {
+        provider,
+        lat: String(currentProject.lat),
+        lng: String(currentProject.lng),
+        mode: "load_default",
+      })
+    );
 
-    if (!solarResponse.ok || !windResponse.ok) {
-      throw new Error("Unable to load weather data for selected location.");
+    if (!weatherResponse.ok) {
+      throw new Error(`Unable to load ${getProviderLabel(provider)} weather data for selected location.`);
     }
 
-    const [solarCsv, windCsv] = await Promise.all([solarResponse.text(), windResponse.text()]);
-    const rawSolarRecords = parseCsv(solarCsv);
-    const rawWindRecords = parseCsv(windCsv);
+    const weatherPayload = await weatherResponse.json();
+    const rawSolarRecords = weatherPayload?.solar || [];
+    const rawWindRecords = weatherPayload?.wind || [];
     const timeZone = await fetchTimeZone({ lat: currentProject.lat, lng: currentProject.lng });
     const fetchedAt = new Date().toISOString();
 
     await Promise.all([
-      supabaseService.upsertNrelCache({
+      supabaseService.upsertWeatherCache({
         projectId: currentProject.id,
+        provider,
         dataset: "solar",
-        dateKey: NREL_CACHE_DATE_KEY,
-        sourceYear: NREL_SOURCE_YEAR,
-        intervalMinutes: NREL_INTERVAL_MINUTES,
+        dateKey: WEATHER_CACHE_DATE_KEY,
+        sourceYear,
+        intervalMinutes: WEATHER_INTERVAL_MINUTES,
         wkt,
         timezone: timeZone,
-        source: "nrel_proxy",
+        source: weatherPayload?.meta?.provider || provider,
         fetchedAt,
         payload: rawSolarRecords,
       }),
-      supabaseService.upsertNrelCache({
+      supabaseService.upsertWeatherCache({
         projectId: currentProject.id,
+        provider,
         dataset: "wind",
-        dateKey: NREL_CACHE_DATE_KEY,
-        sourceYear: NREL_SOURCE_YEAR,
-        intervalMinutes: NREL_INTERVAL_MINUTES,
+        dateKey: WEATHER_CACHE_DATE_KEY,
+        sourceYear,
+        intervalMinutes: WEATHER_INTERVAL_MINUTES,
         wkt,
         timezone: timeZone,
-        source: "nrel_proxy",
+        source: weatherPayload?.meta?.provider || provider,
         fetchedAt,
         payload: rawWindRecords,
       }),
     ]);
 
-    return { rawSolarRecords, rawWindRecords, timeZone };
+    return { provider, rawSolarRecords, rawWindRecords, timeZone };
   };
 
   const fetchWeatherForDay = async (options = {}) => {
@@ -626,14 +1013,17 @@
     scheduleRecompute();
 
     try {
-      const { rawSolarRecords, rawWindRecords, timeZone } = await withRetry(() =>
+      const { provider, rawSolarRecords, rawWindRecords, timeZone } = await withRetry(() =>
         loadPersistedOrRemoteWeather({ forceRefresh })
       );
 
       const [targetYear] = selectedDateKey.split("-");
-      const normalizedSolarRecords = normalizeRecordYears(rawSolarRecords, targetYear);
-      const normalizedWindRecords = normalizeRecordYears(rawWindRecords, targetYear);
+      const normalizedSolarRecords =
+        provider === "nrel" ? normalizeRecordYears(rawSolarRecords, targetYear) : rawSolarRecords;
+      const normalizedWindRecords =
+        provider === "nrel" ? normalizeRecordYears(rawWindRecords, targetYear) : rawWindRecords;
 
+      weatherDay.provider = provider;
       weatherDay.timeZone = timeZone;
 
       const solarRecords = alignRecordsForFacilityTimeZone(normalizedSolarRecords, timeZone);
@@ -664,6 +1054,11 @@
       weatherDay.matchedWindRows = windSlice.matchedCount;
       weatherDay.firstMatchedTimestamp = solarSlice.firstMatchedTimestamp || windSlice.firstMatchedTimestamp;
       weatherDay.lastMatchedTimestamp = solarSlice.lastMatchedTimestamp || windSlice.lastMatchedTimestamp;
+      weatherDay.allSolar = solarRecords;
+      weatherDay.allWind = windRecords;
+      weatherDay.windSpeedKey = windSpeedKey;
+      weatherDay.windTemperatureKey = windTemperatureKey;
+      weatherDay.windPressureKey = windPressureKey;
 
       const needsSolar = solarAssets.length > 0;
       const needsWind = windAssets.length > 0;
@@ -685,9 +1080,6 @@
             ? `No ${missingStreams[0]} weather rows matched selected date after alignment. Check timezone/year normalization.`
             : "No solar/wind weather rows matched selected date after alignment. Check timezone/year normalization.";
       }
-      if (assetsRefreshWeatherButton && forceRefresh) {
-        setSyncMessage("Weather cache refreshed.", false);
-      }
     } catch (error) {
       weatherDay.loaded = false;
       weatherDay.error = error.message || "Unable to fetch weather data.";
@@ -703,16 +1095,199 @@
     }
   };
 
+  const buildWeatherMaps = () => {
+    const solarMap = new Map();
+    weatherDay.allSolar.forEach((record) => {
+      if (record.year == null || record.month == null || record.day == null) {
+        return;
+      }
+      const key = buildRecordMinuteKey(record);
+      solarMap.set(key, {
+        ghi: toNumber(record?.ghi, 0),
+        dni: toNumber(record?.dni, 0),
+        dhi: toNumber(record?.dhi, 0),
+        air_temperature: toNumber(record?.air_temperature, 20),
+      });
+    });
+
+    const windMap = new Map();
+    weatherDay.allWind.forEach((record) => {
+      if (record.year == null || record.month == null || record.day == null) {
+        return;
+      }
+      const key = buildRecordMinuteKey(record);
+      windMap.set(key, {
+        [weatherDay.windSpeedKey]: toNumber(record?.[weatherDay.windSpeedKey], 0),
+        ...(weatherDay.windTemperatureKey
+          ? { [weatherDay.windTemperatureKey]: toNumber(record?.[weatherDay.windTemperatureKey], NaN) }
+          : {}),
+        ...(weatherDay.windPressureKey
+          ? { [weatherDay.windPressureKey]: toNumber(record?.[weatherDay.windPressureKey], NaN) }
+          : {}),
+      });
+    });
+
+    return { solarMap, windMap };
+  };
+
+  const computeSeriesFromWeather = (
+    solarWeather,
+    windWeather,
+    labels,
+    { unit = "kWh", period = "day", scaleFactor = 1 } = {}
+  ) => {
+    const solarPower = window.EnergyGeneration?.sumSolarAssets
+      ? Array.from(window.EnergyGeneration.sumSolarAssets(solarAssets.map((entry) => entry.model), solarWeather))
+      : Array.from(buildEmptySeries()).slice(0, labels.length);
+
+    const windPower = window.EnergyGeneration?.sumWindAssets
+      ? Array.from(window.EnergyGeneration.sumWindAssets(windAssets.map((entry) => entry.model), windWeather))
+      : Array.from(buildEmptySeries()).slice(0, labels.length);
+
+    const solarValues = solarPower.map((value) => value * scaleFactor);
+    const windValues = windPower.map((value) => value * scaleFactor);
+    const totalValues = labels.map((_, index) => (solarValues[index] || 0) + (windValues[index] || 0));
+
+    return {
+      labels,
+      solar: solarValues,
+      wind: windValues,
+      total: totalValues,
+      unit,
+      period,
+    };
+  };
+
+  const buildIntervalPeriodSeries = (period, selectedDate) => {
+    const { solarMap, windMap } = buildWeatherMaps();
+    const labels = [];
+    const solarWeather = [];
+    const windWeather = [];
+
+    const start = period === "week" ? getWeekStart(selectedDate) : new Date(selectedDate);
+    start.setHours(0, 0, 0, 0);
+    const end = new Date(start);
+    end.setDate(end.getDate() + (period === "week" ? 6 : 0));
+    end.setHours(23, 60 - WEATHER_INTERVAL_MINUTES, 0, 0);
+
+    for (
+      let cursor = new Date(start);
+      cursor <= end;
+      cursor.setMinutes(cursor.getMinutes() + WEATHER_INTERVAL_MINUTES)
+    ) {
+      const key = `${formatDateKey(cursor)}T${pad2(cursor.getHours())}:${pad2(cursor.getMinutes())}`;
+      const solarRecord = solarMap.get(key) || { ghi: 0, dni: 0, dhi: 0, air_temperature: 20 };
+      const windRecord = windMap.get(key) || { [weatherDay.windSpeedKey]: 0 };
+      solarWeather.push({ timestamp: `${key}:00`, ...solarRecord });
+      windWeather.push({ timestamp: `${key}:00`, ...windRecord });
+
+      labels.push(
+        period === "day"
+          ? `${pad2(cursor.getHours())}:${pad2(cursor.getMinutes())}`
+          : `${cursor.toLocaleString("en-US", {
+              weekday: "short",
+            })} ${cursor.getMonth() + 1}/${cursor.getDate()} ${pad2(cursor.getHours())}:${pad2(cursor.getMinutes())}`
+      );
+    }
+
+    return computeSeriesFromWeather(solarWeather, windWeather, labels, {
+      unit: "kWh",
+      period,
+      scaleFactor: WEATHER_INTERVAL_MINUTES / 60,
+    });
+  };
+
+  const buildDailyAggregatedSeries = (period, selectedDate) => {
+    const { solarMap, windMap } = buildWeatherMaps();
+    const labels = [];
+    const solarDaily = [];
+    const windDaily = [];
+    const intervalHours = WEATHER_INTERVAL_MINUTES / 60;
+
+    const start =
+      period === "month"
+        ? new Date(selectedDate.getFullYear(), selectedDate.getMonth(), 1)
+        : new Date(selectedDate.getFullYear(), 0, 1);
+    const end =
+      period === "month"
+        ? new Date(selectedDate.getFullYear(), selectedDate.getMonth() + 1, 0)
+        : new Date(selectedDate.getFullYear(), 11, 31);
+
+    for (let cursor = new Date(start); cursor <= end; cursor.setDate(cursor.getDate() + 1)) {
+      const dateKey = formatDateKey(cursor);
+      const daySolarWeather = [];
+      const dayWindWeather = [];
+      for (let i = 0; i < POINTS_PER_DAY; i += 1) {
+        const hour = Math.floor((i * WEATHER_INTERVAL_MINUTES) / 60);
+        const minute = (i * WEATHER_INTERVAL_MINUTES) % 60;
+        const minuteKey = `${dateKey}T${pad2(hour)}:${pad2(minute)}`;
+        daySolarWeather.push({
+          timestamp: `${minuteKey}:00`,
+          ...(solarMap.get(minuteKey) || { ghi: 0, dni: 0, dhi: 0, air_temperature: 20 }),
+        });
+        dayWindWeather.push({
+          timestamp: `${minuteKey}:00`,
+          ...(windMap.get(minuteKey) || { [weatherDay.windSpeedKey]: 0 }),
+        });
+      }
+
+      const daySolarKw = window.EnergyGeneration?.sumSolarAssets
+        ? Array.from(window.EnergyGeneration.sumSolarAssets(solarAssets.map((entry) => entry.model), daySolarWeather))
+        : Array.from(buildEmptySeries());
+      const dayWindKw = window.EnergyGeneration?.sumWindAssets
+        ? Array.from(window.EnergyGeneration.sumWindAssets(windAssets.map((entry) => entry.model), dayWindWeather))
+        : Array.from(buildEmptySeries());
+
+      const daySolarKwh = daySolarKw.reduce((sum, value) => sum + value * intervalHours, 0);
+      const dayWindKwh = dayWindKw.reduce((sum, value) => sum + value * intervalHours, 0);
+
+      labels.push(dateKey);
+      solarDaily.push(daySolarKwh);
+      windDaily.push(dayWindKwh);
+    }
+
+    const total = labels.map((_, index) => (solarDaily[index] || 0) + (windDaily[index] || 0));
+    return { labels, solar: solarDaily, wind: windDaily, total, unit: "kWh", period };
+  };
+
+  const buildGenerationSeries = () => {
+    const selectedDate = parseDateKey(selectedDateKey) || new Date();
+    if (viewState.period === "day" || viewState.period === "week") {
+      return buildIntervalPeriodSeries(viewState.period, selectedDate);
+    }
+    return buildDailyAggregatedSeries(viewState.period, selectedDate);
+  };
+
+  const getSeriesUnitLabel = (period) => (period === "month" || period === "year" ? "kWh/day" : "kWh");
+
+  const renderAxis = (labels) => {
+    if (!generationAxis) {
+      return;
+    }
+    generationAxis.innerHTML = "";
+    generationAxis.style.gridTemplateColumns = `repeat(${Math.max(labels.length, 1)}, minmax(0, 1fr))`;
+    const skip = labels.length > 120 ? 24 : labels.length > 60 ? 12 : labels.length > 30 ? 6 : 1;
+    labels.forEach((label, index) => {
+      const span = document.createElement("span");
+      span.textContent = index % skip === 0 ? label : "";
+      generationAxis.appendChild(span);
+    });
+  };
+
 
   const areaPath = (values, baseline, yScale, width, height) => {
-    const stepX = width / (POINTS_PER_DAY - 1);
+    const points = values.length;
+    if (!points) {
+      return "";
+    }
+    const stepX = points > 1 ? width / (points - 1) : width;
     let path = "";
-    for (let i = 0; i < POINTS_PER_DAY; i += 1) {
+    for (let i = 0; i < points; i += 1) {
       const x = i * stepX;
       const y = height - (values[i] + baseline[i]) * yScale;
       path += i === 0 ? `M ${x} ${y}` : ` L ${x} ${y}`;
     }
-    for (let i = POINTS_PER_DAY - 1; i >= 0; i -= 1) {
+    for (let i = points - 1; i >= 0; i -= 1) {
       const x = i * stepX;
       const y = height - baseline[i] * yScale;
       path += ` L ${x} ${y}`;
@@ -721,9 +1296,13 @@
   };
 
   const linePath = (values, yScale, width, height) => {
-    const stepX = width / (POINTS_PER_DAY - 1);
+    const points = values.length;
+    if (!points) {
+      return "";
+    }
+    const stepX = points > 1 ? width / (points - 1) : width;
     let path = "";
-    for (let i = 0; i < POINTS_PER_DAY; i += 1) {
+    for (let i = 0; i < points; i += 1) {
       const x = i * stepX;
       const y = height - values[i] * yScale;
       path += i === 0 ? `M ${x} ${y}` : ` L ${x} ${y}`;
@@ -741,6 +1320,7 @@
     const payload = {
       selectedDate: selectedDateKey,
       weatherStatus: {
+        provider: weatherDay.provider,
         loaded: weatherDay.loaded,
         loading: weatherDay.loading,
         error: weatherDay.error || null,
@@ -768,6 +1348,7 @@
     if (weatherDay.loading) {
       hideTooltip();
       generationChart.innerHTML = '<text x="20" y="26" fill="#666666" font-size="14">Loading weather data…</text>';
+      renderDonut(0, 0);
       return;
     }
 
@@ -778,82 +1359,47 @@
       if (generationAxis) {
         generationAxis.innerHTML = "";
       }
+      renderDonut(0, 0);
       renderDebugData({});
       return;
     }
 
-    const solarDebug = [];
-    solarAssets.forEach((assetEntry) => {
-      if (window.EnergyGeneration?.computeSolarPowerDebug) {
-        const debug = window.EnergyGeneration.computeSolarPowerDebug(assetEntry.model, weatherDay.solar);
-        assetEntry.series = debug.output;
-        solarDebug.push({ id: assetEntry.id, name: assetEntry.model.name, sample: debug.sample, errors: debug.errors });
-      } else {
-        assetEntry.series = window.EnergyGeneration?.computeSolarPower
-          ? window.EnergyGeneration.computeSolarPower(assetEntry.model, weatherDay.solar)
-          : buildEmptySeries();
-      }
-    });
-
-    const windDebug = [];
-    windAssets.forEach((assetEntry) => {
-      if (window.EnergyGeneration?.computeWindPowerDebug) {
-        const debug = window.EnergyGeneration.computeWindPowerDebug(assetEntry.model, weatherDay.wind);
-        assetEntry.series = debug.output;
-        windDebug.push({ id: assetEntry.id, name: assetEntry.model.name, sample: debug.sample, errors: debug.errors });
-      } else {
-        assetEntry.series = window.EnergyGeneration?.computeWindPower
-          ? window.EnergyGeneration.computeWindPower(assetEntry.model, weatherDay.wind)
-          : buildEmptySeries();
-      }
-    });
-
-    const solarKw = window.EnergyGeneration?.sumSolarAssets
-      ? window.EnergyGeneration.sumSolarAssets(
-          solarAssets.map((entry) => entry.model),
-          weatherDay.solar
-        )
-      : buildEmptySeries();
-
-    const windKw = window.EnergyGeneration?.sumWindAssets
-      ? window.EnergyGeneration.sumWindAssets(
-          windAssets.map((entry) => entry.model),
-          weatherDay.wind
-        )
-      : buildEmptySeries();
-
-    const totalKw = new Float64Array(POINTS_PER_DAY);
-    for (let i = 0; i < POINTS_PER_DAY; i += 1) {
-      totalKw[i] = solarKw[i] + windKw[i];
-    }
-
-    const maxValue = Math.max(1, ...totalKw);
+    const series = buildGenerationSeries();
+    const solarValues = series.solar;
+    const windValues = series.wind;
+    const totalValues = series.total;
+    const maxValue = Math.max(1, ...totalValues);
     const width = 1000;
     const height = 240;
     const yScale = height / maxValue;
-    const zero = new Float64Array(POINTS_PER_DAY);
+    const zero = new Float64Array(series.labels.length);
     const { lines: gridLines, labels: gridLabels } = buildGridLines(maxValue, width, height);
+    const yAxisLabel = `Generation (${getSeriesUnitLabel(series.period)})`;
 
     generationChart.innerHTML = `
       <g class="generation-grid">${gridLines}</g>
       <g class="generation-grid-labels">${gridLabels}</g>
-      <text x="20" y="132" fill="#999999" font-size="11" transform="rotate(-90 20 132)">Generation (kW)</text>
-      <path d="${areaPath(windKw, zero, yScale, width, height)}" fill="rgba(31, 119, 180, 0.35)" stroke="rgba(31, 119, 180, 0.8)" stroke-width="1" />
-      <path d="${areaPath(solarKw, windKw, yScale, width, height)}" fill="rgba(249, 168, 37, 0.50)" stroke="rgba(249, 168, 37, 0.85)" stroke-width="1" />
-      <path d="${linePath(totalKw, yScale, width, height)}" fill="none" stroke="#000000" stroke-width="2" />
+      <text x="20" y="132" fill="#2d2d2d" font-size="12" font-weight="700" transform="rotate(-90 20 132)">${yAxisLabel}</text>
+      <path d="${areaPath(windValues, zero, yScale, width, height)}" fill="rgba(31, 119, 180, 0.35)" stroke="rgba(31, 119, 180, 0.8)" stroke-width="1" />
+      <path d="${areaPath(solarValues, windValues, yScale, width, height)}" fill="rgba(249, 168, 37, 0.50)" stroke="rgba(249, 168, 37, 0.85)" stroke-width="1" />
+      <path d="${linePath(totalValues, yScale, width, height)}" fill="none" stroke="#000000" stroke-width="2" />
     `;
 
-    chartState.solarKw = solarKw;
-    chartState.windKw = windKw;
-    chartState.totalKw = totalKw;
+    chartState.labels = series.labels;
+    chartState.solar = solarValues;
+    chartState.wind = windValues;
+    chartState.total = totalValues;
+    chartState.unit = series.unit;
+    chartState.period = series.period;
 
-    if (generationAxis) {
-      generationAxis.innerHTML = ["00:00", "06:00", "12:00", "18:00", "24:00"]
-        .map((label) => `<span>${label}</span>`)
-        .join("");
-    }
+    renderAxis(series.labels);
 
-    renderDebugData({ solarDebug, windDebug, totalKw });
+    const solarEnergyKwh = solarValues.reduce((sum, value) => sum + value, 0);
+    const windEnergyKwh = windValues.reduce((sum, value) => sum + value, 0);
+    const label = `${series.period[0].toUpperCase()}${series.period.slice(1)} Total`;
+    renderDonut(solarEnergyKwh, windEnergyKwh, label);
+
+    renderDebugData({ totalKw: Float64Array.from(totalValues) });
   };
 
   const scheduleRecompute = () => {
@@ -895,7 +1441,7 @@
         supabaseService.upsertAsset({ id: entry.id, projectId: currentProject.id, type, model: entry.model })
       );
       entry.id = saved.id;
-      entry.model = saved.model;
+      entry.model = { ...entry.model, ...saved.model };
       entry.syncing = false;
       setSyncMessage("", false);
     } catch (error) {
@@ -905,10 +1451,9 @@
   };
 
   const wireFieldChanges = (card, entry, prefix, type) => {
-    const model = entry.model;
     card.querySelectorAll("input, select").forEach((field) => {
       const handler = () => {
-        updateModelFromField(model, field, prefix);
+        updateModelFromField(entry.model, field, prefix);
         scheduleRecompute();
         void persistAsset(entry, type);
       };
@@ -1022,6 +1567,7 @@
 
     card.dataset.assetId = assetId;
     populateFields(card, defaultModel, isSolar ? "solar" : "wind");
+    wireFieldHelp(card, isSolar ? "solar" : "wind");
     const nameInput = card.querySelector(".asset-title-input");
     if (nameInput) {
       nameInput.value = defaultModel.name;
@@ -1059,9 +1605,31 @@
     generationChartFrame.addEventListener("mouseleave", hideTooltip);
   }
 
+  window.addEventListener("scroll", hideAssetFieldTooltip, true);
+  window.addEventListener("resize", hideAssetFieldTooltip);
+
   if (assetsDatePickerInput) {
     assetsDatePickerInput.value = selectedDateKey;
   }
+
+  const applyPeriodToggleState = () => {
+    periodButtons.forEach((button) => {
+      button.classList.toggle("is-active", button.dataset.assetsPeriod === viewState.period);
+    });
+  };
+
+  periodButtons.forEach((button) => {
+    button.addEventListener("click", () => {
+      const period = button.dataset.assetsPeriod;
+      if (!period) {
+        return;
+      }
+      viewState.period = period;
+      applyPeriodToggleState();
+      updateDateRangeReadout();
+      scheduleRecompute();
+    });
+  });
 
   if (assetsDatePickerButton && assetsDatePickerInput) {
     assetsDatePickerButton.addEventListener("click", () => {
@@ -1080,6 +1648,7 @@
         return;
       }
       selectedDateKey = value;
+      updateDateRangeReadout();
       void withRetry(() => supabaseService.updateProject(currentProject.id, { selectedDate: value }))
         .then((project) => {
           currentProject = project;
@@ -1090,18 +1659,58 @@
     });
   }
 
+  const shiftSelectedDate = (direction) => {
+    const baseDate = parseDateKey(selectedDateKey) || new Date();
+    const shifted = new Date(baseDate);
+    if (viewState.period === "day") {
+      shifted.setDate(shifted.getDate() + direction);
+    } else if (viewState.period === "week") {
+      shifted.setDate(shifted.getDate() + direction * 7);
+    } else if (viewState.period === "month") {
+      shifted.setMonth(shifted.getMonth() + direction);
+    } else {
+      shifted.setFullYear(shifted.getFullYear() + direction);
+    }
+    selectedDateKey = formatDateKey(shifted);
+    if (assetsDatePickerInput) {
+      assetsDatePickerInput.value = selectedDateKey;
+    }
+    updateDateRangeReadout();
+    if (currentProject) {
+      void withRetry(() => supabaseService.updateProject(currentProject.id, { selectedDate: selectedDateKey }))
+        .then((project) => {
+          currentProject = project;
+          setSyncMessage("", false);
+        })
+        .catch(() => setSyncMessage("Could not save selected date.", true));
+    }
+    void fetchWeatherForDay();
+  };
 
-  if (assetsRefreshWeatherButton) {
-    assetsRefreshWeatherButton.addEventListener("click", async () => {
-      assetsRefreshWeatherButton.disabled = true;
-      setSyncMessage("Refreshing weather data…", false);
-      try {
-        await fetchWeatherForDay({ forceRefresh: true });
-      } catch (error) {
-        setSyncMessage("Unable to refresh weather data.", true);
-      } finally {
-        assetsRefreshWeatherButton.disabled = false;
+  if (assetsShiftBackButton) {
+    assetsShiftBackButton.addEventListener("click", () => {
+      shiftSelectedDate(-1);
+    });
+  }
+
+  if (assetsShiftForwardButton) {
+    assetsShiftForwardButton.addEventListener("click", () => {
+      shiftSelectedDate(1);
+    });
+  }
+
+  if (headerProjectNameInput) {
+    headerProjectNameInput.addEventListener("input", (event) => {
+      if (!currentProject) {
+        return;
       }
+      const nextName = event.target.value || "Untitled Facility";
+      void withRetry(() => supabaseService.updateProject(currentProject.id, { name: nextName }))
+        .then((project) => {
+          currentProject = project;
+          setSyncMessage("", false);
+        })
+        .catch(() => setSyncMessage("Could not save project name.", true));
     });
   }
 
@@ -1126,50 +1735,20 @@
       return;
     }
 
-    if (backToFacilityLink) {
-      backToFacilityLink.href = `index.html?projectId=${encodeURIComponent(currentProject.id)}`;
+    if (headerSettingsLink) {
+      headerSettingsLink.href = `index.html?projectId=${encodeURIComponent(currentProject.id)}`;
     }
 
     selectedDateKey = currentProject.selectedDate || DEFAULT_DATE_KEY;
+    applyPeriodToggleState();
+    updateDateRangeReadout();
 
     if (assetsDatePickerInput) {
       assetsDatePickerInput.value = selectedDateKey;
     }
 
-    if (projectNameEl) {
-      projectNameEl.textContent = currentProject.name || "Untitled Facility";
-    }
-    if (facilityNameEl) {
-      facilityNameEl.textContent = currentProject.name || "Untitled Facility";
-    }
-    if (facilityLocationEl && currentProject.lat != null && currentProject.lng != null) {
-      facilityLocationEl.textContent = `${currentProject.lat.toFixed(4)}, ${currentProject.lng.toFixed(4)}`;
-    }
-
-    if (mapContainer && window.L) {
-      const map = L.map(mapContainer, { zoomControl: false, attributionControl: false });
-      L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png").addTo(map);
-
-      const mapState = currentProject.mapState || null;
-      if (mapState?.bounds) {
-        const bounds = [
-          [mapState.bounds.south, mapState.bounds.west],
-          [mapState.bounds.north, mapState.bounds.east],
-        ];
-        map.fitBounds(bounds, { padding: [10, 10] });
-      } else if (mapState?.center && typeof mapState.zoom === "number") {
-        map.setView([mapState.center.lat, mapState.center.lng], mapState.zoom);
-      } else if (currentProject.lat != null && currentProject.lng != null) {
-        map.setView([currentProject.lat, currentProject.lng], 10);
-      } else {
-        map.setView([39.742, -105.1786], 10);
-      }
-
-      if (mapState?.center) {
-        L.marker([mapState.center.lat, mapState.center.lng]).addTo(map);
-      } else if (currentProject.lat != null && currentProject.lng != null) {
-        L.marker([currentProject.lat, currentProject.lng]).addTo(map);
-      }
+    if (headerProjectNameInput) {
+      headerProjectNameInput.value = currentProject.name || "Untitled Facility";
     }
 
     await restoreProjectAssets();

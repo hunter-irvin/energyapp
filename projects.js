@@ -5,6 +5,8 @@
   const errorState = document.getElementById("projects-error");
   const emptyState = document.getElementById("projects-empty");
   const supabaseService = window.EnergySupabaseService;
+  const LOAD_TIMEOUT_MS = 15000;
+  const LOAD_RETRIES = 3;
 
   const formatTimestamp = (timestamp) => {
     if (!timestamp) {
@@ -18,6 +20,10 @@
   };
 
   const formatLocation = (project) => {
+    const city = project?.mapState?.city;
+    if (city && String(city).trim()) {
+      return city;
+    }
     if (project.lat == null || project.lng == null) {
       return "No location selected";
     }
@@ -38,6 +44,32 @@
     if (projectsGrid) {
       projectsGrid.hidden = !showGrid;
     }
+  };
+
+  const withTimeout = (promise, label) =>
+    Promise.race([
+      promise,
+      new Promise((_, reject) =>
+        setTimeout(() => reject(new Error(`${label} timed out after ${LOAD_TIMEOUT_MS / 1000}s.`)), LOAD_TIMEOUT_MS)
+      ),
+    ]);
+
+  const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+  const withRetry = async (operation, label) => {
+    let lastError = null;
+    for (let attempt = 1; attempt <= LOAD_RETRIES; attempt += 1) {
+      try {
+        return await withTimeout(operation(), label);
+      } catch (error) {
+        lastError = error;
+        if (attempt === LOAD_RETRIES) {
+          break;
+        }
+        await sleep(500 * attempt);
+      }
+    }
+    throw lastError;
   };
 
   const renderProjects = (projects) => {
@@ -61,8 +93,8 @@
   const loadProjects = async () => {
     setState({ loading: true });
     try {
-      await supabaseService.migrateLegacyLocalData();
-      const projects = await supabaseService.listProjects();
+      await withRetry(() => supabaseService.migrateLegacyLocalData(), "Project migration");
+      const projects = await withRetry(() => supabaseService.listProjects(), "Project list fetch");
       if (!projects.length) {
         setState({ empty: true });
         return;
@@ -70,7 +102,11 @@
       renderProjects(projects);
       setState({ showGrid: true });
     } catch (error) {
-      setState({ error: error?.message || "Unable to load projects." });
+      setState({
+        error:
+          error?.message ||
+          "Unable to load projects after multiple attempts. Supabase connectivity may be unstable.",
+      });
     }
   };
 

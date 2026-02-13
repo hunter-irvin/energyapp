@@ -7,29 +7,24 @@
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
     <link rel="stylesheet" href="styles.css" />
   </head>
-  <body>
-    <main class="page assets-page">
+  <body class="project-page-body">
+    <header class="project-header">
+      <div class="project-header__left">
+        <label class="project-header__label" for="header-project-name">Project Name</label>
+        <input id="header-project-name" class="project-header__input" type="text" placeholder="Untitled Project" />
+      </div>
+      <a class="btn" href="projects.html">Exit</a>
+    </header>
+    <main class="page page--project assets-page">
+      <aside class="project-sidebar" aria-label="Project navigation">
+        <a class="project-nav-btn" id="header-settings-link" href="index.html">Settings</a>
+        <a class="project-nav-btn project-nav-btn--active" href="assets.html">Assets</a>
+      </aside>
       <section class="card assets-card">
         <header class="assets-header">
           <h1>Add Generation Assets</h1>
-          <div class="project-controls">
-            <label for="assets-project-name">Project</label>
-            <strong id="assets-project-name">-</strong>
-            <a class="btn" href="projects.html">All Projects</a>
-          </div>
-          <a class="btn btn--primary assets-back" id="back-to-facility" href="index.html">
-            <span aria-hidden="true">←</span>
-            Back
-          </a>
         </header>
         <section class="assets-summary">
-          <div class="assets-facility">
-            <h2 data-facility-name>[Facility Name]</h2>
-            <div class="assets-map">
-              <div id="assets-map" class="assets-map__image" role="img" aria-label="Facility map preview"></div>
-            </div>
-            <p class="assets-location" data-facility-location>No location selected</p>
-          </div>
           <div class="assets-inputs">
             <div class="assets-column">
               <div class="assets-column__header">
@@ -49,14 +44,19 @@
         </section>
         <div class="assets-divider"></div>
         <section class="assets-chart-section">
+          <h3 class="assets-chart-title">Expected Generation</h3>
           <div class="assets-chart-header">
-            <h3>Expected Generation</h3>
             <div class="assets-chart-controls">
-              <div class="toggle-group">
-                <button class="btn btn--toggle is-active" type="button">Day</button>
-                <button class="btn" id="assets-refresh-weather" type="button">Refresh Weather Data</button>
+              <div class="toggle-group assets-toggle-group">
+                <button class="btn btn--toggle" data-assets-period="day" type="button">Day</button>
+                <button class="btn btn--toggle is-active" data-assets-period="week" type="button">Week</button>
+                <button class="btn btn--toggle" data-assets-period="month" type="button">Month</button>
+                <button class="btn btn--toggle" data-assets-period="year" type="button">Year</button>
                 <button class="btn btn--icon" id="assets-date-picker-button" aria-label="Pick a date">📅</button>
                 <input class="date-picker" id="assets-date-picker" type="date" aria-label="Select date" />
+                <button class="btn btn--icon" id="assets-shift-back" type="button" aria-label="Previous range">◀</button>
+                <span class="assets-date-range-readout" id="assets-date-range-readout">--</span>
+                <button class="btn btn--icon" id="assets-shift-forward" type="button" aria-label="Next range">▶</button>
               </div>
             </div>
             <p class="assets-chart-legend">
@@ -65,11 +65,20 @@
               <span class="legend-chip legend-chip--total">Total</span>
             </p>
           </div>
-          <div class="assets-chart-frame" id="assets-chart-frame">
-            <svg id="generation-chart" class="generation-chart" viewBox="0 0 1000 260" preserveAspectRatio="none" aria-label="Typical generation chart"></svg>
-            <div id="generation-tooltip" class="generation-tooltip" hidden></div>
+          <div class="assets-chart-layout">
+            <div class="assets-timeseries-panel">
+              <div class="assets-chart-frame" id="assets-chart-frame">
+                <svg id="generation-chart" class="generation-chart" viewBox="0 0 1000 260" preserveAspectRatio="none" aria-label="Typical generation chart"></svg>
+                <div id="generation-tooltip" class="generation-tooltip" hidden></div>
+              </div>
+              <div class="assets-chart-axis" id="generation-axis"></div>
+            </div>
+            <aside class="assets-donut-panel" aria-label="Total generation donut chart">
+              <h4>Total Energy</h4>
+              <svg id="generation-donut" class="generation-donut" viewBox="0 0 220 220" aria-label="Solar and wind energy mix"></svg>
+              <p id="generation-total-energy" class="generation-total-energy">0.00 kWh</p>
+            </aside>
           </div>
-          <div class="assets-chart-axis" id="generation-axis"></div>
           <details class="debug-panel assets-debug" id="generation-debug-panel">
             <summary>Generation debug</summary>
             <pre id="generation-debug-output">No generation debug data yet.</pre>
@@ -90,17 +99,8 @@
           <div class="asset-section__body assets-fields">
             <label class="assets-label">Capacity (AC kW)</label>
             <input class="assets-input" type="number" min="0" step="1" data-solar-field="capacity_ac_kw" />
-            <label class="assets-label">DC/AC Ratio <span class="assets-optional">(Optional)</span></label>
-            <input class="assets-input" type="number" min="0" step="0.01" data-solar-field="dc_ac_ratio" />
-            <label class="assets-label">Mount Type <span class="assets-optional">(Optional)</span></label>
-            <select class="assets-input" data-solar-field="mount_type">
-              <option value="fixed">Fixed</option>
-              <option value="single_axis_tracker">Single Axis Tracker</option>
-            </select>
-            <label class="assets-label">Tilt (deg) <span class="assets-optional">(Optional)</span></label>
-            <input class="assets-input" type="number" step="1" data-solar-field="tilt_deg" />
-            <label class="assets-label">Azimuth (deg) <span class="assets-optional">(Optional)</span></label>
-            <input class="assets-input" type="number" step="1" data-solar-field="azimuth_deg" />
+            <label class="assets-label">System Losses (frac; includes orientation effects)</label>
+            <input class="assets-input" type="number" step="0.01" data-solar-field="system_losses_frac" />
           </div>
         </div>
         <div class="asset-section asset-section--advanced is-collapsed">
@@ -109,8 +109,8 @@
             <button class="asset-section-toggle" type="button" aria-expanded="false" aria-label="Expand advanced fields">▸</button>
           </div>
           <div class="asset-section__body assets-fields">
-            <label class="assets-label">System Losses (frac) <span class="assets-optional">(Optional)</span></label>
-            <input class="assets-input" type="number" step="0.01" data-solar-field="system_losses_frac" />
+            <label class="assets-label">DC/AC Ratio <span class="assets-optional">(Optional)</span></label>
+            <input class="assets-input" type="number" min="0" step="0.01" data-solar-field="dc_ac_ratio" />
             <label class="assets-label">Availability (frac) <span class="assets-optional">(Optional)</span></label>
             <input class="assets-input" type="number" step="0.01" data-solar-field="availability_frac" />
             <label class="assets-label">Clip at AC Capacity <span class="assets-optional">(Optional)</span></label>
@@ -192,7 +192,10 @@
       </form>
     </dialog>
 
+    <div id="asset-field-tooltip" class="asset-field-tooltip" hidden></div>
+
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script src="config.local.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
     <script src="supabase-client.js"></script>
     <script src="models.js"></script>

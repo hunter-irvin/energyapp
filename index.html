@@ -7,27 +7,34 @@
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
     <link rel="stylesheet" href="styles.css" />
   </head>
-  <body>
-    <main class="page">
+  <body class="project-page-body">
+    <header class="project-header">
+      <div class="project-header__left">
+        <label class="project-header__label" for="header-project-name">Project Name</label>
+        <input id="header-project-name" class="project-header__input" type="text" placeholder="Untitled Project" />
+      </div>
+      <a class="btn" href="projects.html">Exit</a>
+    </header>
+    <main class="page page--project">
+      <aside class="project-sidebar" aria-label="Project navigation">
+        <a class="project-nav-btn project-nav-btn--active" href="index.html">Settings</a>
+        <a class="project-nav-btn" id="header-assets-link" href="assets.html">Assets</a>
+      </aside>
       <section class="card">
         <header class="card__header">
           <h1>Facility Settings</h1>
-          <div class="project-actions">
-            <a class="btn" href="projects.html">All Projects</a>
-            <a class="btn btn--primary card__action" id="open-assets-link" href="assets.html">Add Assets</a>
-          </div>
         </header>
         <div class="layout">
           <div class="settings">
             <div class="field">
-              <label for="facility-name">Name:</label>
-              <input id="facility-name" type="text" placeholder="Untitled" />
-            </div>
-            <div class="field">
               <label>Location</label>
+              <p class="location" id="location-value">No location selected</p>
               <div class="project-actions">
                 <button class="btn btn--primary" id="select-map">Select on Map</button>
-                <button class="btn" id="refresh-weather-data" type="button">Refresh Weather Data</button>
+              </div>
+              <div class="provider-actions">
+                <button class="btn btn--toggle" id="provider-nrel" type="button">2014 NREL Data</button>
+                <button class="btn btn--toggle" id="provider-open-meteo" type="button">Last Year + 7 Day Forecast</button>
               </div>
               <div class="status status--loading" id="loading-status" hidden>
                 <span class="status__text" id="loading-text">Loading data for 2024…</span>
@@ -42,15 +49,14 @@
               </div>
               <div class="status status--success" id="success-status" hidden>Data ready for 2024.</div>
               <div class="status status--error" id="error-status" hidden>Unable to load data.</div>
-              <p class="location" id="location-value">No location selected</p>
             </div>
           </div>
           <div class="map" id="map"></div>
         </div>
         <div class="toolbar">
           <div class="toggle-group">
-            <button class="btn btn--toggle is-active" data-period="day">Day</button>
-            <button class="btn btn--toggle" data-period="week">Week</button>
+            <button class="btn btn--toggle" data-period="day">Day</button>
+            <button class="btn btn--toggle is-active" data-period="week">Week</button>
             <button class="btn btn--toggle" data-period="month">Month</button>
             <button class="btn btn--toggle" data-period="year">Year</button>
             <button class="btn btn--icon" id="date-picker-button" aria-label="Pick a date">
@@ -66,7 +72,7 @@
         <section class="chart-panel">
           <header class="chart-panel__header">
             <div>
-              <h2>Renewable Energy Profile</h2>
+              <h2>Weather Profile</h2>
               <p class="chart-panel__legend">
                 <button class="legend legend--solar is-active" data-series="solar" type="button">
                   Solar
@@ -111,6 +117,7 @@
     </main>
 
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script src="config.local.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
     <script src="supabase-client.js"></script>
     <script src="models.js"></script>
