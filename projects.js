@@ -128,5 +128,45 @@
     });
   }
 
+  // Monitor API error status and show/hide banner
+  const setupApiErrorBanner = () => {
+    const banner = document.getElementById('api-error-banner');
+    const message = document.getElementById('api-error-message');
+    const code = document.getElementById('api-error-code');
+    const closeBtn = document.getElementById('api-error-close');
+    
+    if (!banner) return; // Element might not exist on all pages
+
+    const checkBackendStatus = () => {
+      const status = supabaseService.getBackendStatus();
+      
+      if (status.type === 'localStorage' && status.lastError) {
+        // Show error banner
+        message.textContent = status.lastError;
+        code.textContent = `Error Code: ${status.errorCode}`;
+        banner.style.display = 'block';
+      } else {
+        // Hide error banner
+        banner.style.display = 'none';
+      }
+    };
+    
+    // Check status immediately
+    checkBackendStatus();
+    
+    // Check status periodically (every 5 seconds)
+    setInterval(checkBackendStatus, 5000);
+    
+    // Close button
+    if (closeBtn) {
+      closeBtn.addEventListener('click', () => {
+        banner.style.display = 'none';
+      });
+    }
+  };
+
+  // Initialize error banner
+  setupApiErrorBanner();
+
   void loadProjects();
 })();

@@ -147,7 +147,13 @@ Define these globals before `supabase-client.js` loads (for example in a script 
 - `window.ENERGYAPP_SUPABASE_URL`
 - `window.ENERGYAPP_SUPABASE_ANON_KEY`
 
-If either value is missing, the app falls back to local browser persistence.
+Runtime resolution order:
+
+1. `window.ENERGYAPP_SUPABASE_URL` + `window.ENERGYAPP_SUPABASE_ANON_KEY`
+2. `window.ENERGYAPP_SUPABASE_CONFIG` (or `supabase-config.js` defaults)
+3. `GET /api/runtime-config` (when served by `server.js`)
+
+If no source provides both values, the app falls back to local browser persistence.
 
 #### Where keys are read in code
 

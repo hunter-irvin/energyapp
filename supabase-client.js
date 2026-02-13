@@ -1,4 +1,22 @@
 (() => {
+  // Debug script availability
+  console.log('[Supabase Client Init] Starting initialization', {
+    hasSupabase: !!window.supabase,
+    hasURL: !!window.ENERGYAPP_SUPABASE_URL,
+    hasKey: !!window.ENERGYAPP_SUPABASE_ANON_KEY,
+    hasConfigObject: !!window.ENERGYAPP_SUPABASE_CONFIG,
+    supabaseVersion: window.supabase?.version || 'unknown',
+  });
+
+  // Track backend status for UI error reporting
+  let backendStatus = {
+    type: 'unknown', // 'supabase', 'localStorage', or 'unknown'
+    isWorking: null, // true, false, or null (untested)
+    lastError: null, // Last error message if fallback occurred
+    errorCode: null, // Supabase error code if available
+    credentialSource: null,
+  };
+
   const LAST_PROJECT_STORAGE_KEY = "energyapp.lastOpenedProjectId";
   const MIGRATION_STORAGE_KEY = "energyapp.legacyMigration.v1";
   const LEGACY_KEYS = {
@@ -49,14 +67,151 @@
     }
   };
 
-  const getClient = () => {
-    const sdk = window.supabase;
-    const url = window.ENERGYAPP_SUPABASE_URL;
-    const anonKey = window.ENERGYAPP_SUPABASE_ANON_KEY;
-    if (!sdk || !url || !anonKey) {
-      return null;
+  let clientCache = null;
+  let clientInitPromise = null;
+
+  const normalizeCredential = (value) => (typeof value === "string" ? value.trim() : "");
+
+  const resolveSupabaseCredentials = async () => {
+    const fromWindow = {
+      url: normalizeCredential(window.ENERGYAPP_SUPABASE_URL),
+      anonKey: normalizeCredential(window.ENERGYAPP_SUPABASE_ANON_KEY),
+      source: "window globals",
+    };
+    if (fromWindow.url && fromWindow.anonKey) {
+      return fromWindow;
     }
-    return sdk.createClient(url, anonKey);
+
+    const config = window.ENERGYAPP_SUPABASE_CONFIG || null;
+    const fromConfigObject = {
+      url: normalizeCredential(config?.url),
+      anonKey: normalizeCredential(config?.anonKey),
+      source: "window.ENERGYAPP_SUPABASE_CONFIG",
+    };
+    if (fromConfigObject.url && fromConfigObject.anonKey) {
+      window.ENERGYAPP_SUPABASE_URL = fromConfigObject.url;
+      window.ENERGYAPP_SUPABASE_ANON_KEY = fromConfigObject.anonKey;
+      return fromConfigObject;
+    }
+
+    if (typeof fetch === "function") {
+      try {
+        const controller = typeof AbortController === "function" ? new AbortController() : null;
+        const timeoutId = controller ? setTimeout(() => controller.abort(), 1500) : null;
+        const response = await fetch("/api/runtime-config", {
+          cache: "no-store",
+          headers: { Accept: "application/json" },
+          signal: controller?.signal,
+        });
+        if (timeoutId) {
+          clearTimeout(timeoutId);
+        }
+        if (response.ok) {
+          const payload = await response.json();
+          const fromApi = {
+            url: normalizeCredential(payload?.supabaseUrl),
+            anonKey: normalizeCredential(payload?.supabaseAnonKey),
+            source: "/api/runtime-config",
+          };
+          if (fromApi.url && fromApi.anonKey) {
+            window.ENERGYAPP_SUPABASE_URL = fromApi.url;
+            window.ENERGYAPP_SUPABASE_ANON_KEY = fromApi.anonKey;
+            return fromApi;
+          }
+        }
+      } catch (error) {
+        // Ignore runtime-config lookup failures and continue with local fallback.
+      }
+    }
+
+    return null;
+  };
+
+  const getClient = async () => {
+    // Return cached client if available
+    if (clientCache) {
+      return clientCache;
+    }
+
+    // If already initializing, wait for that promise
+    if (clientInitPromise) {
+      return clientInitPromise;
+    }
+
+    // Initialize the client with retry logic
+    clientInitPromise = (async () => {
+      const credentials = await resolveSupabaseCredentials();
+      const url = credentials?.url || "";
+      const anonKey = credentials?.anonKey || "";
+
+      // Verify credentials are injected (should be immediate)
+      if (!url || !anonKey) {
+        const missing = [];
+        if (!url) missing.push('window.ENERGYAPP_SUPABASE_URL');
+        if (!anonKey) missing.push('window.ENERGYAPP_SUPABASE_ANON_KEY');
+
+        const reason = `Missing credentials: ${missing.join(', ')}`;
+        backendStatus.type = 'localStorage';
+        backendStatus.isWorking = false;
+        backendStatus.lastError = reason;
+        backendStatus.errorCode = 'MISSING_CREDENTIALS';
+        backendStatus.credentialSource = null;
+
+        console.error('[Supabase Client] Credentials not injected:', reason);
+        return null;
+      }
+
+      // Wait for Supabase SDK to load (retry up to 50 times with 100ms intervals = 5 seconds)
+      let retries = 0;
+      const maxRetries = 50;
+      while (!window.supabase && retries < maxRetries) {
+        await new Promise(resolve => setTimeout(resolve, 100));
+        retries++;
+      }
+
+      if (!window.supabase) {
+        const reason = 'Supabase SDK failed to load from CDN after 5 seconds';
+        backendStatus.type = 'localStorage';
+        backendStatus.isWorking = false;
+        backendStatus.lastError = reason;
+        backendStatus.errorCode = 'SDK_LOAD_TIMEOUT';
+
+        console.error('[Supabase Client]', reason);
+        return null;
+      }
+
+      try {
+        const sdk = window.supabase;
+        const client = sdk.createClient(url, anonKey);
+        backendStatus.type = 'supabase';
+        backendStatus.isWorking = true;
+        backendStatus.lastError = null;
+        backendStatus.errorCode = null;
+        backendStatus.credentialSource = credentials.source;
+
+        clientCache = client;
+        console.log('[Supabase Client] Successfully initialized Supabase client', {
+          url,
+          credentialSource: credentials.source,
+        });
+        return client;
+      } catch (error) {
+        backendStatus.type = 'localStorage';
+        backendStatus.isWorking = false;
+        backendStatus.lastError = error.message;
+        backendStatus.errorCode = error.code || 'INIT_ERROR';
+        backendStatus.credentialSource = credentials.source;
+
+        console.error('[Supabase Client] Error creating Supabase client:', error);
+        return null;
+      }
+    })();
+    const client = await clientInitPromise;
+    if (!client) {
+      // Allow future calls to retry initialization if credentials/sdk become available.
+      clientInitPromise = null;
+    }
+    return client;
   };
 
   const toProjectRow = (project) => ({
@@ -340,9 +495,18 @@
     },
   });
 
-  const dataService = () => {
-    const client = getClient();
-    return client ? supabaseDb(client) : localDb;
+  const dataService = async () => {
+    const client = await getClient();
+    const service = client ? supabaseDb(client) : localDb;
+    const backend = client ? 'Supabase' : 'localStorage (fallback)';
+    
+    // Update status to reflect actual backend being used this call
+    if (!client) {
+      backendStatus.type = 'localStorage';
+    }
+    
+    console.debug('[EnergySupabaseService] Using persistence backend:', backend);
+    return service;
   };
 
   const listProjects = async () => dataService().listProjects();
@@ -438,5 +602,34 @@
     getLastOpenedProjectId,
     setLastOpenedProjectId,
     migrateLegacyLocalData,
+    // Status reporting functions
+    getBackendStatus: () => ({ ...backendStatus }),
+    isUsingLocalStorage: () => backendStatus.type === 'localStorage',
+    getLastError: () => backendStatus.lastError,
+    getErrorCode: () => backendStatus.errorCode,
   };
+  
+  // Verify Supabase is working after all scripts load
+  if (typeof document !== 'undefined') {
+    document.addEventListener('DOMContentLoaded', () => {
+      setTimeout(() => {
+        console.log('[Supabase Client Verification] On DOMContentLoaded + 100ms:', {
+          hasSupabase: !!window.supabase,
+          hasURL: !!window.ENERGYAPP_SUPABASE_URL,
+          hasKey: !!window.ENERGYAPP_SUPABASE_ANON_KEY,
+          hasConfigObject: !!window.ENERGYAPP_SUPABASE_CONFIG,
+        });
+        
+        if (!window.supabase) {
+          console.error('[ERROR] Supabase JS SDK failed to load from CDN. Check network tab for failures. Application will use localStorage fallback.');
+        }
+        if (!window.ENERGYAPP_SUPABASE_URL) {
+          console.error('[ERROR] Supabase URL missing. Provide it via server injection, supabase-config.js, or /api/runtime-config.');
+        }
+        if (!window.ENERGYAPP_SUPABASE_ANON_KEY) {
+          console.error('[ERROR] Supabase ANON key missing. Provide it via server injection, supabase-config.js, or /api/runtime-config.');
+        }
+      }, 100);
+    });
+  }
 })();
