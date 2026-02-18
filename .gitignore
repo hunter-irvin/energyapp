@@ -1,1 +1,4 @@
 config.local.js
+dev-startup.err.log
+dev-startup.out.log
+*.log

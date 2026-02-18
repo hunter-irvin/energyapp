@@ -43,25 +43,25 @@ window.ENERGYAPP_SUPABASE_ANON_KEY = ${JSON.stringify(SUPABASE_ANON_KEY)};
 ┌─────────────────────────────────────────────────────────────────┐
 │                       USER BROWSER                               │
 ├─────────────────────────────────────────────────────────────────┤
-│  1. Load projects.html                                           │
+│  1. Load / (public/index.html)                               │
 │  ├─ Server injects SUPABASE_URL & SUPABASE_ANON_KEY            │
-│  ├─ supabase-client.js initializes Supabase client             │
+│  ├─ public/assets/js/core/supabase-client.js initializes Supabase client │
 │  └─ projects.js loads projects via EnergySupabaseService       │
 │                                                                   │
-│  2. Load index.html (with projectId)                            │
+│  2. Load /projects/location.html (with projectId)                            │
 │  ├─ Server injects credentials (same as above)                 │
-│  ├─ app.js loads project metadata via supabaseService          │
+│  ├─ location.js loads project metadata via supabaseService          │
 │  └─ Applies location to map                                    │
 │                                                                   │
 │  3. Load weather data                                           │
 │  ├─ Check supabase nrel_cache table                            │
 │  │  ├─ Cache hit (< 24h) → Display immediately                 │
-│  │  └─ Cache miss/stale → Fetch from NREL                     │
-│  ├─ Fetch from /api/nrel-proxy                                 │
-│  │  └─ Server proxies to NREL API                              │
+│  │  └─ Cache miss/stale → Fetch from provider API             │
+│  ├─ Fetch from /api/weather-proxy                                 │
+│  │  └─ Server proxies to NREL/Open-Meteo APIs                 │
 │  └─ Store in nrel_cache table                                  │
 │                                                                   │
-│  4. Load assets.html                                            │
+│  4. Load /projects/generation.html                              │
 │  ├─ Same credential injection                                   │
 │  ├─ List assets from assets table                              │
 │  └─ Create/update/delete assets in table                       │
@@ -72,11 +72,11 @@ window.ENERGYAPP_SUPABASE_ANON_KEY = ${JSON.stringify(SUPABASE_ANON_KEY)};
     │  Node.js Server     │         │  Supabase/Postgres   │
     │  ├─ Static files    │         │  ├─ projects table   │
     │  ├─ Credential inj. │────────►│  ├─ assets table     │
-    │  └─ /api/nrel-proxy │         │  └─ nrel_cache table │
+    │  └─ /api/weather-proxy │      │  └─ nrel_cache table │
     └─────────────────────┘         └──────────────────────┘
          │
-         └─────► NREL API
-              (weather data)
+         └─────► Weather Provider APIs
+              (NREL + Open-Meteo)
 ```
 
 ## Data Persistence Flow
@@ -84,13 +84,13 @@ window.ENERGYAPP_SUPABASE_ANON_KEY = ${JSON.stringify(SUPABASE_ANON_KEY)};
 ### Project Lifecycle
 ```
 1. CREATE PROJECT
-   User → projects.html → [Create button]
+   User → / (project landing) → [Create button]
    → supabaseService.createProject()
    → INSERT into projects table
-   → Redirect to index.html?projectId=<id>
+   → Redirect to /projects/location.html?projectId=<id>
 
 2. LOAD PROJECT
-   User → index.html?projectId=<id>
+   User → /projects/location.html?projectId=<id>
    → supabaseService.getProject(id)
    → SELECT from projects table
    → Apply UI state
@@ -101,7 +101,7 @@ window.ENERGYAPP_SUPABASE_ANON_KEY = ${JSON.stringify(SUPABASE_ANON_KEY)};
    → UPDATE projects table
 
 4. DELETE PROJECT (via cascade)
-   User → [Delete button on /projects]
+   User → [Delete button on project list page]
    → supabaseService deletes project
    → PostgreSQL CASCADE deletes assets & nrel_cache rows
 ```
@@ -118,8 +118,8 @@ window.ENERGYAPP_SUPABASE_ANON_KEY = ${JSON.stringify(SUPABASE_ANON_KEY)};
       → Display to user immediately
       
    c. If cache missing/stale:
-      → Fetch fresh CSV from NREL API via /api/nrel-proxy
-      → Parse 15-minute records
+      → Fetch normalized payload from /api/weather-proxy (nrel/open_meteo)
+      → Parse and align weather records
       → Store in database:
          supabaseService.upsertNrelCache({
            projectId, dataset, dateKey, sourceYear, 
@@ -140,12 +140,12 @@ window.ENERGYAPP_SUPABASE_ANON_KEY = ${JSON.stringify(SUPABASE_ANON_KEY)};
 ### Asset Management Lifecycle
 ```
 1. CREATE ASSET
-   User → assets.html → [Add Solar/Wind] → [Configure model]
+   User → /projects/generation.html → [Add Solar/Wind] → [Configure model]
    → supabaseService.upsertAsset(payload)
    → UPSERT into assets table
 
 2. LIST ASSETS
-   User → assets.html or app.js during weather calc
+   User → /projects/generation.html or /projects/storage.html during weather calc
    → supabaseService.listAssets(projectId)
    → SELECT from assets WHERE project_id = ? ORDER BY created_at
 
@@ -165,10 +165,10 @@ window.ENERGYAPP_SUPABASE_ANON_KEY = ${JSON.stringify(SUPABASE_ANON_KEY)};
 ### When HTML loads, scripts execute in order:
 
 ```
-index.html / projects.html / assets.html
+public/index.html / public/projects/location.html / public/projects/generation.html / public/projects/storage.html
   ├─ Leaflet JS (for maps) [6KB]
   ├─ Supabase JS (@supabase/supabase-js@2) [150KB]
-  ├─ supabase-client.js [388 lines]
+  ├─ public/assets/js/core/supabase-client.js [core module]
   │  ├─ Establishes getClient() function
   │  ├─ Defines localDb fallback
   │  ├─ Defines supabaseDb backend
@@ -176,13 +176,13 @@ index.html / projects.html / assets.html
   ├─ models.js [optional, for assets]
   ├─ data-utils.js [CSV parsing utilities]
   ├─ generation.js [Power calculations]
-  └─ app.js / projects.js / assets.js
+  └─ location.js / projects.js / generation.js / storage.js
      └─ Uses window.EnergySupabaseService for all persistence
 ```
 
-**Critical dependency:** `supabase-client.js` must load AFTER `@supabase/supabase-js` to have `window.supabase` available.
+**Critical dependency:** `public/assets/js/core/supabase-client.js` must load AFTER `@supabase/supabase-js` to have `window.supabase` available.
 
-**Credential injection timing:** Server inserts credentials script BEFORE first `<script>` tag, ensuring `window.ENERGYAPP_SUPABASE_URL` and `window.ENERGYAPP_SUPABASE_ANON_KEY` are set before `supabase-client.js` reads them.
+**Credential injection timing:** Server inserts credentials script BEFORE first `<script>` tag, ensuring `window.ENERGYAPP_SUPABASE_URL` and `window.ENERGYAPP_SUPABASE_ANON_KEY` are set before `public/assets/js/core/supabase-client.js` reads them.
 
 ## Configuration & Credentials
 
@@ -252,7 +252,7 @@ SUPABASE_ANON_KEY=your-anon-key-here
    ```bash
    # Add assets to project
    # Close browser
-   # Reopen and navigate to assets.html
+   # Reopen and navigate to /projects/generation.html
    # Verify all assets still there ✓
    ```
 
@@ -342,4 +342,5 @@ If Supabase credentials are not configured:
 - Zero authentication required for MVP
 
 The app is now production-ready for a no-auth, public-data scenario. Future enhancements can layer in user authentication and data privacy without breaking the existing schema.
+
 

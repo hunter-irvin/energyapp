@@ -20,6 +20,8 @@ This repo is organized as a static multi-page web app served from `public/`.
 ### Backend layout
 
 - `server.js` static hosting + API proxy routes
+- `api/weather-proxy.js` shared weather proxy handlers (`/api/weather-proxy`, `/api/nrel-proxy`)
+- `api/nrel-proxy.js` compatibility wrapper exporting the NREL CSV handler
 - `supabase/` schema/bootstrap/migrations
 - `tests/` automated tests
 
@@ -165,7 +167,7 @@ EnergyApp now treats Supabase/Postgres as the canonical persistence layer when c
 
 #### Frontend Supabase variables
 
-Define these globals before `supabase-client.js` loads (for example in a script tag or templated HTML):
+Define these globals before `public/assets/js/core/supabase-client.js` loads (for example in a script tag or templated HTML):
 
 - `window.ENERGYAPP_SUPABASE_URL`
 - `window.ENERGYAPP_SUPABASE_ANON_KEY`
@@ -173,7 +175,7 @@ Define these globals before `supabase-client.js` loads (for example in a script 
 Runtime resolution order:
 
 1. `window.ENERGYAPP_SUPABASE_URL` + `window.ENERGYAPP_SUPABASE_ANON_KEY`
-2. `window.ENERGYAPP_SUPABASE_CONFIG` (or `supabase-config.js` defaults)
+2. `window.ENERGYAPP_SUPABASE_CONFIG` (or `public/assets/js/core/supabase-config.js` defaults)
 3. `GET /api/runtime-config` (when served by `server.js`)
 
 If no source provides both values, the app falls back to local browser persistence.
