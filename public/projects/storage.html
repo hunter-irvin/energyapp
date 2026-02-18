@@ -1,0 +1,176 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Storage</title>
+    <link rel="stylesheet" href="/assets/css/styles.css" />
+  </head>
+  <body class="project-page-body">
+    <header class="project-header">
+      <div class="project-header__left">
+        <label class="project-header__label" for="storage-header-project-name">Project Name</label>
+        <input
+          id="storage-header-project-name"
+          class="project-header__input"
+          type="text"
+          placeholder="Untitled Project"
+        />
+      </div>
+      <a class="btn" href="/">Exit</a>
+    </header>
+    <main class="page page--project assets-page">
+      <aside class="project-sidebar" aria-label="Project navigation">
+        <a class="project-nav-btn" id="storage-settings-link" href="/projects/location.html">Location</a>
+        <a class="project-nav-btn" id="storage-assets-link" href="/projects/generation.html">Generation</a>
+        <a class="project-nav-btn project-nav-btn--active" href="/projects/storage.html">Storage</a>
+      </aside>
+      <section class="card assets-card">
+        <section class="assets-summary">
+          <div class="assets-inputs storage-inputs">
+            <div class="assets-column">
+              <div class="assets-column__header">
+                <h3>Battery Assets</h3>
+                <button class="btn btn--primary assets-add" id="add-storage" type="button">Add Storage</button>
+              </div>
+              <div class="assets-list" id="storage-assets"></div>
+            </div>
+          </div>
+        </section>
+
+        <div class="assets-divider"></div>
+
+        <section class="assets-chart-section">
+          <h3 class="assets-chart-title">State of charge</h3>
+          <div class="assets-chart-header">
+            <div class="assets-chart-controls">
+              <div class="toggle-group assets-toggle-group">
+                <button class="btn btn--toggle is-active" data-storage-period="day" type="button">Day</button>
+                <button class="btn btn--toggle" data-storage-period="week" type="button">Week</button>
+                <button class="btn btn--toggle" data-storage-period="month" type="button">Month</button>
+                <button class="btn btn--toggle" data-storage-period="year" type="button">Year</button>
+                <button class="btn btn--icon" id="storage-date-picker-button" aria-label="Pick a date">📅</button>
+                <input class="date-picker" id="storage-date-picker" type="date" aria-label="Select date" />
+                <button class="btn btn--icon" id="storage-shift-back" type="button" aria-label="Previous range">◀</button>
+                <span class="assets-date-range-readout" id="storage-date-range-readout">--</span>
+                <button class="btn btn--icon" id="storage-shift-forward" type="button" aria-label="Next range">▶</button>
+              </div>
+            </div>
+            <p class="assets-chart-legend">
+              <button class="legend-chip legend-chip--toggle legend-chip--solar is-active" data-storage-series="solar" type="button">Solar</button>
+              <button class="legend-chip legend-chip--toggle legend-chip--wind is-active" data-storage-series="wind" type="button">Wind</button>
+              <button class="legend-chip legend-chip--toggle legend-chip--total is-active" data-storage-series="total" type="button">Total</button>
+              <button class="legend-chip legend-chip--toggle legend-chip--soc is-active" data-storage-series="soc" type="button">SOC</button>
+            </p>
+          </div>
+          <div class="assets-chart-frame" id="storage-chart-frame">
+            <canvas
+              id="storage-chart"
+              class="generation-chart"
+              aria-label="State of charge chart"
+            ></canvas>
+            <div class="chart-loading" id="storage-chart-loading" hidden>Loading...</div>
+            <div id="storage-tooltip" class="generation-tooltip" hidden></div>
+          </div>
+          <div class="assets-chart-axis" id="storage-axis"></div>
+          <details class="debug-panel assets-debug" id="storage-debug-panel">
+            <summary>Storage debug</summary>
+            <pre id="storage-debug-output">No storage debug data yet.</pre>
+          </details>
+        </section>
+      </section>
+    </main>
+
+    <template id="storage-asset-template">
+      <div class="asset-card" data-asset-type="storage">
+        <button class="asset-delete" type="button" aria-label="Delete storage asset">×</button>
+        <input class="asset-title-input" type="text" data-storage-field="name" aria-label="Storage asset name" />
+
+        <div class="asset-section asset-section--basic">
+          <div class="asset-section__header">
+            <p class="assets-subtitle">Basic</p>
+            <button class="asset-section-toggle" type="button" aria-expanded="true" aria-label="Collapse basic fields">▾</button>
+          </div>
+          <div class="asset-section__body assets-fields">
+            <label class="assets-label">
+              Capacity (kWh)
+              <button class="field-help" type="button" data-tip="capacity_kwh: total usable energy. Formula: pCap = capacity_kwh * charge_rate_c * tempFactor.">?</button>
+            </label>
+            <input class="assets-input" type="number" min="0" step="1" data-storage-field="capacity_kwh" />
+            <label class="assets-label">
+              Battery Type
+              <button class="field-help" type="button" data-tip="battery_type: chemistry preset for advanced defaults (charge_rate_c, round_trip_efficiency, temperature derate).">?</button>
+            </label>
+            <select class="assets-input" data-storage-field="battery_type">
+              <option value="lfp">LFP</option>
+              <option value="nmc">NMC</option>
+            </select>
+            <label class="assets-label">
+              SOC Min (0-1)
+              <button class="field-help" type="button" data-tip="soc_min: lower bound in formula. socNext = clamp(soc + deltaE/capacity, soc_min, 1).">?</button>
+            </label>
+            <input class="assets-input" type="number" min="0" max="1" step="0.01" data-storage-field="soc_min" />
+            <label class="assets-label">
+              SOC Init (0-1)
+              <button class="field-help" type="button" data-tip="soc_init: initial state for simulation. Start uses max(soc_init, soc_min).">?</button>
+            </label>
+            <input class="assets-input" type="number" min="0" max="1" step="0.01" data-storage-field="soc_init" />
+          </div>
+        </div>
+
+        <div class="asset-section asset-section--advanced is-collapsed">
+          <div class="asset-section__header">
+            <p class="assets-subtitle assets-subtitle--muted">Advanced</p>
+            <button class="asset-section-toggle" type="button" aria-expanded="false" aria-label="Expand advanced fields">▸</button>
+          </div>
+          <div class="asset-section__body assets-fields">
+            <label class="assets-label">
+              Charge Rate C
+              <button class="field-help" type="button" data-tip="charge_rate_c: power-per-capacity limit. Formula: pCap = capacity_kwh * charge_rate_c * tempFactor.">?</button>
+            </label>
+            <input class="assets-input" type="number" min="0" step="0.01" data-storage-field="charge_rate_c" />
+            <label class="assets-label">
+              Round Trip Eff (0-1)
+              <button class="field-help" type="button" data-tip="round_trip_efficiency: charge efficiency uses eta = sqrt(round_trip_efficiency). deltaE = pCharge * eta * dt.">?</button>
+            </label>
+            <input class="assets-input" type="number" min="0" max="1" step="0.01" data-storage-field="round_trip_efficiency" />
+            <label class="assets-label">
+              Temp Ref (°C)
+              <button class="field-help" type="button" data-tip="temp_ref_c: reference temperature in tempFactor = clamp(1 - derate * |T - temp_ref_c|, 0, 1).">?</button>
+            </label>
+            <input class="assets-input" type="number" step="1" data-storage-field="temp_ref_c" />
+            <label class="assets-label">
+              Temp Derate (/°C)
+              <button class="field-help" type="button" data-tip="temp_charge_derate_per_c: derate coefficient in tempFactor = clamp(1 - derate * |T - temp_ref_c|, 0, 1).">?</button>
+            </label>
+            <input class="assets-input" type="number" min="0" step="0.001" data-storage-field="temp_charge_derate_per_c" />
+          </div>
+        </div>
+      </div>
+    </template>
+
+    <dialog class="delete-modal" id="delete-storage-modal">
+      <form method="dialog" class="delete-modal__content">
+        <h3>Delete storage asset?</h3>
+        <p>This action cannot be undone.</p>
+        <div class="delete-modal__actions">
+          <button class="btn" value="cancel">Cancel</button>
+          <button class="btn btn--danger" id="confirm-delete-storage" value="confirm">Delete</button>
+        </div>
+      </form>
+    </dialog>
+
+    <div id="storage-field-tooltip" class="field-tooltip" hidden></div>
+
+    <script src="/config.local.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
+    <script src="/assets/js/core/charting.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+    <script src="/assets/js/core/supabase-config.js"></script>
+    <script src="/assets/js/core/supabase-client.js"></script>
+    <script src="/assets/js/core/shared-cache.js"></script>
+    <script src="/assets/js/core/models.js"></script>
+    <script src="/assets/js/features/generation.js"></script>
+    <script src="/assets/js/pages/storage.js"></script>
+  </body>
+</html>

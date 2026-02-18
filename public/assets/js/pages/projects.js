@@ -80,7 +80,7 @@
     projectsGrid.innerHTML = projects
       .map(
         (project) => `
-          <a class="project-card" href="index.html?projectId=${encodeURIComponent(project.id)}">
+          <a class="project-card" href="/projects/location.html?projectId=${encodeURIComponent(project.id)}">
             <h2 class="project-card__name">${project.name || "Untitled Project"}</h2>
             <p class="project-card__location">${formatLocation(project)}</p>
             <p class="project-card__updated">Updated: ${formatTimestamp(project.updatedAt)}</p>
@@ -119,7 +119,7 @@
           lat: null,
           lng: null,
         });
-        window.location.href = `index.html?projectId=${encodeURIComponent(newProject.id)}`;
+        window.location.href = `/projects/location.html?projectId=${encodeURIComponent(newProject.id)}`;
       } catch (error) {
         setState({ error: error?.message || "Unable to create project." });
       } finally {

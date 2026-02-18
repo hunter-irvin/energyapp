@@ -2,7 +2,7 @@ const assert = require("assert");
 const path = require("path");
 
 global.window = {};
-require(path.join(__dirname, "..", "data-utils.js"));
+require(path.join(__dirname, "..", "public", "assets", "js", "core", "data-utils.js"));
 
 const { normalizeHeader, mapHeaders, mergeSeriesOnTimestamps } = global.window.EnergyDataUtils;
 const { runSolarComputeTests } = require(path.join(__dirname, "solar-compute.test.js"));

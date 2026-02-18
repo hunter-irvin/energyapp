@@ -5,11 +5,15 @@
   const WEATHER_INTERVAL_MINUTES = 30;
   const POINTS_PER_DAY = (24 * 60) / WEATHER_INTERVAL_MINUTES;
   const WEATHER_CACHE_TTL_MS = 1000 * 60 * 60 * 24;
+  const ASSET_EDIT_DEBOUNCE_MS = 200;
+  const PERIOD_STORAGE_SUFFIX = "selectedPeriod";
+  const PERIOD_OPTIONS = ["day", "week", "month", "year"];
   const WEATHER_PROVIDERS = {
     nrel: "NREL",
     open_meteo: "Open-Meteo",
   };
   const supabaseService = window.EnergySupabaseService;
+  const sharedCache = window.EnergySharedCache || null;
 
   const solarList = document.getElementById("solar-assets");
   const windList = document.getElementById("wind-assets");
@@ -22,10 +26,12 @@
   const generationChart = document.getElementById("generation-chart");
   const generationAxis = document.getElementById("generation-axis");
   const generationChartFrame = document.getElementById("assets-chart-frame");
+  const assetsChartLoading = document.getElementById("assets-chart-loading");
   const generationTooltip = document.getElementById("generation-tooltip");
   const generationDonut = document.getElementById("generation-donut");
   const generationTotalEnergy = document.getElementById("generation-total-energy");
   const periodButtons = Array.from(document.querySelectorAll("[data-assets-period]"));
+  const seriesToggleButtons = Array.from(document.querySelectorAll("[data-assets-series]"));
   const assetsDatePickerButton = document.getElementById("assets-date-picker-button");
   const assetsDatePickerInput = document.getElementById("assets-date-picker");
   const assetsDateRangeReadout = document.getElementById("assets-date-range-readout");
@@ -34,6 +40,7 @@
   const generationDebugOutput = document.getElementById("generation-debug-output");
   const headerProjectNameInput = document.getElementById("header-project-name");
   const headerSettingsLink = document.getElementById("header-settings-link");
+  const sidebarStorageLink = document.getElementById("sidebar-storage-link");
   const assetFieldTooltip = document.getElementById("asset-field-tooltip");
 
   const queryParams = new URLSearchParams(window.location.search);
@@ -58,6 +65,7 @@
   let pendingDeleteId = null;
   let pendingDeleteType = null;
   let recomputeRaf = 0;
+  let recomputeDebounceTimer = null;
 
   const solarAssets = [];
   const windAssets = [];
@@ -70,6 +78,12 @@
     unit: "kWh",
     period: "day",
   };
+  const seriesVisibility = {
+    solar: true,
+    wind: true,
+    total: true,
+  };
+  let assetsChart = null;
 
   const weatherDay = {
     provider: "nrel",
@@ -88,6 +102,7 @@
     windSpeedKey: "windspeed_100m",
     windTemperatureKey: null,
     windPressureKey: null,
+    weatherRevision: "",
   };
 
   const pad2 = (value) => String(value).padStart(2, "0");
@@ -134,6 +149,131 @@
   };
 
   const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+  const getScopedUiKey = (projectId, suffix) => {
+    if (!projectId) {
+      return "";
+    }
+    if (typeof supabaseService?.buildScopedUiStorageKey === "function") {
+      return supabaseService.buildScopedUiStorageKey(projectId, suffix);
+    }
+    return `energyapp.project.${projectId}.${suffix}`;
+  };
+
+  const loadPersistedPeriod = (projectId, fallback = "week") => {
+    const key = getScopedUiKey(projectId, PERIOD_STORAGE_SUFFIX);
+    if (!key) {
+      return fallback;
+    }
+    const stored = localStorage.getItem(key);
+    return PERIOD_OPTIONS.includes(stored) ? stored : fallback;
+  };
+
+  const persistPeriod = (projectId, period) => {
+    if (!PERIOD_OPTIONS.includes(period)) {
+      return;
+    }
+    const key = getScopedUiKey(projectId, PERIOD_STORAGE_SUFFIX);
+    if (!key) {
+      return;
+    }
+    localStorage.setItem(key, period);
+  };
+
+  const buildAssetsRevision = () => {
+    if (!sharedCache) {
+      return "";
+    }
+    return sharedCache.buildAssetsRevision({
+      solar: solarAssets.map((entry) => ({ id: entry.id, model: entry.model })),
+      wind: windAssets.map((entry) => ({ id: entry.id, model: entry.model })),
+    });
+  };
+
+  const applyWeatherRecords = ({ provider, timeZone, solarRecords, windRecords, weatherRevision = "" }) => {
+    weatherDay.provider = provider || "nrel";
+    weatherDay.timeZone = timeZone || "UTC";
+
+    const windSpeedKey = pickWindSpeedKey(windRecords);
+    const windTemperatureKey = pickWindTemperatureKey(windRecords);
+    const windPressureKey = pickWindPressureKey(windRecords);
+
+    const solarSlice = sliceDay(solarRecords, selectedDateKey, (record, timestamp) => ({
+      timestamp,
+      ghi: toNumber(record?.ghi, 0),
+      dni: toNumber(record?.dni, 0),
+      dhi: toNumber(record?.dhi, 0),
+      air_temperature: toNumber(record?.air_temperature, 20),
+    }));
+
+    const windSlice = sliceDay(windRecords, selectedDateKey, (record, timestamp) => ({
+      timestamp,
+      [windSpeedKey]: toNumber(record?.[windSpeedKey], 0),
+      ...(windTemperatureKey ? { [windTemperatureKey]: toNumber(record?.[windTemperatureKey], NaN) } : {}),
+      ...(windPressureKey ? { [windPressureKey]: toNumber(record?.[windPressureKey], NaN) } : {}),
+    }));
+
+    weatherDay.solar = solarSlice.points;
+    weatherDay.wind = windSlice.points;
+    weatherDay.matchedSolarRows = solarSlice.matchedCount;
+    weatherDay.matchedWindRows = windSlice.matchedCount;
+    weatherDay.firstMatchedTimestamp = solarSlice.firstMatchedTimestamp || windSlice.firstMatchedTimestamp;
+    weatherDay.lastMatchedTimestamp = solarSlice.lastMatchedTimestamp || windSlice.lastMatchedTimestamp;
+    weatherDay.allSolar = solarRecords;
+    weatherDay.allWind = windRecords;
+    weatherDay.windSpeedKey = windSpeedKey;
+    weatherDay.windTemperatureKey = windTemperatureKey;
+    weatherDay.windPressureKey = windPressureKey;
+    weatherDay.weatherRevision =
+      weatherRevision ||
+      (sharedCache
+        ? sharedCache.buildWeatherRevision({
+            provider: weatherDay.provider,
+            timeZone: weatherDay.timeZone,
+            solar: weatherDay.allSolar,
+            wind: weatherDay.allWind,
+          })
+        : "");
+
+    const needsSolar = solarAssets.length > 0;
+    const needsWind = windAssets.length > 0;
+    const solarReady = weatherDay.solar.length === POINTS_PER_DAY && weatherDay.matchedSolarRows > 0;
+    const windReady = weatherDay.wind.length === POINTS_PER_DAY && weatherDay.matchedWindRows > 0;
+
+    weatherDay.loaded = (!needsSolar || solarReady) && (!needsWind || windReady);
+    if (!weatherDay.loaded) {
+      const missingStreams = [];
+      if (needsSolar && !solarReady) {
+        missingStreams.push("solar");
+      }
+      if (needsWind && !windReady) {
+        missingStreams.push("wind");
+      }
+      weatherDay.error =
+        missingStreams.length === 1
+          ? `No ${missingStreams[0]} weather rows matched selected date after alignment. Check timezone/year normalization.`
+          : "No solar/wind weather rows matched selected date after alignment. Check timezone/year normalization.";
+    }
+  };
+
+  const restoreWeatherFromSharedCache = () => {
+    if (!currentProject?.id || !sharedCache) {
+      return false;
+    }
+    const provider = currentProject.weatherProvider || "nrel";
+    const cached = sharedCache.getParsedWeather(currentProject.id, { provider });
+    if (!cached?.raw15?.solar || !cached?.raw15?.wind) {
+      return false;
+    }
+    applyWeatherRecords({
+      provider: cached.provider || provider,
+      timeZone: cached.timeZone || "UTC",
+      solarRecords: cached.raw15.solar || [],
+      windRecords: cached.raw15.wind || [],
+      weatherRevision: cached.weatherRevision || "",
+    });
+    return true;
+  };
 
   const ASSET_FIELD_HELP = {
     solar: {
@@ -426,6 +566,44 @@
     return `${date.getMonth() + 1}/${date.getDate()}/${yy}`;
   };
 
+  const formatIndicatorDate = (date) => `${pad2(date.getMonth() + 1)}/${pad2(date.getDate())}`;
+  const formatIndicatorTime = (date) => `${pad2(date.getHours())}:${pad2(date.getMinutes())}`;
+  const formatTooltipLabelHtml = (text) => String(text || "").replace(/\n/g, "<br />");
+
+  const formatChartIndicator = (period, dateKey, index) => {
+    const selectedDate = parseDateKey(dateKey);
+    if (!(selectedDate instanceof Date) || Number.isNaN(selectedDate.getTime())) {
+      return "";
+    }
+
+    if (period === "day") {
+      const cursor = new Date(selectedDate);
+      cursor.setHours(0, 0, 0, 0);
+      cursor.setMinutes(index * WEATHER_INTERVAL_MINUTES);
+      return formatIndicatorTime(cursor);
+    }
+
+    if (period === "week") {
+      const weekStart = getWeekStart(selectedDate);
+      const cursor = new Date(weekStart);
+      cursor.setMinutes(index * WEATHER_INTERVAL_MINUTES);
+      const dayOfWeek = cursor.toLocaleDateString("en-US", { weekday: "short" });
+      return `${dayOfWeek} ${formatIndicatorDate(cursor)}\n${formatIndicatorTime(cursor)}`;
+    }
+
+    if (period === "month") {
+      const cursor = new Date(selectedDate.getFullYear(), selectedDate.getMonth(), 1 + index);
+      return formatIndicatorDate(cursor);
+    }
+
+    if (period === "year") {
+      const cursor = new Date(selectedDate.getFullYear(), 0, 1 + index);
+      return formatIndicatorDate(cursor);
+    }
+
+    return "";
+  };
+
   const getDateRangeForPeriod = (period, selectedDate) => {
     const start = new Date(selectedDate);
     start.setHours(0, 0, 0, 0);
@@ -563,14 +741,22 @@
     const solarValue = chartState.solar[index] || 0;
     const windValue = chartState.wind[index] || 0;
     const totalValue = chartState.total[index] || 0;
-    const label = chartState.labels[index] || "";
+    const label = formatChartIndicator(chartState.period, selectedDateKey, index) || chartState.labels[index] || "";
     const unit = getSeriesUnitLabel(chartState.period);
 
+    const rows = [];
+    if (seriesVisibility.solar) {
+      rows.push(`<div>Solar: ${solarValue.toFixed(2)} ${unit}</div>`);
+    }
+    if (seriesVisibility.wind) {
+      rows.push(`<div>Wind: ${windValue.toFixed(2)} ${unit}</div>`);
+    }
+    if (seriesVisibility.total) {
+      rows.push(`<div>Total: ${totalValue.toFixed(2)} ${unit}</div>`);
+    }
     generationTooltip.innerHTML = `
-      <div class="generation-tooltip__time">${label}</div>
-      <div>Solar: ${solarValue.toFixed(2)} ${unit}</div>
-      <div>Wind: ${windValue.toFixed(2)} ${unit}</div>
-      <div>Total: ${totalValue.toFixed(2)} ${unit}</div>
+      <div class="generation-tooltip__time">${formatTooltipLabelHtml(label)}</div>
+      ${rows.join("") || `<div>Enable at least one series.</div>`}
     `;
 
     const offset = 14;
@@ -911,6 +1097,7 @@
     weatherDay.matchedWindRows = 0;
     weatherDay.firstMatchedTimestamp = null;
     weatherDay.lastMatchedTimestamp = null;
+    weatherDay.weatherRevision = "";
   };
 
   const isFreshCache = (cacheRow) => {
@@ -1004,6 +1191,7 @@
       weatherDay.error = "Set a facility location before adding assets.";
       weatherDay.solar = [];
       weatherDay.wind = [];
+      weatherDay.weatherRevision = "";
       scheduleRecompute();
       return;
     }
@@ -1023,63 +1211,26 @@
       const normalizedWindRecords =
         provider === "nrel" ? normalizeRecordYears(rawWindRecords, targetYear) : rawWindRecords;
 
-      weatherDay.provider = provider;
-      weatherDay.timeZone = timeZone;
-
       const solarRecords = alignRecordsForFacilityTimeZone(normalizedSolarRecords, timeZone);
       const windRecords = alignRecordsForFacilityTimeZone(normalizedWindRecords, timeZone);
-
-      const windSpeedKey = pickWindSpeedKey(windRecords);
-      const windTemperatureKey = pickWindTemperatureKey(windRecords);
-      const windPressureKey = pickWindPressureKey(windRecords);
-
-      const solarSlice = sliceDay(solarRecords, selectedDateKey, (record, timestamp) => ({
-        timestamp,
-        ghi: toNumber(record?.ghi, 0),
-        dni: toNumber(record?.dni, 0),
-        dhi: toNumber(record?.dhi, 0),
-        air_temperature: toNumber(record?.air_temperature, 20),
-      }));
-
-      const windSlice = sliceDay(windRecords, selectedDateKey, (record, timestamp) => ({
-        timestamp,
-        [windSpeedKey]: toNumber(record?.[windSpeedKey], 0),
-        ...(windTemperatureKey ? { [windTemperatureKey]: toNumber(record?.[windTemperatureKey], NaN) } : {}),
-        ...(windPressureKey ? { [windPressureKey]: toNumber(record?.[windPressureKey], NaN) } : {}),
-      }));
-
-      weatherDay.solar = solarSlice.points;
-      weatherDay.wind = windSlice.points;
-      weatherDay.matchedSolarRows = solarSlice.matchedCount;
-      weatherDay.matchedWindRows = windSlice.matchedCount;
-      weatherDay.firstMatchedTimestamp = solarSlice.firstMatchedTimestamp || windSlice.firstMatchedTimestamp;
-      weatherDay.lastMatchedTimestamp = solarSlice.lastMatchedTimestamp || windSlice.lastMatchedTimestamp;
-      weatherDay.allSolar = solarRecords;
-      weatherDay.allWind = windRecords;
-      weatherDay.windSpeedKey = windSpeedKey;
-      weatherDay.windTemperatureKey = windTemperatureKey;
-      weatherDay.windPressureKey = windPressureKey;
-
-      const needsSolar = solarAssets.length > 0;
-      const needsWind = windAssets.length > 0;
-      const solarReady = weatherDay.solar.length === POINTS_PER_DAY && weatherDay.matchedSolarRows > 0;
-      const windReady = weatherDay.wind.length === POINTS_PER_DAY && weatherDay.matchedWindRows > 0;
-
-      weatherDay.loaded = (!needsSolar || solarReady) && (!needsWind || windReady);
-
-      if (!weatherDay.loaded) {
-        const missingStreams = [];
-        if (needsSolar && !solarReady) {
-          missingStreams.push("solar");
-        }
-        if (needsWind && !windReady) {
-          missingStreams.push("wind");
-        }
-        weatherDay.error =
-          missingStreams.length === 1
-            ? `No ${missingStreams[0]} weather rows matched selected date after alignment. Check timezone/year normalization.`
-            : "No solar/wind weather rows matched selected date after alignment. Check timezone/year normalization.";
+      const weatherRevision = sharedCache
+        ? sharedCache.setParsedWeather(currentProject.id, {
+            provider,
+            timeZone: timeZone || "UTC",
+            raw15: { solar: solarRecords, wind: windRecords },
+            windMetric: { speed: pickWindSpeedKey(windRecords) },
+          })
+        : "";
+      if (sharedCache) {
+        sharedCache.setRevision(currentProject.id, "weather", weatherRevision);
       }
+      applyWeatherRecords({
+        provider,
+        timeZone,
+        solarRecords,
+        windRecords,
+        weatherRevision,
+      });
     } catch (error) {
       weatherDay.loaded = false;
       weatherDay.error = error.message || "Unable to fetch weather data.";
@@ -1089,6 +1240,7 @@
       weatherDay.matchedWindRows = 0;
       weatherDay.firstMatchedTimestamp = null;
       weatherDay.lastMatchedTimestamp = null;
+      weatherDay.weatherRevision = "";
     } finally {
       weatherDay.loading = false;
       scheduleRecompute();
@@ -1344,46 +1496,79 @@
     if (!generationChart) {
       return;
     }
+    if (!assetsChart && window.EnergyCharts) {
+      assetsChart = window.EnergyCharts.createAssetsChart(generationChart);
+    }
+    if (!assetsChart) {
+      return;
+    }
+
+    if (assetsChartLoading) {
+      assetsChartLoading.hidden = !weatherDay.loading;
+    }
 
     if (weatherDay.loading) {
       hideTooltip();
-      generationChart.innerHTML = '<text x="20" y="26" fill="#666666" font-size="14">Loading weather data…</text>';
+      assetsChart.update({ labels: [], solar: [], wind: [], total: [] });
       renderDonut(0, 0);
       return;
     }
 
     if (!weatherDay.loaded) {
       hideTooltip();
-      const message = weatherDay.error || "No weather data loaded.";
-      generationChart.innerHTML = `<text x="20" y="26" fill="#c85a5a" font-size="13">${message}</text>`;
       if (generationAxis) {
         generationAxis.innerHTML = "";
       }
+      assetsChart.update({ labels: [], solar: [], wind: [], total: [] });
       renderDonut(0, 0);
       renderDebugData({});
       return;
     }
 
-    const series = buildGenerationSeries();
+    const assetsRevision = buildAssetsRevision();
+    if (currentProject?.id && sharedCache && assetsRevision) {
+      sharedCache.setRevision(currentProject.id, "assets", assetsRevision);
+    }
+    const weatherRevision =
+      weatherDay.weatherRevision ||
+      (sharedCache
+        ? sharedCache.buildWeatherRevision({
+            provider: weatherDay.provider,
+            timeZone: weatherDay.timeZone,
+            solar: weatherDay.allSolar,
+            wind: weatherDay.allWind,
+          })
+        : "");
+    const generationCacheKey =
+      currentProject?.id && sharedCache
+        ? sharedCache.buildDerivedKey({
+            kind: "generation",
+            period: viewState.period,
+            selectedDateKey,
+            weatherRevision,
+            assetsRevision,
+          })
+        : "";
+    const cachedSeries =
+      currentProject?.id && sharedCache && generationCacheKey
+        ? sharedCache.getDerivedSeries(currentProject.id, "generation", generationCacheKey)
+        : null;
+    const series = cachedSeries || buildGenerationSeries();
+    if (!cachedSeries && currentProject?.id && sharedCache && generationCacheKey) {
+      sharedCache.setDerivedSeries(currentProject.id, "generation", generationCacheKey, series);
+    }
     const solarValues = series.solar;
     const windValues = series.wind;
     const totalValues = series.total;
-    const maxValue = Math.max(1, ...totalValues);
-    const width = 1000;
-    const height = 240;
-    const yScale = height / maxValue;
-    const zero = new Float64Array(series.labels.length);
-    const { lines: gridLines, labels: gridLabels } = buildGridLines(maxValue, width, height);
     const yAxisLabel = `Generation (${getSeriesUnitLabel(series.period)})`;
-
-    generationChart.innerHTML = `
-      <g class="generation-grid">${gridLines}</g>
-      <g class="generation-grid-labels">${gridLabels}</g>
-      <text x="20" y="132" fill="#2d2d2d" font-size="12" font-weight="700" transform="rotate(-90 20 132)">${yAxisLabel}</text>
-      <path d="${areaPath(windValues, zero, yScale, width, height)}" fill="rgba(31, 119, 180, 0.35)" stroke="rgba(31, 119, 180, 0.8)" stroke-width="1" />
-      <path d="${areaPath(solarValues, windValues, yScale, width, height)}" fill="rgba(249, 168, 37, 0.50)" stroke="rgba(249, 168, 37, 0.85)" stroke-width="1" />
-      <path d="${linePath(totalValues, yScale, width, height)}" fill="none" stroke="#000000" stroke-width="2" />
-    `;
+    assetsChart.update({
+      labels: series.labels,
+      solar: solarValues,
+      wind: windValues,
+      total: totalValues,
+      yTitle: yAxisLabel,
+      visible: seriesVisibility,
+    });
 
     chartState.labels = series.labels;
     chartState.solar = solarValues;
@@ -1392,7 +1577,7 @@
     chartState.unit = series.unit;
     chartState.period = series.period;
 
-    renderAxis(series.labels);
+    renderAxis([]);
 
     const solarEnergyKwh = solarValues.reduce((sum, value) => sum + value, 0);
     const windEnergyKwh = windValues.reduce((sum, value) => sum + value, 0);
@@ -1410,6 +1595,16 @@
       recomputeRaf = 0;
       renderChart();
     });
+  };
+
+  const scheduleRecomputeDebounced = () => {
+    if (recomputeDebounceTimer) {
+      clearTimeout(recomputeDebounceTimer);
+    }
+    recomputeDebounceTimer = setTimeout(() => {
+      recomputeDebounceTimer = null;
+      scheduleRecompute();
+    }, ASSET_EDIT_DEBOUNCE_MS);
   };
 
   const updateModelFromField = (model, field, prefix) => {
@@ -1454,7 +1649,7 @@
     card.querySelectorAll("input, select").forEach((field) => {
       const handler = () => {
         updateModelFromField(entry.model, field, prefix);
-        scheduleRecompute();
+        scheduleRecomputeDebounced();
         void persistAsset(entry, type);
       };
       field.addEventListener("input", handler);
@@ -1625,8 +1820,22 @@
         return;
       }
       viewState.period = period;
+      persistPeriod(currentProject?.id, viewState.period);
       applyPeriodToggleState();
       updateDateRangeReadout();
+      scheduleRecompute();
+    });
+  });
+
+  seriesToggleButtons.forEach((button) => {
+    button.addEventListener("click", () => {
+      const series = button.dataset.assetsSeries;
+      if (!series || !Object.prototype.hasOwnProperty.call(seriesVisibility, series)) {
+        return;
+      }
+      seriesVisibility[series] = !seriesVisibility[series];
+      button.classList.toggle("is-active", seriesVisibility[series]);
+      hideTooltip();
       scheduleRecompute();
     });
   });
@@ -1725,21 +1934,25 @@
   const initProject = async () => {
     await supabaseService.migrateLegacyLocalData();
     if (!selectedProjectId || !isValidProjectId(selectedProjectId)) {
-      window.location.href = "projects.html";
+      window.location.href = "/";
       return;
     }
 
     currentProject = await withRetry(() => supabaseService.getProject(selectedProjectId));
     if (!currentProject) {
-      window.location.href = "projects.html";
+      window.location.href = "/";
       return;
     }
 
     if (headerSettingsLink) {
-      headerSettingsLink.href = `index.html?projectId=${encodeURIComponent(currentProject.id)}`;
+      headerSettingsLink.href = `/projects/location.html?projectId=${encodeURIComponent(currentProject.id)}`;
+    }
+    if (sidebarStorageLink) {
+      sidebarStorageLink.href = `/projects/storage.html?projectId=${encodeURIComponent(currentProject.id)}`;
     }
 
     selectedDateKey = currentProject.selectedDate || DEFAULT_DATE_KEY;
+    viewState.period = loadPersistedPeriod(currentProject.id, viewState.period);
     applyPeriodToggleState();
     updateDateRangeReadout();
 
@@ -1753,7 +1966,11 @@
 
     await restoreProjectAssets();
     scheduleRecompute();
-    await fetchWeatherForDay();
+    if (restoreWeatherFromSharedCache()) {
+      scheduleRecompute();
+    } else {
+      await fetchWeatherForDay();
+    }
   };
 
   // Monitor API error status and show/hide banner

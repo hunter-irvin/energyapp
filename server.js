@@ -19,6 +19,7 @@ const WIND_ENDPOINT =
 const OPEN_METEO_FORECAST_ENDPOINT = "https://api.open-meteo.com/v1/forecast";
 const OPEN_METEO_HISTORY_ENDPOINT = "https://historical-forecast-api.open-meteo.com/v1/forecast";
 const ALLOW_INSECURE_OPEN_METEO_TLS = process.env.ENERGYAPP_ALLOW_INSECURE_OPEN_METEO_TLS === "1";
+const ALLOW_INSECURE_NREL_TLS = process.env.ENERGYAPP_ALLOW_INSECURE_NREL_TLS !== "0";
 const SUPABASE_URL = process.env.ENERGYAPP_SUPABASE_URL || process.env.SUPABASE_URL || "";
 const SUPABASE_ANON_KEY =
   process.env.ENERGYAPP_SUPABASE_ANON_KEY || process.env.SUPABASE_ANON_KEY || "";
@@ -57,8 +58,9 @@ const serveStatic = (req, res) => {
   const requestUrl = new URL(req.url, `http://${req.headers.host}`);
   const pathname = decodeURIComponent(requestUrl.pathname);
   const requestPath = pathname === "/" ? "/index.html" : pathname;
-  const relativePath = requestPath.replace(/^\/+/, "");
-  const rootDir = path.resolve(__dirname);
+  const normalizedPath = requestPath.endsWith("/") ? `${requestPath}index.html` : requestPath;
+  const relativePath = normalizedPath.replace(/^\/+/, "");
+  const rootDir = path.resolve(__dirname, "public");
   const filePath = path.resolve(rootDir, relativePath);
 
   if (!filePath.startsWith(rootDir + path.sep) && filePath !== rootDir) {
@@ -101,6 +103,8 @@ window.ENERGYAPP_SUPABASE_ANON_KEY = ${JSON.stringify(SUPABASE_ANON_KEY)};
 
 const isOpenMeteoHost = (hostname) =>
   hostname === "api.open-meteo.com" || hostname === "historical-forecast-api.open-meteo.com";
+
+const isNrelHost = (hostname) => hostname === "developer.nrel.gov";
 
 const isTlsIssuerError = (error) =>
   [
@@ -162,8 +166,8 @@ const fetchBuffer = (targetUrl, redirectsRemaining = 5, options = {}) =>
         const shouldRetryInsecure =
           !tlsRetryAttempted &&
           rejectUnauthorized &&
-          ALLOW_INSECURE_OPEN_METEO_TLS &&
-          isOpenMeteoHost(parsedUrl.hostname) &&
+          ((ALLOW_INSECURE_OPEN_METEO_TLS && isOpenMeteoHost(parsedUrl.hostname)) ||
+            (ALLOW_INSECURE_NREL_TLS && isNrelHost(parsedUrl.hostname))) &&
           isTlsIssuerError(error);
 
         if (shouldRetryInsecure) {

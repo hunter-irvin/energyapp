@@ -1,5 +1,28 @@
 # EnergyApp
 
+## App Structure (Current)
+
+This repo is organized as a static multi-page web app served from `public/`.
+
+- Landing page: `/` (`public/index.html`)
+- Project pages:
+  - `/projects/location.html`
+  - `/projects/generation.html`
+  - `/projects/storage.html`
+
+### Frontend layout
+
+- `public/assets/css/` shared styles
+- `public/assets/js/core/` shared runtime modules (`charting`, cache, models, data utilities, Supabase client/config)
+- `public/assets/js/features/` domain feature modules (for example generation modeling logic)
+- `public/assets/js/pages/` page entry scripts (`projects`, `location`, `generation`, `storage`)
+
+### Backend layout
+
+- `server.js` static hosting + API proxy routes
+- `supabase/` schema/bootstrap/migrations
+- `tests/` automated tests
+
 ## Asset Generation Formulas & Data Dictionary
 
 This section documents how the **Add Assets** page computes expected generation from NREL weather inputs.

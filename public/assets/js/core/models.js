@@ -32,6 +32,19 @@
    */
 
   /**
+   * @typedef {Object} StorageAsset
+   * @property {string} name
+   * @property {"lfp"|"nmc"} battery_type
+   * @property {number} capacity_kwh
+   * @property {number} soc_min
+   * @property {number} soc_init
+   * @property {number} charge_rate_c
+   * @property {number} round_trip_efficiency
+   * @property {number} temp_ref_c
+   * @property {number} temp_charge_derate_per_c
+   */
+
+  /**
    * @typedef {Object} Facility
    * @property {string} id
    * @property {string} name
@@ -94,6 +107,30 @@
     reference_height_m: 10,
   };
 
+  const STORAGE_TYPE_DEFAULTS = {
+    lfp: {
+      charge_rate_c: 0.5,
+      round_trip_efficiency: 0.92,
+      temp_ref_c: 25,
+      temp_charge_derate_per_c: 0.01,
+    },
+    nmc: {
+      charge_rate_c: 0.7,
+      round_trip_efficiency: 0.9,
+      temp_ref_c: 25,
+      temp_charge_derate_per_c: 0.012,
+    },
+  };
+
+  const DEFAULT_STORAGE_ASSET = {
+    name: "Storage 1",
+    battery_type: "lfp",
+    capacity_kwh: 1000,
+    soc_min: 0.1,
+    soc_init: 0.2,
+    ...STORAGE_TYPE_DEFAULTS.lfp,
+  };
+
   /**
    * @param {Partial<SolarAsset>} [overrides]
    * @returns {SolarAsset}
@@ -128,6 +165,36 @@
   };
 
   /**
+   * @param {Partial<StorageAsset>} [overrides]
+   * @returns {StorageAsset}
+   */
+  const createStorageAsset = (overrides = {}) => {
+    const batteryType = overrides.battery_type === "nmc" ? "nmc" : "lfp";
+    const defaults = STORAGE_TYPE_DEFAULTS[batteryType];
+    const capacityKwh = Number(overrides.capacity_kwh ?? DEFAULT_STORAGE_ASSET.capacity_kwh);
+    const socMin = Number(overrides.soc_min ?? DEFAULT_STORAGE_ASSET.soc_min);
+    const socInit = Number(overrides.soc_init ?? DEFAULT_STORAGE_ASSET.soc_init);
+    const chargeRate = Number(overrides.charge_rate_c ?? defaults.charge_rate_c);
+    const rte = Number(overrides.round_trip_efficiency ?? defaults.round_trip_efficiency);
+    const tempRef = Number(overrides.temp_ref_c ?? defaults.temp_ref_c);
+    const tempDerate = Number(overrides.temp_charge_derate_per_c ?? defaults.temp_charge_derate_per_c);
+
+    return {
+      ...DEFAULT_STORAGE_ASSET,
+      ...defaults,
+      ...overrides,
+      battery_type: batteryType,
+      capacity_kwh: Number.isFinite(capacityKwh) ? Math.max(0, capacityKwh) : DEFAULT_STORAGE_ASSET.capacity_kwh,
+      soc_min: Number.isFinite(socMin) ? Math.max(0, Math.min(1, socMin)) : DEFAULT_STORAGE_ASSET.soc_min,
+      soc_init: Number.isFinite(socInit) ? Math.max(0, Math.min(1, socInit)) : DEFAULT_STORAGE_ASSET.soc_init,
+      charge_rate_c: Number.isFinite(chargeRate) ? Math.max(0, chargeRate) : defaults.charge_rate_c,
+      round_trip_efficiency: Number.isFinite(rte) ? Math.max(0, Math.min(1, rte)) : defaults.round_trip_efficiency,
+      temp_ref_c: Number.isFinite(tempRef) ? tempRef : defaults.temp_ref_c,
+      temp_charge_derate_per_c: Number.isFinite(tempDerate) ? Math.max(0, tempDerate) : defaults.temp_charge_derate_per_c,
+    };
+  };
+
+  /**
    * @param {Partial<Facility>} [overrides]
    * @returns {Facility}
    */
@@ -143,8 +210,11 @@
   window.EnergyModels = {
     DEFAULT_SOLAR_ASSET,
     DEFAULT_WIND_ASSET,
+    STORAGE_TYPE_DEFAULTS,
+    DEFAULT_STORAGE_ASSET,
     createSolarAsset,
     createWindAsset,
+    createStorageAsset,
     createFacility,
   };
 })();

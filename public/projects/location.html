@@ -3,9 +3,9 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Energy Explorer</title>
+    <title>Location | Energy Explorer</title>
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
-    <link rel="stylesheet" href="styles.css" />
+    <link rel="stylesheet" href="/assets/css/styles.css" />
   </head>
   <body class="project-page-body">
     <header class="project-header">
@@ -13,16 +13,17 @@
         <label class="project-header__label" for="header-project-name">Project Name</label>
         <input id="header-project-name" class="project-header__input" type="text" placeholder="Untitled Project" />
       </div>
-      <a class="btn" href="projects.html">Exit</a>
+      <a class="btn" href="/">Exit</a>
     </header>
     <main class="page page--project">
       <aside class="project-sidebar" aria-label="Project navigation">
-        <a class="project-nav-btn project-nav-btn--active" href="index.html">Settings</a>
-        <a class="project-nav-btn" id="header-assets-link" href="assets.html">Assets</a>
+        <a class="project-nav-btn project-nav-btn--active" href="/projects/location.html">Location</a>
+        <a class="project-nav-btn" id="header-assets-link" href="/projects/generation.html">Generation</a>
+        <a class="project-nav-btn" id="header-storage-link" href="/projects/storage.html">Storage</a>
       </aside>
       <section class="card">
         <header class="card__header">
-          <h1>Facility Settings</h1>
+          <h1>Location</h1>
         </header>
         <div class="layout">
           <div class="settings">
@@ -63,6 +64,9 @@
               📅
             </button>
             <input class="date-picker" id="date-picker" type="date" aria-label="Select date" />
+            <button class="btn btn--icon" id="weather-shift-back" type="button" aria-label="Previous range">◀</button>
+            <span class="assets-date-range-readout" id="weather-date-range-readout">--</span>
+            <button class="btn btn--icon" id="weather-shift-forward" type="button" aria-label="Next range">▶</button>
           </div>
           <div class="toggle-group">
             <button class="btn btn--toggle is-active" data-view="chart">Chart</button>
@@ -85,11 +89,10 @@
             <p class="chart-panel__date" id="chart-date">February 9, 2024</p>
           </header>
           <div class="chart-display" id="chart-display" title="Solar/wind values for each time bucket.">
-            <svg class="chart-svg" id="chart-svg" viewBox="0 0 600 220" preserveAspectRatio="none"></svg>
+            <canvas class="chart-svg" id="chart-svg" aria-label="Weather chart"></canvas>
             <div class="chart-hover-line" id="chart-hover-line" hidden></div>
             <div class="chart-tooltip" id="chart-tooltip" hidden></div>
-            <div class="chart-axis-title chart-axis-title--left">Wind (m/s)</div>
-            <div class="chart-axis-title chart-axis-title--right">Solar (W/m²)</div>
+            <div class="chart-loading" id="settings-chart-loading" hidden>Loading...</div>
           </div>
           <div class="chart-axis chart-axis--below" id="chart-axis"></div>
           <div class="table-panel" id="table-panel" hidden>
@@ -117,12 +120,15 @@
     </main>
 
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-    <script src="config.local.js"></script>
+    <script src="/config.local.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
+    <script src="/assets/js/core/charting.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
-    <script src="supabase-config.js"></script>
-    <script src="supabase-client.js"></script>
-    <script src="models.js"></script>
-    <script src="data-utils.js"></script>
-    <script src="app.js"></script>
+    <script src="/assets/js/core/supabase-config.js"></script>
+    <script src="/assets/js/core/supabase-client.js"></script>
+    <script src="/assets/js/core/shared-cache.js"></script>
+    <script src="/assets/js/core/models.js"></script>
+    <script src="/assets/js/core/data-utils.js"></script>
+    <script src="/assets/js/pages/location.js"></script>
   </body>
 </html>
