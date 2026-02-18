@@ -1,6 +1,5 @@
 
 (() => {
-  const PROXY_ENDPOINT = "/api/nrel-proxy";
   const WEATHER_PROXY_ENDPOINT = "/api/weather-proxy";
   const DEFAULT_DATE_KEY = "2014-02-09";
   const NREL_CACHE_DATE_KEY = "all";
@@ -12,11 +11,19 @@
   const STORAGE_DRAFT_SUFFIX = "storageAssetsDraft";
   const PERIOD_STORAGE_SUFFIX = "selectedPeriod";
   const PERIOD_OPTIONS = ["day", "week", "month", "year"];
+  const WEATHER_PROVIDERS = {
+    nrel: "NREL",
+    open_meteo: "Open-Meteo",
+  };
   const WEATHER_CACHE_KEYS = ["energyapp.db.weatherCache", "energyapp.db.nrelCache"];
   const supabaseService = window.EnergySupabaseService;
   const sharedCache = window.EnergySharedCache || null;
 
   const headerProjectNameInput = document.getElementById("storage-header-project-name");
+  const headerProjectNameDisplay = document.getElementById("storage-header-project-name-display");
+  const headerProjectNameEditButton = document.getElementById("storage-header-project-name-edit");
+  const headerProjectNameSaveButton = document.getElementById("storage-header-project-name-save");
+  const headerProjectNameCancelButton = document.getElementById("storage-header-project-name-cancel");
   const storageSettingsLink = document.getElementById("storage-settings-link");
   const storageAssetsLink = document.getElementById("storage-assets-link");
   const storageAssetsHeaderLink = document.getElementById("storage-assets-header-link");
@@ -36,7 +43,6 @@
   const chartSvg = document.getElementById("storage-chart");
   const storageChartLoading = document.getElementById("storage-chart-loading");
   const chartAxis = document.getElementById("storage-axis");
-  const chartTooltip = document.getElementById("storage-tooltip");
   const debugOutput = document.getElementById("storage-debug-output");
 
   const periodButtons = Array.from(document.querySelectorAll("[data-storage-period]"));
@@ -71,7 +77,7 @@
   const seriesVisibility = {
     solar: true,
     wind: true,
-    total: true,
+    total: false,
     soc: true,
   };
   const storageAssets = [];
@@ -93,6 +99,81 @@
     weatherRevision: "",
   };
 
+  const STORAGE_FIELD_HELP = {
+    capacity_kwh: {
+      definition: "Total usable battery energy capacity used to convert SOC into stored energy.",
+      tokens: ["E_CAP", "SOC", "P_CAP"],
+    },
+    battery_type: {
+      definition:
+        "Chemistry preset that selects default advanced parameters for charge-rate, efficiency, and temperature derate.",
+      tokens: ["P_CAP", "ETA", "K_DERATE"],
+    },
+    soc_init: {
+      definition: "Initial state-of-charge used at simulation start before interval updates.",
+      tokens: ["SOC_INIT", "SOC_0"],
+    },
+    charge_rate_c: {
+      definition: "Charge C-rate limit used to cap charging power as a function of capacity.",
+      tokens: ["C_RATE", "P_CAP"],
+    },
+    round_trip_efficiency: {
+      definition: "Round-trip efficiency that sets charge efficiency via eta = sqrt(round_trip_efficiency).",
+      tokens: ["RTE", "ETA", "DELTA_E"],
+    },
+    temp_ref_c: {
+      definition: "Reference temperature used by temperature derating in charge power calculations.",
+      tokens: ["T_REF", "TEMP_FACTOR"],
+    },
+    temp_charge_derate_per_c: {
+      definition: "Derate coefficient applied per degree away from reference temperature.",
+      tokens: ["K_DERATE", "TEMP_FACTOR"],
+    },
+  };
+
+  const setProjectNameDisplay = (name) => {
+    const resolvedName = String(name || "Untitled Facility").trim() || "Untitled Facility";
+    if (headerProjectNameDisplay) {
+      headerProjectNameDisplay.textContent = resolvedName;
+    }
+    if (headerProjectNameInput) {
+      headerProjectNameInput.value = resolvedName;
+      headerProjectNameInput.size = Math.min(Math.max(resolvedName.length + 1, 8), 40);
+    }
+  };
+
+  const setProjectNameEditorMode = (isEditing) => {
+    if (headerProjectNameDisplay) {
+      headerProjectNameDisplay.hidden = isEditing;
+    }
+    if (headerProjectNameEditButton) {
+      headerProjectNameEditButton.hidden = isEditing;
+    }
+    if (headerProjectNameInput) {
+      headerProjectNameInput.hidden = !isEditing;
+    }
+    if (headerProjectNameSaveButton) {
+      headerProjectNameSaveButton.hidden = !isEditing;
+    }
+    if (headerProjectNameCancelButton) {
+      headerProjectNameCancelButton.hidden = !isEditing;
+    }
+  };
+
+  const saveProjectName = async () => {
+    if (!currentProject || !headerProjectNameInput) {
+      return;
+    }
+    const nextName = String(headerProjectNameInput.value || "").trim() || "Untitled Facility";
+    try {
+      currentProject = await withRetry(() => supabaseService.updateProject(currentProject.id, { name: nextName }));
+      setProjectNameDisplay(currentProject.name);
+      setProjectNameEditorMode(false);
+      if (storageProjectName) storageProjectName.textContent = currentProject.name || "Untitled Facility";
+      if (storageFacilityName) storageFacilityName.textContent = currentProject.name || "Untitled Facility";
+    } catch (error) {}
+  };
+
   const pad2 = (value) => String(value).padStart(2, "0");
   const cleanText = (value) => String(value || "").replace(/^\ufeff/, "").trim();
   const toNumber = (value, fallback = 0) => {
@@ -101,11 +182,10 @@
   };
   const clamp = (value, min, max) => Math.min(max, Math.max(min, value));
   const clamp01 = (value) => clamp(value, 0, 1);
+  const SOC_PERCENT_FIELDS = new Set(["soc_init"]);
   const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
   const isQuotaExceededError = (error) =>
     error && (error.name === "QuotaExceededError" || error.name === "NS_ERROR_DOM_QUOTA_REACHED");
-  const isTlsIssuerErrorMessage = (message) =>
-    /unable to get local issuer certificate|unable to verify the first certificate|self.?signed/i.test(String(message || ""));
 
   const getScopedStorageKey = (suffix) => {
     if (!currentProject?.id) return "";
@@ -234,9 +314,8 @@
     end.setHours(23, 0, 0, 0);
     return end;
   };
-  const formatIndicatorDate = (date) => `${pad2(date.getMonth() + 1)}/${pad2(date.getDate())}`;
+  const formatIndicatorDate = (date) => `${date.getMonth() + 1}/${date.getDate()}`;
   const formatIndicatorTime = (date) => `${pad2(date.getHours())}:${pad2(date.getMinutes())}`;
-  const formatTooltipLabelHtml = (text) => String(text || "").replace(/\n/g, "<br />");
   const formatChartIndicator = (period, dateKey, index) => {
     const selectedDate = parseDateKey(dateKey);
     if (!(selectedDate instanceof Date) || Number.isNaN(selectedDate.getTime())) {
@@ -255,7 +334,7 @@
       const cursor = new Date(weekStart);
       cursor.setHours(cursor.getHours() + index);
       const dayOfWeek = cursor.toLocaleDateString("en-US", { weekday: "short" });
-      return `${dayOfWeek} ${formatIndicatorDate(cursor)}\n${formatIndicatorTime(cursor)}`;
+      return `${formatIndicatorTime(cursor)}\n${dayOfWeek} ${formatIndicatorDate(cursor)}`;
     }
 
     if (period === "month") {
@@ -269,6 +348,19 @@
     }
 
     return "";
+  };
+
+  const buildDisplayLabels = (labels, period, dateKey) => {
+    if (period !== "week") {
+      return labels;
+    }
+    return labels.map((label, index) => {
+      if (Array.isArray(label)) {
+        return label;
+      }
+      const formatted = formatChartIndicator("week", dateKey, index);
+      return formatted ? formatted.split("\n") : label;
+    });
   };
 
   const getDateRangeForPeriod = (period, selectedDate) => {
@@ -322,48 +414,10 @@
     return cleaned;
   };
 
-  const parseCsv = (csvText) => {
-    const lines = csvText.split(/\r?\n/).map((line) => cleanText(line)).filter(Boolean);
-    const headerIndex = lines.findIndex((line) => {
-      const lower = line.toLowerCase();
-      return lower.startsWith("year,") || lower.startsWith("timestamp,");
-    });
-    if (headerIndex < 0) return [];
-    const headers = lines[headerIndex].split(",").map((header) => normalizeHeader(header));
-    return lines.slice(headerIndex + 1).map((line) => {
-      const values = line.split(",");
-      const row = {};
-      headers.forEach((header, index) => {
-        const value = cleanText(values[index]);
-        if (!header) return;
-        if (value === "") {
-          row[header] = null;
-          return;
-        }
-        const numeric = Number(value);
-        row[header] = Number.isFinite(numeric) ? numeric : value;
-      });
-      return row;
-    });
-  };
-
   const buildUrl = (base, params) => {
     const url = new URL(base, window.location.origin);
     Object.entries(params).forEach(([key, value]) => url.searchParams.set(key, value));
     return url.toString();
-  };
-
-  const parseError = async (responses) => {
-    const failed = responses.find((response) => !response.ok);
-    if (!failed) return "";
-    try {
-      const errorPayload = await failed.clone().json();
-      if (Array.isArray(errorPayload?.errors) && errorPayload.errors.length > 0) {
-        return errorPayload.errors.join(" ");
-      }
-    } catch (error) {}
-    const text = await failed.text();
-    return text || "Unable to fetch datasets.";
   };
 
   const fetchTimeZone = async ({ lat, lng }) => {
@@ -392,27 +446,118 @@
       hour12: false,
     });
 
-  const shiftRecordsToTimeZone = (records, timeZone) => {
-    if (!timeZone || timeZone === "UTC") return records;
+  const TIMESTAMP_WITH_ZONE_RE = /(?:z|[+-]\d{2}:?\d{2})$/i;
+
+  const getTimestampLike = (record) =>
+    cleanText(
+      record?.timestamp || record?.time || record?.datetime || record?.date_time || record?.local_time || record?.utc_time
+    );
+
+  const hasDiscreteDateParts = (record) =>
+    [record?.year, record?.month, record?.day, record?.hour, record?.minute].every((value) =>
+      Number.isFinite(Number(value))
+    );
+
+  const buildNormalizedTimestamp = (record) => {
+    if (hasDiscreteDateParts(record)) {
+      return `${record.year}-${pad2(record.month)}-${pad2(record.day)}T${pad2(record.hour)}:${pad2(record.minute)}:00`;
+    }
+    return getTimestampLike(record) || null;
+  };
+
+  const detectRecordTimeBasis = (records) => {
+    if (!records.length) {
+      return "unknown";
+    }
+
+    const sample = records.slice(0, 48);
+    const hasTimestampValues = sample.some((record) => Boolean(getTimestampLike(record)));
+    const hasZonedTimestamp = sample.some((record) => {
+      const timestampLike = getTimestampLike(record);
+      return timestampLike && TIMESTAMP_WITH_ZONE_RE.test(timestampLike);
+    });
+
+    if (hasZonedTimestamp) {
+      return "absolute";
+    }
+
+    const hasDateParts = sample.some((record) => hasDiscreteDateParts(record));
+    if (hasDateParts && !hasTimestampValues) {
+      return "absolute";
+    }
+
+    if (hasDateParts) {
+      return "local_wall_clock";
+    }
+
+    return "local_wall_clock";
+  };
+
+  const normalizeRecordsToTimeZone = (records, timeZone) => {
+    if (!timeZone || timeZone === "UTC") {
+      return records.map((record) => ({
+        ...record,
+        normalized_timestamp: record.normalized_timestamp || buildNormalizedTimestamp(record),
+      }));
+    }
+
     const formatter = getTimeZoneFormatter(timeZone);
     return records.map((record) => {
-      const year = Number(record.year);
-      const month = Number(record.month);
-      const day = Number(record.day);
-      const hour = Number(record.hour ?? 0);
-      const minute = Number(record.minute ?? 0);
-      if (![year, month, day, hour, minute].every(Number.isFinite)) return record;
-      const utcDate = new Date(Date.UTC(year, month - 1, day, hour, minute, 0));
+      let utcDate = null;
+      const timestampLike = getTimestampLike(record);
+      if (timestampLike) {
+        const parsed = new Date(timestampLike);
+        if (!Number.isNaN(parsed.getTime())) {
+          utcDate = parsed;
+        }
+      }
+
+      if (!utcDate && hasDiscreteDateParts(record)) {
+        const year = Number(record.year);
+        const month = Number(record.month);
+        const day = Number(record.day);
+        const hour = Number(record.hour ?? 0);
+        const minute = Number(record.minute ?? 0);
+        if ([year, month, day, hour, minute].every(Number.isFinite)) {
+          utcDate = new Date(Date.UTC(year, month - 1, day, hour, minute, 0));
+        }
+      }
+
+      if (!utcDate) {
+        return {
+          ...record,
+          normalized_timestamp: record.normalized_timestamp || buildNormalizedTimestamp(record),
+        };
+      }
+
       const parts = formatter.formatToParts(utcDate).reduce((acc, part) => ({ ...acc, [part.type]: part.value }), {});
+      const year = Number(parts.year);
+      const month = Number(parts.month);
+      const day = Number(parts.day);
+      const hour = Number(parts.hour);
+      const minute = Number(parts.minute);
+
       return {
         ...record,
-        year: Number(parts.year),
-        month: Number(parts.month),
-        day: Number(parts.day),
-        hour: Number(parts.hour),
-        minute: Number(parts.minute),
+        year,
+        month,
+        day,
+        hour,
+        minute,
+        normalized_timestamp: `${year}-${pad2(month)}-${pad2(day)}T${pad2(hour)}:${pad2(minute)}:00`,
       };
     });
+  };
+
+  const alignRecordsForFacilityTimeZone = (records, timeZone) => {
+    const timeBasis = detectRecordTimeBasis(records);
+    if (timeBasis === "absolute") {
+      return normalizeRecordsToTimeZone(records, timeZone);
+    }
+    return records.map((record) => ({
+      ...record,
+      normalized_timestamp: record.normalized_timestamp || buildNormalizedTimestamp(record),
+    }));
   };
 
   const normalizeRecordYears = (records, targetYear) =>
@@ -420,59 +565,13 @@
       record.year && Number(record.year) !== Number(targetYear) ? { ...record, year: Number(targetYear) } : record
     );
 
-  const buildHourlyAggregation = (records, metrics) => {
-    const buckets = new Map();
-    records.forEach((record) => {
-      const key = `${record.year}-${pad2(record.month)}-${pad2(record.day)}T${pad2(record.hour)}:00`;
-      if (!buckets.has(key)) buckets.set(key, { timestamp: key, sums: {}, counts: {} });
-      const bucket = buckets.get(key);
-      metrics.forEach((metric) => {
-        const value = Number(record[metric]);
-        if (!Number.isFinite(value)) return;
-        bucket.sums[metric] = (bucket.sums[metric] || 0) + value;
-        bucket.counts[metric] = (bucket.counts[metric] || 0) + 1;
-      });
-    });
-    return Array.from(buckets.values()).map((bucket) => {
-      const row = { timestamp: bucket.timestamp };
-      metrics.forEach((metric) => {
-        const count = bucket.counts[metric] || 0;
-        row[metric] = count ? bucket.sums[metric] / count : 0;
-      });
-      return row;
-    });
-  };
-
-  const toDailyAggregation = (records, metrics) => {
-    const buckets = new Map();
-    records.forEach((record) => {
-      const key = `${record.year}-${pad2(record.month)}-${pad2(record.day)}`;
-      if (!buckets.has(key)) buckets.set(key, { date: key, sums: {}, counts: {} });
-      const bucket = buckets.get(key);
-      metrics.forEach((metric) => {
-        const value = Number(record[metric]);
-        if (!Number.isFinite(value)) return;
-        bucket.sums[metric] = (bucket.sums[metric] || 0) + value;
-        bucket.counts[metric] = (bucket.counts[metric] || 0) + 1;
-      });
-    });
-    return Array.from(buckets.values()).map((bucket) => {
-      const row = { date: bucket.date };
-      metrics.forEach((metric) => {
-        const count = bucket.counts[metric] || 0;
-        row[metric] = count ? bucket.sums[metric] / count : 0;
-      });
-      return row;
-    });
-  };
-
   const hydrateWeatherStore = (solarPayload, windPayload, timeZone) => {
     const selectedDate = parseDateKey(selectedDateKey) || new Date();
     const year = selectedDate.getFullYear();
     const normalizedSolar = normalizeRecordYears(solarPayload, year);
     const normalizedWind = normalizeRecordYears(windPayload, year);
-    const shiftedSolar = shiftRecordsToTimeZone(normalizedSolar, timeZone);
-    const shiftedWind = shiftRecordsToTimeZone(normalizedWind, timeZone);
+    const shiftedSolar = alignRecordsForFacilityTimeZone(normalizedSolar, timeZone);
+    const shiftedWind = alignRecordsForFacilityTimeZone(normalizedWind, timeZone);
 
     const windSample = shiftedWind.find(Boolean) || {};
     const speedKeys = Object.keys(windSample).filter((key) => /^windspeed_\d+m$/.test(key));
@@ -487,19 +586,91 @@
 
     weatherState.raw15.solar = shiftedSolar;
     weatherState.raw15.wind = shiftedWind;
-
-    const solarMetrics = ["ghi", "dni", "dhi", "air_temperature", "wind_speed"];
-    const windMetrics = Object.keys(windSample).filter((key) => /^(windspeed|temperature|pressure)_\d+m$/.test(key));
-    weatherState.hourly.solar = buildHourlyAggregation(shiftedSolar, solarMetrics);
-    weatherState.hourly.wind = buildHourlyAggregation(shiftedWind, windMetrics);
-    weatherState.daily.solar = toDailyAggregation(shiftedSolar, solarMetrics);
-    weatherState.daily.wind = toDailyAggregation(shiftedWind, windMetrics);
+    weatherState.hourly.solar = [];
+    weatherState.hourly.wind = [];
+    weatherState.daily.solar = [];
+    weatherState.daily.wind = [];
   };
 
   const isFreshCache = (cacheRow) => {
     if (!cacheRow?.fetched_at) return false;
     const fetchedAt = new Date(cacheRow.fetched_at).getTime();
     return Number.isFinite(fetchedAt) && Date.now() - fetchedAt <= NREL_CACHE_TTL_MS;
+  };
+
+  const getProviderLabel = (provider) => WEATHER_PROVIDERS[provider] || provider;
+
+  const loadPersistedOrRemoteWeather = async ({ forceRefresh = false } = {}) => {
+    const provider = currentProject?.weatherProvider || "nrel";
+    const sourceYear = provider === "nrel" ? NREL_SOURCE_YEAR : null;
+    const wkt = `POINT(${currentProject.lng} ${currentProject.lat})`;
+    const cacheLookup = { sourceYear, intervalMinutes: NREL_INTERVAL_MINUTES };
+    const [cachedSolar, cachedWind] = await Promise.all([
+      supabaseService.getWeatherCache(currentProject.id, provider, "solar", NREL_CACHE_DATE_KEY, cacheLookup),
+      supabaseService.getWeatherCache(currentProject.id, provider, "wind", NREL_CACHE_DATE_KEY, cacheLookup),
+    ]);
+
+    if (!forceRefresh && isFreshCache(cachedSolar) && isFreshCache(cachedWind) && cachedSolar?.payload && cachedWind?.payload) {
+      return {
+        provider,
+        rawSolarRecords: cachedSolar.payload,
+        rawWindRecords: cachedWind.payload,
+        timeZone:
+          cachedSolar.timezone ||
+          cachedWind.timezone ||
+          (await fetchTimeZone({ lat: currentProject.lat, lng: currentProject.lng })),
+      };
+    }
+
+    const weatherResponse = await fetch(
+      buildUrl(WEATHER_PROXY_ENDPOINT, {
+        provider,
+        lat: String(currentProject.lat),
+        lng: String(currentProject.lng),
+        mode: "load_default",
+      })
+    );
+
+    if (!weatherResponse.ok) {
+      throw new Error(`Unable to load ${getProviderLabel(provider)} weather data for selected location.`);
+    }
+
+    const weatherPayload = await weatherResponse.json();
+    const rawSolarRecords = weatherPayload?.solar || [];
+    const rawWindRecords = weatherPayload?.wind || [];
+    const timeZone = await fetchTimeZone({ lat: currentProject.lat, lng: currentProject.lng });
+    const fetchedAt = new Date().toISOString();
+
+    await Promise.all([
+      supabaseService.upsertWeatherCache({
+        projectId: currentProject.id,
+        provider,
+        dataset: "solar",
+        dateKey: NREL_CACHE_DATE_KEY,
+        sourceYear,
+        intervalMinutes: NREL_INTERVAL_MINUTES,
+        wkt,
+        timezone: timeZone,
+        source: weatherPayload?.meta?.provider || provider,
+        fetchedAt,
+        payload: rawSolarRecords,
+      }),
+      supabaseService.upsertWeatherCache({
+        projectId: currentProject.id,
+        provider,
+        dataset: "wind",
+        dateKey: NREL_CACHE_DATE_KEY,
+        sourceYear,
+        intervalMinutes: NREL_INTERVAL_MINUTES,
+        wkt,
+        timezone: timeZone,
+        source: weatherPayload?.meta?.provider || provider,
+        fetchedAt,
+        payload: rawWindRecords,
+      }),
+    ]);
+
+    return { provider, rawSolarRecords, rawWindRecords, timeZone };
   };
 
   const fetchWeather = async ({ forceRefresh = false } = {}) => {
@@ -514,89 +685,22 @@
     scheduleRecompute();
 
     try {
-      const nrelCacheLookup = { sourceYear: NREL_SOURCE_YEAR, intervalMinutes: NREL_INTERVAL_MINUTES };
-      const openMeteoCacheLookup = { sourceYear: null, intervalMinutes: NREL_INTERVAL_MINUTES };
-      const [cachedSolar, cachedWind, cachedSolarOpenMeteo, cachedWindOpenMeteo] = await Promise.all([
-        supabaseService.getNrelCache(currentProject.id, "solar", NREL_CACHE_DATE_KEY, nrelCacheLookup),
-        supabaseService.getNrelCache(currentProject.id, "wind", NREL_CACHE_DATE_KEY, nrelCacheLookup),
-        supabaseService.getWeatherCache(currentProject.id, "open_meteo", "solar", NREL_CACHE_DATE_KEY, openMeteoCacheLookup),
-        supabaseService.getWeatherCache(currentProject.id, "open_meteo", "wind", NREL_CACHE_DATE_KEY, openMeteoCacheLookup),
-      ]);
-
-      let solarPayload;
-      let windPayload;
-      let timeZone = cachedSolar?.timezone || cachedWind?.timezone || "UTC";
-      let fetchedProvider = "nrel";
-
-      if (!forceRefresh && isFreshCache(cachedSolar) && isFreshCache(cachedWind) && cachedSolar?.payload && cachedWind?.payload) {
-        solarPayload = cachedSolar.payload;
-        windPayload = cachedWind.payload;
-      } else if (
-        !forceRefresh &&
-        isFreshCache(cachedSolarOpenMeteo) &&
-        isFreshCache(cachedWindOpenMeteo) &&
-        cachedSolarOpenMeteo?.payload &&
-        cachedWindOpenMeteo?.payload
-      ) {
-        solarPayload = cachedSolarOpenMeteo.payload;
-        windPayload = cachedWindOpenMeteo.payload;
-        timeZone = cachedSolarOpenMeteo?.timezone || cachedWindOpenMeteo?.timezone || "UTC";
-        fetchedProvider = "open_meteo";
-      } else {
-        const wkt = `POINT(${currentProject.lng} ${currentProject.lat})`;
-        try {
-          const [solarResponse, windResponse] = await Promise.all([
-            fetch(buildUrl(PROXY_ENDPOINT, { dataset: "solar", wkt, interval: String(NREL_INTERVAL_MINUTES) })),
-            fetch(buildUrl(PROXY_ENDPOINT, { dataset: "wind", wkt, interval: String(NREL_INTERVAL_MINUTES) })),
-          ]);
-          const responseError = await parseError([solarResponse, windResponse]);
-          if (responseError) throw new Error(responseError);
-
-          const [solarCsv, windCsv] = await Promise.all([solarResponse.text(), windResponse.text()]);
-          solarPayload = parseCsv(solarCsv);
-          windPayload = parseCsv(windCsv);
-          timeZone = await fetchTimeZone({ lat: currentProject.lat, lng: currentProject.lng });
-          fetchedProvider = "nrel";
-        } catch (nrelError) {
-          if (!isTlsIssuerErrorMessage(nrelError?.message)) throw nrelError;
-
-          const openMeteoResponse = await fetch(
-            buildUrl(WEATHER_PROXY_ENDPOINT, {
-              provider: "open_meteo",
-              lat: String(currentProject.lat),
-              lng: String(currentProject.lng),
-              mode: "load_default",
-            })
-          );
-          const openMeteoError = await parseError([openMeteoResponse]);
-          if (openMeteoError) throw new Error(openMeteoError);
-          const openMeteoPayload = await openMeteoResponse.json();
-          solarPayload = Array.isArray(openMeteoPayload?.solar) ? openMeteoPayload.solar : [];
-          windPayload = Array.isArray(openMeteoPayload?.wind) ? openMeteoPayload.wind : [];
-          timeZone = openMeteoPayload?.meta?.timezone || "UTC";
-          fetchedProvider = "open_meteo";
-        }
-
-        const fetchedAt = new Date().toISOString();
-        if (fetchedProvider === "nrel") {
-          void supabaseService.upsertNrelCache({ projectId: currentProject.id, dataset: "solar", dateKey: NREL_CACHE_DATE_KEY, sourceYear: NREL_SOURCE_YEAR, intervalMinutes: NREL_INTERVAL_MINUTES, wkt, timezone: timeZone, source: "nrel_proxy", fetchedAt, payload: solarPayload });
-          void supabaseService.upsertNrelCache({ projectId: currentProject.id, dataset: "wind", dateKey: NREL_CACHE_DATE_KEY, sourceYear: NREL_SOURCE_YEAR, intervalMinutes: NREL_INTERVAL_MINUTES, wkt, timezone: timeZone, source: "nrel_proxy", fetchedAt, payload: windPayload });
-        } else {
-          void supabaseService.upsertWeatherCache({ projectId: currentProject.id, provider: "open_meteo", dataset: "solar", dateKey: NREL_CACHE_DATE_KEY, sourceYear: null, intervalMinutes: NREL_INTERVAL_MINUTES, wkt, timezone: timeZone, source: "weather_proxy", fetchedAt, payload: solarPayload });
-          void supabaseService.upsertWeatherCache({ projectId: currentProject.id, provider: "open_meteo", dataset: "wind", dateKey: NREL_CACHE_DATE_KEY, sourceYear: null, intervalMinutes: NREL_INTERVAL_MINUTES, wkt, timezone: timeZone, source: "weather_proxy", fetchedAt, payload: windPayload });
-        }
-      }
-
-      weatherState.source.solar = solarPayload;
-      weatherState.source.wind = windPayload;
-      hydrateWeatherStore(solarPayload, windPayload, timeZone);
+      const { provider, rawSolarRecords, rawWindRecords, timeZone } = await withRetry(() =>
+        loadPersistedOrRemoteWeather({ forceRefresh })
+      );
+      const [targetYear] = selectedDateKey.split("-");
+      const normalizedSolarRecords =
+        provider === "nrel" ? normalizeRecordYears(rawSolarRecords, targetYear) : rawSolarRecords;
+      const normalizedWindRecords =
+        provider === "nrel" ? normalizeRecordYears(rawWindRecords, targetYear) : rawWindRecords;
+      weatherState.source.solar = rawSolarRecords;
+      weatherState.source.wind = rawWindRecords;
+      hydrateWeatherStore(normalizedSolarRecords, normalizedWindRecords, timeZone);
       if (currentProject?.id && sharedCache) {
         const weatherRevision = sharedCache.setParsedWeather(currentProject.id, {
-          provider: fetchedProvider,
+          provider,
           timeZone: timeZone || "UTC",
           raw15: weatherState.raw15,
-          hourly: weatherState.hourly,
-          daily: weatherState.daily,
           windMetric: weatherState.windMetric,
         });
         weatherState.weatherRevision = weatherRevision;
@@ -628,58 +732,130 @@
       return Number.isFinite(windTemp) ? windTemp : 25;
     };
 
+    const buildWeatherMaps = () => {
+      const solarMap = new Map();
+      weatherState.raw15.solar.forEach((record) => {
+        if (record.year == null || record.month == null || record.day == null) {
+          return;
+        }
+        const key = `${record.year}-${pad2(record.month)}-${pad2(record.day)}T${pad2(record.hour || 0)}:${pad2(
+          record.minute || 0
+        )}`;
+        solarMap.set(key, {
+          ghi: toNumber(record?.ghi, 0),
+          dni: toNumber(record?.dni, 0),
+          dhi: toNumber(record?.dhi, 0),
+          air_temperature: toNumber(record?.air_temperature, 20),
+        });
+      });
+
+      const windMap = new Map();
+      weatherState.raw15.wind.forEach((record) => {
+        if (record.year == null || record.month == null || record.day == null) {
+          return;
+        }
+        const key = `${record.year}-${pad2(record.month)}-${pad2(record.day)}T${pad2(record.hour || 0)}:${pad2(
+          record.minute || 0
+        )}`;
+        windMap.set(key, {
+          [windSpeedMetric]: toNumber(record?.[windSpeedMetric], 0),
+          ...(weatherState.windMetric.temperature
+            ? { [weatherState.windMetric.temperature]: toNumber(record?.[weatherState.windMetric.temperature], NaN) }
+            : {}),
+        });
+      });
+
+      return { solarMap, windMap };
+    };
+
     let labels = [];
     let solarSeries = [];
     let windSeries = [];
     let temps = [];
-    let dtHours = 0.25;
+    let dtHours = NREL_INTERVAL_MINUTES / 60;
+    const { solarMap, windMap } = buildWeatherMaps();
 
     if (period === "day") {
-      const keyFor = (year, month, day, hour, minute) => `${year}-${pad2(month)}-${pad2(day)}-${pad2(hour)}-${pad2(minute)}`;
-      const solarMap = new Map(weatherState.raw15.solar.map((record) => [keyFor(record.year, record.month, record.day, record.hour || 0, record.minute || 0), record]));
-      const windMap = new Map(weatherState.raw15.wind.map((record) => [keyFor(record.year, record.month, record.day, record.hour || 0, record.minute || 0), record]));
       for (let i = 0; i < POINTS_PER_DAY; i += 1) {
         const hour = Math.floor((i * NREL_INTERVAL_MINUTES) / 60);
         const minute = (i * NREL_INTERVAL_MINUTES) % 60;
-        const key = keyFor(selectedDate.getFullYear(), selectedDate.getMonth() + 1, selectedDate.getDate(), hour, minute);
+        const key = `${selectedDate.getFullYear()}-${pad2(selectedDate.getMonth() + 1)}-${pad2(
+          selectedDate.getDate()
+        )}T${pad2(hour)}:${pad2(minute)}`;
         const solarPoint = solarMap.get(key) || emptySolar;
         const windPoint = windMap.get(key) || emptyWind;
-        labels.push(`${formatDateKey(selectedDate)} ${pad2(hour)}:${pad2(minute)}`);
+        labels.push(`${pad2(hour)}:${pad2(minute)}`);
         solarSeries.push(solarPoint);
         windSeries.push(windPoint);
         temps.push(pickTemp(solarPoint, windPoint));
       }
-      dtHours = NREL_INTERVAL_MINUTES / 60;
     } else if (period === "week") {
-      const solarMap = new Map(weatherState.hourly.solar.map((record) => [record.timestamp, record]));
-      const windMap = new Map(weatherState.hourly.wind.map((record) => [record.timestamp, record]));
       const start = getWeekStart(selectedDate);
       const end = getWeekEnd(start);
-      for (let cursor = new Date(start); cursor <= end; cursor.setHours(cursor.getHours() + 1)) {
-        const key = `${formatDateKey(cursor)}T${pad2(cursor.getHours())}:00`;
+      end.setHours(23, 60 - NREL_INTERVAL_MINUTES, 0, 0);
+      for (let cursor = new Date(start); cursor <= end; cursor.setMinutes(cursor.getMinutes() + NREL_INTERVAL_MINUTES)) {
+        const key = `${formatDateKey(cursor)}T${pad2(cursor.getHours())}:${pad2(cursor.getMinutes())}`;
         const solarPoint = solarMap.get(key) || emptySolar;
         const windPoint = windMap.get(key) || emptyWind;
-        labels.push(cursor.toLocaleString("en-US", { weekday: "short", hour: "2-digit", minute: "2-digit" }));
+        const dayOfWeek = cursor.toLocaleDateString("en-US", { weekday: "short" });
+        labels.push([formatIndicatorTime(cursor), `${dayOfWeek} ${formatIndicatorDate(cursor)}`]);
         solarSeries.push(solarPoint);
         windSeries.push(windPoint);
         temps.push(pickTemp(solarPoint, windPoint));
       }
-      dtHours = 1;
     } else {
-      const solarMap = new Map(weatherState.daily.solar.map((record) => [record.date, record]));
-      const windMap = new Map(weatherState.daily.wind.map((record) => [record.date, record]));
       const start = period === "month" ? new Date(selectedDate.getFullYear(), selectedDate.getMonth(), 1) : new Date(selectedDate.getFullYear(), 0, 1);
       const end = period === "month" ? new Date(selectedDate.getFullYear(), selectedDate.getMonth() + 1, 0) : new Date(selectedDate.getFullYear(), 11, 31);
+      const daySolarKwh = [];
+      const dayWindKwh = [];
+      const dayTemps = [];
       for (let cursor = new Date(start); cursor <= end; cursor.setDate(cursor.getDate() + 1)) {
-        const key = formatDateKey(cursor);
-        const solarPoint = solarMap.get(key) || emptySolar;
-        const windPoint = windMap.get(key) || emptyWind;
+        const dateKey = formatDateKey(cursor);
+        const daySolarSeries = [];
+        const dayWindSeries = [];
+        const dayTempSeries = [];
+        for (let i = 0; i < POINTS_PER_DAY; i += 1) {
+          const hour = Math.floor((i * NREL_INTERVAL_MINUTES) / 60);
+          const minute = (i * NREL_INTERVAL_MINUTES) % 60;
+          const key = `${dateKey}T${pad2(hour)}:${pad2(minute)}`;
+          const solarPoint = solarMap.get(key) || emptySolar;
+          const windPoint = windMap.get(key) || emptyWind;
+          daySolarSeries.push(solarPoint);
+          dayWindSeries.push(windPoint);
+          dayTempSeries.push(pickTemp(solarPoint, windPoint));
+        }
+        const daySolarKw = window.EnergyGeneration?.sumSolarAssets
+          ? window.EnergyGeneration.sumSolarAssets(generationModels.solar, daySolarSeries)
+          : new Float64Array(POINTS_PER_DAY);
+        const dayWindKw = window.EnergyGeneration?.sumWindAssets
+          ? window.EnergyGeneration.sumWindAssets(generationModels.wind, dayWindSeries)
+          : new Float64Array(POINTS_PER_DAY);
+        const intervalHours = NREL_INTERVAL_MINUTES / 60;
+        let solarKwh = 0;
+        let windKwh = 0;
+        for (let i = 0; i < POINTS_PER_DAY; i += 1) {
+          solarKwh += Math.max(0, (daySolarKw[i] || 0) * intervalHours);
+          windKwh += Math.max(0, (dayWindKw[i] || 0) * intervalHours);
+        }
         labels.push(cursor.toLocaleDateString("en-US", { month: "short", day: "numeric" }));
-        solarSeries.push(solarPoint);
-        windSeries.push(windPoint);
-        temps.push(pickTemp(solarPoint, windPoint));
+        daySolarKwh.push(solarKwh);
+        dayWindKwh.push(windKwh);
+        dayTemps.push(dayTempSeries.reduce((sum, value) => sum + value, 0) / Math.max(1, dayTempSeries.length));
       }
       dtHours = 24;
+      const generationKwh = new Float64Array(labels.length);
+      const generationKw = new Float64Array(labels.length);
+      const solarKwh = new Float64Array(labels.length);
+      const windKwh = new Float64Array(labels.length);
+      const dailyTemps = new Float64Array(labels.length);
+      for (let i = 0; i < labels.length; i += 1) {
+        solarKwh[i] = daySolarKwh[i] || 0;
+        windKwh[i] = dayWindKwh[i] || 0;
+        generationKwh[i] = solarKwh[i] + windKwh[i];
+        generationKw[i] = generationKwh[i] / dtHours;
+        dailyTemps[i] = dayTemps[i] || 25;
+      }
+      return { labels, solarKwh, windKwh, generationKwh, generationKw, temps: dailyTemps, dtHours };
     }
 
     const solarKw = window.EnergyGeneration?.sumSolarAssets ? window.EnergyGeneration.sumSolarAssets(generationModels.solar, solarSeries) : new Float64Array(labels.length);
@@ -706,8 +882,7 @@
         if (capacityKwh <= 0) return null;
         return {
           capacityKwh,
-          socMin: clamp01(toNumber(model.soc_min, 0.1)),
-          soc: Math.max(clamp01(toNumber(model.soc_init, 0.2)), clamp01(toNumber(model.soc_min, 0.1))),
+          soc: clamp01(toNumber(model.soc_init, 0.2)),
           chargeRateC: Math.max(0, toNumber(model.charge_rate_c, 0.5)),
           rte: clamp01(toNumber(model.round_trip_efficiency, 0.92)),
           tempRef: toNumber(model.temp_ref_c, 25),
@@ -720,6 +895,10 @@
     if (!states.length) return socPct;
 
     for (let i = 0; i < generationKw.length; i += 1) {
+      const totalCapacityBefore = states.reduce((sum, state) => sum + state.capacityKwh, 0);
+      const totalEnergyBefore = states.reduce((sum, state) => sum + state.soc * state.capacityKwh, 0);
+      socPct[i] = totalCapacityBefore > 0 ? (totalEnergyBefore / totalCapacityBefore) * 100 : 0;
+
       const temp = Number.isFinite(temperatures[i]) ? temperatures[i] : 25;
       const available = Math.max(0, toNumber(generationKw[i], 0));
       const allowances = states.map((state) => {
@@ -738,13 +917,9 @@
           if (allowKw <= 0 || etaCharge <= 0) return;
           const allocatedKw = chargeKw * (allowKw / totalAllowKw);
           const deltaE = allocatedKw * etaCharge * dtHours;
-          state.soc = clamp(state.soc + deltaE / state.capacityKwh, state.socMin, 1);
+          state.soc = clamp(state.soc + deltaE / state.capacityKwh, 0, 1);
         });
       }
-
-      const totalCapacity = states.reduce((sum, state) => sum + state.capacityKwh, 0);
-      const totalEnergy = states.reduce((sum, state) => sum + state.soc * state.capacityKwh, 0);
-      socPct[i] = totalCapacity > 0 ? (totalEnergy / totalCapacity) * 100 : 0;
     }
     return socPct;
   };
@@ -957,8 +1132,11 @@
       });
     }
 
+    const displayLabels = buildDisplayLabels(currentSeries.labels || [], viewState.period, selectedDateKey);
+    currentSeries.labels = displayLabels;
+
     storageChart.update({
-      labels: currentSeries.labels,
+      labels: displayLabels,
       solar: Array.from(currentSeries.solarKwh),
       wind: Array.from(currentSeries.windKwh),
       total: Array.from(currentSeries.generationKwh),
@@ -988,64 +1166,144 @@
     }, ASSET_EDIT_DEBOUNCE_MS);
   };
 
-  const hideChartTooltip = () => {
-    if (chartTooltip) chartTooltip.hidden = true;
+  const buildFormulaVariable = (token, highlightSet, label = token) => {
+    const highlighted = highlightSet.has(token) ? " is-highlighted" : "";
+    return `<span class="asset-help__var${highlighted}">${label}</span>`;
   };
 
-  const updateChartTooltip = (event) => {
-    if (!chartFrame || !chartTooltip || !currentSeries || !currentSeries.labels.length) return;
-    const rect = chartFrame.getBoundingClientRect();
-    const relativeX = Math.max(0, Math.min(rect.width, event.clientX - rect.left));
-    const index = Math.round((relativeX / Math.max(1, rect.width)) * (currentSeries.labels.length - 1));
-    const label = formatChartIndicator(viewState.period, selectedDateKey, index) || currentSeries.labels[index] || "-";
-    const solar = Number(currentSeries.solarKwh[index] || 0).toFixed(2);
-    const wind = Number(currentSeries.windKwh[index] || 0).toFixed(2);
-    const generation = Number(currentSeries.generationKwh[index] || 0).toFixed(2);
-    const soc = Number(currentSeries.socPct[index] || 0).toFixed(2);
-    const temp = Number(currentSeries.temps[index] || 0).toFixed(1);
-    const rows = [];
-    if (seriesVisibility.solar) rows.push(`<div>Solar: ${solar} kWh</div>`);
-    if (seriesVisibility.wind) rows.push(`<div>Wind: ${wind} kWh</div>`);
-    if (seriesVisibility.total) rows.push(`<div>Total: ${generation} kWh</div>`);
-    if (seriesVisibility.soc) rows.push(`<div>SOC: ${soc}%</div>`);
-    chartTooltip.innerHTML = `
-      <div class="generation-tooltip__time">${formatTooltipLabelHtml(label)}</div>
-      ${rows.join("") || `<div>Enable at least one layer.</div>`}
-      <div>Temperature: ${temp} C</div>
-    `;
-    const maxLeft = rect.width - chartTooltip.offsetWidth - 8;
-    const left = Math.max(8, Math.min(maxLeft, relativeX + 10));
-    const maxTop = rect.height - chartTooltip.offsetHeight - 8;
-    const top = Math.max(8, Math.min(maxTop, event.clientY - rect.top - chartTooltip.offsetHeight - 10));
-    chartTooltip.style.left = `${left}px`;
-    chartTooltip.style.top = `${top}px`;
-    chartTooltip.hidden = false;
+  const buildStorageBasicFormula = (highlightSet) => {
+    const v = (token, label = token) => buildFormulaVariable(token, highlightSet, label);
+    return [
+      `<span class="asset-field-tooltip__line">${v("P_CAP", "P")}<sub>cap</sub> = ${v("E_CAP", "E")}<sub>cap</sub> * ${v("C_RATE", "C")}<sub>rate</sub> * ${v("TEMP_FACTOR", "tempFactor")}</span>`,
+      `<span class="asset-field-tooltip__line">${v("SOC_NEXT", "SOC")}<sub>next</sub> = clamp(${v("SOC")} + ${v("DELTA_E", "&Delta;E")} / ${v("E_CAP", "E")}<sub>cap</sub>, 0, 1)</span>`,
+    ].join("");
   };
 
-  const showFieldTooltip = (anchor) => {
+  const buildStorageAdvancedFormula = (highlightSet) => {
+    const v = (token, label = token) => buildFormulaVariable(token, highlightSet, label);
+    return [
+      `<span class="asset-field-tooltip__line">${v("TEMP_FACTOR", "tempFactor")} = clamp(1 - ${v("K_DERATE", "k")}<sub>derate</sub> * |${v("T", "T")} - ${v("T_REF", "T")}<sub>ref</sub>|, 0, 1)</span>`,
+      `<span class="asset-field-tooltip__line">${v("P_CAP", "P")}<sub>cap</sub> = ${v("E_CAP", "E")}<sub>cap</sub> * ${v("C_RATE", "C")}<sub>rate</sub> * ${v("TEMP_FACTOR", "tempFactor")}</span>`,
+      `<span class="asset-field-tooltip__line">${v("ETA", "&eta;")} = sqrt(${v("RTE")}); ${v("DELTA_E", "&Delta;E")} = ${v("P_CHARGE", "P")}<sub>charge</sub> * ${v("ETA", "&eta;")} * ${v("DELTA_T", "&Delta;t")}</span>`,
+      `<span class="asset-field-tooltip__line">${v("SOC_NEXT", "SOC")}<sub>next</sub> = clamp(${v("SOC")} + ${v("DELTA_E", "&Delta;E")} / ${v("E_CAP", "E")}<sub>cap</sub>, 0, 1)</span>`,
+    ].join("");
+  };
+
+  const getStorageFieldLabelText = (labelElement) => {
+    if (!labelElement) return "Variable";
+    const clone = labelElement.cloneNode(true);
+    clone.querySelectorAll(".field-help").forEach((node) => node.remove());
+    return clone.textContent?.trim() || "Variable";
+  };
+
+  const positionFieldTooltipAt = (clientX, clientY) => {
     if (!fieldTooltip) return;
-    const text = anchor.dataset.tip || "";
-    if (!text) return;
-    fieldTooltip.textContent = text;
+    const tooltipRect = fieldTooltip.getBoundingClientRect();
+    const offset = 16;
+    let left = clientX + offset;
+    let top = clientY + offset;
+
+    if (left + tooltipRect.width > window.innerWidth - 8) {
+      left = clientX - tooltipRect.width - offset;
+    }
+    if (left < 8) {
+      left = 8;
+    }
+    if (top < 8) {
+      top = 8;
+    }
+    if (top + tooltipRect.height > window.innerHeight - 8) {
+      top = window.innerHeight - tooltipRect.height - 8;
+    }
+
+    fieldTooltip.style.left = `${Math.round(left)}px`;
+    fieldTooltip.style.top = `${Math.round(top)}px`;
+  };
+
+  const positionFieldTooltip = (anchor) => {
+    if (!anchor) return;
     const rect = anchor.getBoundingClientRect();
-    fieldTooltip.style.left = `${Math.min(window.innerWidth - 280, rect.left + 12)}px`;
-    fieldTooltip.style.top = `${Math.max(10, rect.bottom + 8)}px`;
+    positionFieldTooltipAt(rect.right, rect.top + rect.height / 2);
+  };
+
+  const showFieldTooltip = (anchor, labelText, fieldKey, mouseEvent = null) => {
+    if (!fieldTooltip) return;
+    const help = STORAGE_FIELD_HELP[fieldKey];
+    if (!help) {
+      fieldTooltip.hidden = true;
+      return;
+    }
+    const card = anchor?.closest?.(".asset-card");
+    const advancedSection = card?.querySelector?.(".asset-section--advanced");
+    const isAdvancedOpen = Boolean(advancedSection && !advancedSection.classList.contains("is-collapsed"));
+    const highlightSet = new Set(help.tokens || []);
+    const formulaHtml = isAdvancedOpen
+      ? buildStorageAdvancedFormula(highlightSet)
+      : buildStorageBasicFormula(highlightSet);
+
+    fieldTooltip.innerHTML = `
+      <p class="asset-field-tooltip__title">${labelText}</p>
+      <p class="asset-field-tooltip__definition">${help.definition}</p>
+      <p class="asset-field-tooltip__formula">${formulaHtml}</p>
+    `;
     fieldTooltip.hidden = false;
+    if (mouseEvent) {
+      positionFieldTooltipAt(mouseEvent.clientX, mouseEvent.clientY);
+    } else {
+      positionFieldTooltip(anchor);
+    }
   };
 
   const hideFieldTooltip = () => {
-    if (fieldTooltip) fieldTooltip.hidden = true;
+    if (fieldTooltip) {
+      fieldTooltip.hidden = true;
+    }
   };
 
   const wireFieldHelp = (card) => {
+    card.querySelectorAll("[data-storage-field]").forEach((fieldElement) => {
+      const fieldKey = fieldElement.dataset.storageField;
+      if (!fieldKey || !STORAGE_FIELD_HELP[fieldKey]) {
+        return;
+      }
+      const labelElement = fieldElement.previousElementSibling?.classList?.contains("assets-label")
+        ? fieldElement.previousElementSibling
+        : null;
+      const labelText = getStorageFieldLabelText(labelElement);
+      const openTooltip = (target, event = null) => showFieldTooltip(target, labelText, fieldKey, event);
+      const moveTooltip = (event) => {
+        if (!fieldTooltip || fieldTooltip.hidden) return;
+        positionFieldTooltipAt(event.clientX, event.clientY);
+      };
+
+      if (labelElement) {
+        labelElement.addEventListener("mouseenter", (event) => openTooltip(labelElement, event));
+        labelElement.addEventListener("mouseleave", hideFieldTooltip);
+        labelElement.addEventListener("mousemove", moveTooltip);
+        labelElement.addEventListener("focusin", () => openTooltip(labelElement));
+        labelElement.addEventListener("focusout", hideFieldTooltip);
+      }
+
+      fieldElement.addEventListener("mouseenter", (event) => openTooltip(fieldElement, event));
+      fieldElement.addEventListener("mouseleave", hideFieldTooltip);
+      fieldElement.addEventListener("mousemove", moveTooltip);
+      fieldElement.addEventListener("focus", () => openTooltip(fieldElement));
+      fieldElement.addEventListener("blur", hideFieldTooltip);
+    });
+
     card.querySelectorAll(".field-help").forEach((button) => {
-      button.addEventListener("mouseenter", () => showFieldTooltip(button));
+      const labelElement = button.closest(".assets-label");
+      const input = labelElement?.nextElementSibling;
+      const fieldKey = input?.dataset?.storageField;
+      if (!fieldKey || !STORAGE_FIELD_HELP[fieldKey]) return;
+      const labelText = getStorageFieldLabelText(labelElement);
+      button.addEventListener("mouseenter", (event) => showFieldTooltip(button, labelText, fieldKey, event));
       button.addEventListener("mouseleave", hideFieldTooltip);
-      button.addEventListener("focus", () => showFieldTooltip(button));
+      button.addEventListener("focus", () => showFieldTooltip(button, labelText, fieldKey));
       button.addEventListener("blur", hideFieldTooltip);
       button.addEventListener("click", (event) => {
         event.preventDefault();
-        if (fieldTooltip?.hidden) showFieldTooltip(button);
+        if (fieldTooltip?.hidden) showFieldTooltip(button, labelText, fieldKey);
         else hideFieldTooltip();
       });
     });
@@ -1055,7 +1313,12 @@
     card.querySelectorAll("[data-storage-field]").forEach((field) => {
       const key = field.dataset.storageField;
       if (!key || model[key] == null) return;
-      field.value = String(model[key]);
+      if (SOC_PERCENT_FIELDS.has(key)) {
+        const pct = clamp(toNumber(model[key], 0) * 100, 0, 100);
+        field.value = String(Math.round(pct * 100) / 100);
+      } else {
+        field.value = String(model[key]);
+      }
     });
   };
 
@@ -1126,8 +1389,16 @@
       const handler = () => {
         const key = field.dataset.storageField;
         if (!key) return;
-        if (field.type === "number") entry.model[key] = toNumber(field.value, entry.model[key]);
-        else entry.model[key] = field.value;
+        if (field.type === "number") {
+          if (SOC_PERCENT_FIELDS.has(key)) {
+            const pct = clamp(toNumber(field.value, toNumber(entry.model[key], 0) * 100), 0, 100);
+            entry.model[key] = pct / 100;
+          } else {
+            entry.model[key] = toNumber(field.value, entry.model[key]);
+          }
+        } else {
+          entry.model[key] = field.value;
+        }
         if (key === "battery_type") applyStorageTypeDefaults(entry, card);
         entry.model = createStorageAsset(entry.model);
         if (nameInput) nameInput.value = entry.model.name;
@@ -1189,6 +1460,8 @@
   };
 
   if (addStorageButton) addStorageButton.addEventListener("click", () => addStorageCard());
+  window.addEventListener("scroll", hideFieldTooltip, true);
+  window.addEventListener("resize", hideFieldTooltip);
 
   if (deleteStorageModal) {
     deleteStorageModal.addEventListener("close", () => {
@@ -1235,7 +1508,6 @@
       if (!series || !Object.prototype.hasOwnProperty.call(seriesVisibility, series)) return;
       seriesVisibility[series] = !seriesVisibility[series];
       button.classList.toggle("is-active", seriesVisibility[series]);
-      hideChartTooltip();
       scheduleRecompute();
     });
   });
@@ -1297,11 +1569,6 @@
     storageShiftForwardButton.addEventListener("click", () => shiftSelectedDate(1));
   }
 
-  if (chartFrame) {
-    chartFrame.addEventListener("mousemove", updateChartTooltip);
-    chartFrame.addEventListener("mouseleave", hideChartTooltip);
-  }
-
   const initProject = async () => {
     await supabaseService.migrateLegacyLocalData();
     if (!projectId || !isValidProjectId(projectId)) {
@@ -1326,20 +1593,8 @@
     if (storageAssetsHeaderLink) storageAssetsHeaderLink.href = `/projects/generation.html?projectId=${encodeURIComponent(currentProject.id)}`;
     if (storageBackToFacility) storageBackToFacility.href = `/projects/location.html?projectId=${encodeURIComponent(currentProject.id)}`;
 
-    if (headerProjectNameInput) {
-      headerProjectNameInput.value = currentProject.name || "Untitled Facility";
-      headerProjectNameInput.addEventListener("input", (event) => {
-        if (!currentProject) return;
-        const nextName = event.target.value || "Untitled Facility";
-        void withRetry(() => supabaseService.updateProject(currentProject.id, { name: nextName }))
-          .then((project) => {
-            currentProject = project;
-            if (storageProjectName) storageProjectName.textContent = project.name || "Untitled Facility";
-            if (storageFacilityName) storageFacilityName.textContent = project.name || "Untitled Facility";
-          })
-          .catch(() => {});
-      });
-    }
+    setProjectNameDisplay(currentProject.name);
+    setProjectNameEditorMode(false);
 
     if (storageProjectName) storageProjectName.textContent = currentProject.name || "Untitled Facility";
     if (storageFacilityName) storageFacilityName.textContent = currentProject.name || "Untitled Facility";
@@ -1354,6 +1609,47 @@
     }
     scheduleRecompute();
   };
+
+  if (headerProjectNameEditButton && headerProjectNameInput) {
+    headerProjectNameEditButton.addEventListener("click", () => {
+      setProjectNameEditorMode(true);
+      headerProjectNameInput.focus();
+      headerProjectNameInput.select();
+    });
+  }
+
+  if (headerProjectNameSaveButton) {
+    headerProjectNameSaveButton.addEventListener("click", () => {
+      void saveProjectName();
+    });
+  }
+
+  if (headerProjectNameCancelButton && headerProjectNameInput) {
+    headerProjectNameCancelButton.addEventListener("click", () => {
+      setProjectNameDisplay(currentProject?.name);
+      setProjectNameEditorMode(false);
+    });
+  }
+
+  if (headerProjectNameInput) {
+    headerProjectNameInput.addEventListener("input", () => {
+      const text = String(headerProjectNameInput.value || "");
+      headerProjectNameInput.size = Math.min(Math.max(text.length + 1, 8), 40);
+    });
+
+    headerProjectNameInput.addEventListener("keydown", (event) => {
+      if (event.key === "Enter") {
+        event.preventDefault();
+        void saveProjectName();
+        return;
+      }
+      if (event.key === "Escape") {
+        event.preventDefault();
+        setProjectNameDisplay(currentProject?.name);
+        setProjectNameEditorMode(false);
+      }
+    });
+  }
 
   void initProject();
 })();

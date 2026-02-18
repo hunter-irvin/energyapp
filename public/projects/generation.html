@@ -10,8 +10,21 @@
   <body class="project-page-body">
     <header class="project-header">
       <div class="project-header__left">
-        <label class="project-header__label" for="header-project-name">Project Name</label>
-        <input id="header-project-name" class="project-header__input" type="text" placeholder="Untitled Project" />
+        <div class="project-name-editor" id="project-name-editor">
+          <span id="header-project-name-display" class="project-name-editor__display">Untitled Facility</span>
+          <button
+            id="header-project-name-edit"
+            class="project-name-editor__icon"
+            type="button"
+            aria-label="Edit project name"
+            title="Edit project name"
+          >
+            ✎
+          </button>
+          <input id="header-project-name" class="project-header__input" type="text" placeholder="Untitled Project" hidden />
+          <button id="header-project-name-save" class="project-name-editor__action" type="button" hidden>Save</button>
+          <button id="header-project-name-cancel" class="project-name-editor__action" type="button" hidden>Cancel</button>
+        </div>
       </div>
       <a class="btn" href="/">Exit</a>
     </header>
@@ -60,10 +73,10 @@
                 <button class="btn btn--icon" id="assets-shift-forward" type="button" aria-label="Next range">▶</button>
               </div>
             </div>
-            <p class="assets-chart-legend">
-              <button class="legend-chip legend-chip--toggle legend-chip--solar is-active" data-assets-series="solar" type="button">Solar</button>
-              <button class="legend-chip legend-chip--toggle legend-chip--wind is-active" data-assets-series="wind" type="button">Wind</button>
-              <button class="legend-chip legend-chip--toggle legend-chip--total is-active" data-assets-series="total" type="button">Total</button>
+            <p class="chart-panel__legend">
+              <button class="legend legend--solar is-active" data-assets-series="solar" type="button">Solar</button>
+              <button class="legend legend--wind is-active" data-assets-series="wind" type="button">Wind</button>
+              <button class="legend legend--total" data-assets-series="total" type="button">Total</button>
             </p>
           </div>
           <div class="assets-chart-layout">
@@ -71,7 +84,6 @@
               <div class="assets-chart-frame" id="assets-chart-frame">
                 <canvas id="generation-chart" class="generation-chart" aria-label="Typical generation chart"></canvas>
                 <div class="chart-loading" id="assets-chart-loading" hidden>Loading...</div>
-                <div id="generation-tooltip" class="generation-tooltip" hidden></div>
               </div>
               <div class="assets-chart-axis" id="generation-axis"></div>
             </div>
@@ -81,7 +93,7 @@
               <p id="generation-total-energy" class="generation-total-energy">0.00 kWh</p>
             </aside>
           </div>
-          <details class="debug-panel assets-debug" id="generation-debug-panel">
+          <details class="debug-panel assets-debug" id="generation-debug-panel" hidden>
             <summary>Generation debug</summary>
             <pre id="generation-debug-output">No generation debug data yet.</pre>
           </details>

@@ -19,6 +19,14 @@
         bodyColor: "#111111",
         borderColor: "#d0d0d0",
         borderWidth: 1,
+        callbacks: {
+          label(context) {
+            const numeric = Number(context?.parsed?.y ?? context?.raw ?? 0);
+            const formatted = Number.isFinite(numeric) ? numeric.toFixed(1) : "0.0";
+            const unit = context?.dataset?.tooltipUnit ? ` ${context.dataset.tooltipUnit}` : "";
+            return `${context.dataset.label}: ${formatted}${unit}`;
+          },
+        },
       },
     },
     scales: {
@@ -40,6 +48,7 @@
             label: "Solar",
             data: [],
             yAxisID: "ySolar",
+            tooltipUnit: "W/m²",
             borderColor: "rgba(249, 168, 37, 0.95)",
             backgroundColor: "rgba(249, 168, 37, 0.35)",
             fill: true,
@@ -48,6 +57,7 @@
             label: "Wind",
             data: [],
             yAxisID: "yWind",
+            tooltipUnit: "m/s",
             borderColor: "rgba(31, 119, 180, 0.95)",
             backgroundColor: "rgba(31, 119, 180, 0.28)",
             fill: true,
@@ -155,10 +165,15 @@
         yTitle = "Generation (kWh)",
         visible = { solar: true, wind: true, total: true },
       }) {
+        const unitMatch = String(yTitle).match(/\(([^)]+)\)/);
+        const generationUnit = unitMatch?.[1] || "kWh";
         chart.data.labels = labels;
         chart.data.datasets[0].data = wind;
         chart.data.datasets[1].data = solar;
         chart.data.datasets[2].data = total;
+        chart.data.datasets[0].tooltipUnit = generationUnit;
+        chart.data.datasets[1].tooltipUnit = generationUnit;
+        chart.data.datasets[2].tooltipUnit = generationUnit;
         chart.data.datasets[0].hidden = !visible.wind;
         chart.data.datasets[1].hidden = !visible.solar;
         chart.data.datasets[2].hidden = !visible.total;
@@ -258,6 +273,10 @@
         chart.data.datasets[1].data = solar;
         chart.data.datasets[2].data = total;
         chart.data.datasets[3].data = soc;
+        chart.data.datasets[0].tooltipUnit = "kWh";
+        chart.data.datasets[1].tooltipUnit = "kWh";
+        chart.data.datasets[2].tooltipUnit = "kWh";
+        chart.data.datasets[3].tooltipUnit = "%";
         chart.data.datasets[0].hidden = !visible.wind;
         chart.data.datasets[1].hidden = !visible.solar;
         chart.data.datasets[2].hidden = !visible.total;

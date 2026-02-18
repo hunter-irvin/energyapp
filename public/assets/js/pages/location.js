@@ -33,6 +33,10 @@ const dataStore = {
 };
 
 const headerProjectNameInput = document.getElementById("header-project-name");
+const headerProjectNameDisplay = document.getElementById("header-project-name-display");
+const headerProjectNameEditButton = document.getElementById("header-project-name-edit");
+const headerProjectNameSaveButton = document.getElementById("header-project-name-save");
+const headerProjectNameCancelButton = document.getElementById("header-project-name-cancel");
 const headerAssetsLink = document.getElementById("header-assets-link");
 const headerStorageLink = document.getElementById("header-storage-link");
 const supabaseService = window.EnergySupabaseService;
@@ -79,6 +83,7 @@ const tableState = {
 };
 let currentSeries = null;
 let weatherChart = null;
+let isProjectNameEditing = false;
 
 let selectionMode = false;
 let marker = null;
@@ -100,7 +105,7 @@ const satelliteLayer = L.tileLayer(
   }
 );
 
-streetLayer.addTo(map);
+satelliteLayer.addTo(map);
 L.control
   .layers(
     {
@@ -167,14 +172,44 @@ const setProjectDate = (project) => {
   }
 };
 
+const setProjectNameDisplay = (name) => {
+  const resolvedName = String(name || "Untitled Facility").trim() || "Untitled Facility";
+  if (headerProjectNameDisplay) {
+    headerProjectNameDisplay.textContent = resolvedName;
+  }
+  if (headerProjectNameInput) {
+    headerProjectNameInput.value = resolvedName;
+    const nextSize = Math.min(Math.max(resolvedName.length + 1, 8), 40);
+    headerProjectNameInput.size = nextSize;
+  }
+};
+
+const setProjectNameEditorMode = (isEditing) => {
+  isProjectNameEditing = isEditing;
+  if (headerProjectNameDisplay) {
+    headerProjectNameDisplay.hidden = isEditing;
+  }
+  if (headerProjectNameEditButton) {
+    headerProjectNameEditButton.hidden = isEditing;
+  }
+  if (headerProjectNameInput) {
+    headerProjectNameInput.hidden = !isEditing;
+  }
+  if (headerProjectNameSaveButton) {
+    headerProjectNameSaveButton.hidden = !isEditing;
+  }
+  if (headerProjectNameCancelButton) {
+    headerProjectNameCancelButton.hidden = !isEditing;
+  }
+};
+
 const applyProjectToUi = (project) => {
   currentProject = project;
   activeProvider = project.weatherProvider || "nrel";
   setProviderButtons(activeProvider);
   supabaseService.setLastOpenedProjectId(project.id);
-  if (headerProjectNameInput) {
-    headerProjectNameInput.value = project.name || "Untitled Facility";
-  }
+  setProjectNameDisplay(project.name);
+  setProjectNameEditorMode(false);
   if (project.lat != null && project.lng != null) {
     locationValue.textContent = formatLocationText(project);
     if (!marker) {
@@ -407,7 +442,7 @@ const formatShortDate = (date) => {
   return `${date.getMonth() + 1}/${date.getDate()}/${yy}`;
 };
 
-const formatIndicatorDate = (date) => `${pad2(date.getMonth() + 1)}/${pad2(date.getDate())}`;
+const formatIndicatorDate = (date) => `${date.getMonth() + 1}/${date.getDate()}`;
 const formatIndicatorTime = (date) => `${pad2(date.getHours())}:${pad2(date.getMinutes())}`;
 const formatTooltipLabelHtml = (text) => String(text || "").replace(/\n/g, "<br />");
 
@@ -429,7 +464,7 @@ const formatChartIndicator = (period, date, index) => {
     const cursor = new Date(weekStart);
     cursor.setHours(cursor.getHours() + index);
     const dayOfWeek = cursor.toLocaleDateString("en-US", { weekday: "short" });
-    return `${dayOfWeek} ${formatIndicatorDate(cursor)}\n${formatIndicatorTime(cursor)}`;
+    return `${formatIndicatorTime(cursor)}\n${dayOfWeek} ${formatIndicatorDate(cursor)}`;
   }
 
   if (period === "month") {
@@ -1453,14 +1488,58 @@ if (chartDisplay) {
   chartDisplay.addEventListener("mouseleave", hideChartTooltip);
 }
 
+const saveProjectName = async () => {
+  if (!currentProject || !headerProjectNameInput) {
+    return;
+  }
+  const nextName = String(headerProjectNameInput.value || "").trim() || "Untitled Facility";
+  try {
+    currentProject = await withRetry(() => supabaseService.updateProject(currentProject.id, { name: nextName }));
+    setProjectNameDisplay(currentProject.name);
+    setProjectNameEditorMode(false);
+  } catch (error) {
+    setStatus({ loading: false, error: "Unable to save project name. Please retry." });
+  }
+};
+
+if (headerProjectNameEditButton && headerProjectNameInput) {
+  headerProjectNameEditButton.addEventListener("click", () => {
+    setProjectNameEditorMode(true);
+    headerProjectNameInput.focus();
+    headerProjectNameInput.select();
+  });
+}
+
+if (headerProjectNameSaveButton) {
+  headerProjectNameSaveButton.addEventListener("click", () => {
+    void saveProjectName();
+  });
+}
+
+if (headerProjectNameCancelButton && headerProjectNameInput) {
+  headerProjectNameCancelButton.addEventListener("click", () => {
+    setProjectNameDisplay(currentProject?.name);
+    setProjectNameEditorMode(false);
+  });
+}
+
 if (headerProjectNameInput) {
-  headerProjectNameInput.addEventListener("input", async (event) => {
-    if (!currentProject) {
+  headerProjectNameInput.addEventListener("input", () => {
+    const text = String(headerProjectNameInput.value || "");
+    headerProjectNameInput.size = Math.min(Math.max(text.length + 1, 8), 40);
+  });
+
+  headerProjectNameInput.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") {
+      event.preventDefault();
+      void saveProjectName();
       return;
     }
-    currentProject = await supabaseService.updateProject(currentProject.id, {
-      name: event.target.value || "Untitled Facility",
-    });
+    if (event.key === "Escape") {
+      event.preventDefault();
+      setProjectNameDisplay(currentProject?.name);
+      setProjectNameEditorMode(false);
+    }
   });
 }
 
