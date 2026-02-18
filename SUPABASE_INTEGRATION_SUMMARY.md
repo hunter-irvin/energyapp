@@ -14,7 +14,7 @@ The development server now automatically injects Supabase credentials into all H
 
 **How it works:**
 - When an HTML file is requested, the server reads the file and injects a `<script>` block with the credentials
-- This script is inserted before any other scripts load, ensuring `supabase-client.js` has access to the credentials
+- This script is inserted before any other scripts load, ensuring `public/assets/js/core/supabase-client.js` has access to the credentials
 - Credentials can be overridden via environment variables: `SUPABASE_URL` and `SUPABASE_ANON_KEY`
 
 ### 2. Database Tables (Already Configured via Migrations)
@@ -48,7 +48,7 @@ Stores cached weather data from NREL API:
 - `timezone` (text) - Timezone of the location
 - `source` (text) - Data source ('nrel_proxy')
 - `fetched_at` (timestamptz) - When the data was cached
-- `payload` (jsonb) - Actual weather records (15-minute intervals)
+- `payload` (jsonb) - Actual weather records (normalized 30-minute intervals)
 - `created_at`, `updated_at` (timestamptz) - Timestamps
 
 **Unique Constraint:** `(project_id, dataset, date_key, source_year, interval_minutes)`
@@ -76,7 +76,7 @@ All tables have RLS enabled with intentionally permissive policies for the `anon
 ### Project Loading Flow
 ```
 1. User navigates to app → gets project ID from URL
-2. app.js calls supabaseService.getProject(projectId)
+2. location.js calls supabaseService.getProject(projectId)
 3. Project metadata loaded from `projects` table (via Supabase or fallback to localStorage)
 4. Project location is applied to the map
 5. loadProjectWeather() is called
@@ -90,8 +90,8 @@ All tables have RLS enabled with intentionally permissive policies for the `anon
    → Use cached payload immediately via hydrateDataStore()
    → User sees data instantly
 4. If cache missing or stale:
-   → Fetch fresh data from /api/nrel-proxy (NREL API)
-   → Parse CSV response into typed records
+   → Fetch fresh data from /api/weather-proxy (provider-aware weather API)
+   → Parse normalized weather response into typed records
    → Store in database via supabaseService.upsertNrelCache()
    → Use fresh data via hydrateDataStore()
 5. UI displays loaded data with success message showing record counts
@@ -99,7 +99,7 @@ All tables have RLS enabled with intentionally permissive policies for the `anon
 
 ### Asset Management Flow
 ```
-1. User configures solar/wind assets on assets.html
+1. User configures solar/wind assets on /projects/generation.html
 2. Each asset modification calls supabaseService.upsertAsset()
 3. Asset stored in `assets` table with project FK
 4. Next load: supabaseService.listAssets(projectId) retrieves all project assets
@@ -111,7 +111,7 @@ All tables have RLS enabled with intentionally permissive policies for the `anon
 ### When Supabase is Configured (Production)
 - **Projects:** Stored immediately in database, available across devices/sessions
 - **Assets:** Stored immediately in database, loaded with project
-- **Weather Data:** Cached for 24 hours; stale data triggers automatic refresh from NREL
+- **Weather Data:** Cached for 24 hours; stale data triggers automatic refresh from the configured provider
 
 ### Fallback Behavior (No Supabase)
 - All data stored in browser localStorage under keys:
@@ -128,7 +128,7 @@ All tables have RLS enabled with intentionally permissive policies for the `anon
 - `dataset` - 'solar' or 'wind'
 - `date_key` - Set to 'all' for annual data
 - `source_year` - 2014 (year of NREL data)
-- `interval_minutes` - 15 (15-minute intervals)
+- `interval_minutes` - 30 (30-minute normalized intervals)
 
 **TTL (Time To Live):** 24 hours
 - Databases evolve; cached data older than 24h is considered stale
@@ -146,17 +146,17 @@ All tables have RLS enabled with intentionally permissive policies for the `anon
 - [x] Database tables created with correct schema
 - [x] Unique constraint on nrel_cache prevents duplicates
 - [x] RLS policies allow anon CRUD access
-- [x] supabase-client.js has full CRUD methods for all tables
-- [x] app.js checks cache before calling NREL API
+- [x] public/assets/js/core/supabase-client.js has full CRUD methods for all tables
+- [x] Page scripts check cache before calling /api/weather-proxy
 - [x] Weather payloads stored in nrel_cache.payload (JSONB)
 - [x] All npm tests pass
 
 ### To Test End-to-End
 1. Start the server: `node server.js`
-2. Navigate to http://localhost:8000/projects.html
+2. Navigate to http://localhost:8000/
 3. Create a new project
 4. Select a location on the map
-5. Observe weather data loading (via database cache or NREL API)
+5. Observe weather data loading (via database cache or provider API)
 6. Close browser and reopen
 7. Navigate back to same project
 8. Verify weather data loads from cache (faster, no NREL call)
@@ -228,4 +228,5 @@ window.EnergySupabaseService  // Exposes all persistence methods
 - Click "Refresh Weather Data" button to force NREL fetch
 - Cache TTL is 24 hours - manually refresh if older data needed
 - Check `fetched_at` timestamp in nrel_cache table
+
 
