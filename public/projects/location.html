@@ -10,8 +10,21 @@
   <body class="project-page-body">
     <header class="project-header">
       <div class="project-header__left">
-        <label class="project-header__label" for="header-project-name">Project Name</label>
-        <input id="header-project-name" class="project-header__input" type="text" placeholder="Untitled Project" />
+        <div class="project-name-editor" id="project-name-editor">
+          <span id="header-project-name-display" class="project-name-editor__display">Untitled Facility</span>
+          <button
+            id="header-project-name-edit"
+            class="project-name-editor__icon"
+            type="button"
+            aria-label="Edit project name"
+            title="Edit project name"
+          >
+            ✎
+          </button>
+          <input id="header-project-name" class="project-header__input" type="text" placeholder="Untitled Project" hidden />
+          <button id="header-project-name-save" class="project-name-editor__action" type="button" hidden>Save</button>
+          <button id="header-project-name-cancel" class="project-name-editor__action" type="button" hidden>Cancel</button>
+        </div>
       </div>
       <a class="btn" href="/">Exit</a>
     </header>

@@ -296,6 +296,33 @@
       saveArray(DB_STORAGE_KEYS.projects, rows);
       return fromProjectRow(rows[index]);
     },
+    async deleteProject(projectId) {
+      const projectRows = loadArray(DB_STORAGE_KEYS.projects).filter((entry) => entry.id !== projectId);
+      saveArray(DB_STORAGE_KEYS.projects, projectRows);
+
+      const assetRows = loadArray(DB_STORAGE_KEYS.assets).filter((entry) => entry.project_id !== projectId);
+      saveArray(DB_STORAGE_KEYS.assets, assetRows);
+
+      const weatherRows = getLocalWeatherRows().filter((entry) => entry.project_id !== projectId);
+      saveArray(DB_STORAGE_KEYS.weatherCache, weatherRows);
+      saveArray(DB_STORAGE_KEYS.nrelCache, []);
+
+      const scopedPrefix = `energyapp.project.${projectId}.`;
+      const sharedCachePrefix = `energyapp.shared.project.${projectId}.`;
+      const keysToRemove = [];
+      for (let i = 0; i < localStorage.length; i += 1) {
+        const key = localStorage.key(i);
+        if (key && (key.startsWith(scopedPrefix) || key.startsWith(sharedCachePrefix))) {
+          keysToRemove.push(key);
+        }
+      }
+      keysToRemove.forEach((key) => localStorage.removeItem(key));
+
+      if (localStorage.getItem(LAST_PROJECT_STORAGE_KEY) === projectId) {
+        localStorage.removeItem(LAST_PROJECT_STORAGE_KEY);
+      }
+      return true;
+    },
     async listAssets(projectId) {
       return loadArray(DB_STORAGE_KEYS.assets)
         .filter((entry) => entry.project_id === projectId)
@@ -420,6 +447,32 @@
       if (error) throw error;
       return fromProjectRow(data);
     },
+    async deleteProject(projectId) {
+      const { error: assetsError } = await client.from("assets").delete().eq("project_id", projectId);
+      if (assetsError) throw assetsError;
+
+      const { error: cacheError } = await client.from("nrel_cache").delete().eq("project_id", projectId);
+      if (cacheError) throw cacheError;
+
+      const { error: projectError } = await client.from("projects").delete().eq("id", projectId);
+      if (projectError) throw projectError;
+
+      const scopedPrefix = `energyapp.project.${projectId}.`;
+      const sharedCachePrefix = `energyapp.shared.project.${projectId}.`;
+      const keysToRemove = [];
+      for (let i = 0; i < localStorage.length; i += 1) {
+        const key = localStorage.key(i);
+        if (key && (key.startsWith(scopedPrefix) || key.startsWith(sharedCachePrefix))) {
+          keysToRemove.push(key);
+        }
+      }
+      keysToRemove.forEach((key) => localStorage.removeItem(key));
+
+      if (localStorage.getItem(LAST_PROJECT_STORAGE_KEY) === projectId) {
+        localStorage.removeItem(LAST_PROJECT_STORAGE_KEY);
+      }
+      return true;
+    },
     async listAssets(projectId) {
       const { data, error } = await client.from("assets").select("*").eq("project_id", projectId).order("created_at", { ascending: true });
       if (error) throw error;
@@ -513,6 +566,7 @@
   const createProject = async (payload) => (await dataService()).createProject(payload);
   const getProject = async (projectId) => (await dataService()).getProject(projectId);
   const updateProject = async (projectId, patch) => (await dataService()).updateProject(projectId, patch);
+  const deleteProject = async (projectId) => (await dataService()).deleteProject(projectId);
   const listAssets = async (projectId) => (await dataService()).listAssets(projectId);
   const upsertAsset = async (payload) => (await dataService()).upsertAsset(payload);
   const deleteAsset = async (assetId) => (await dataService()).deleteAsset(assetId);
@@ -592,6 +646,7 @@
     createProject,
     getProject,
     updateProject,
+    deleteProject,
     listAssets,
     upsertAsset,
     deleteAsset,

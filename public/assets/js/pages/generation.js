@@ -27,7 +27,6 @@
   const generationAxis = document.getElementById("generation-axis");
   const generationChartFrame = document.getElementById("assets-chart-frame");
   const assetsChartLoading = document.getElementById("assets-chart-loading");
-  const generationTooltip = document.getElementById("generation-tooltip");
   const generationDonut = document.getElementById("generation-donut");
   const generationTotalEnergy = document.getElementById("generation-total-energy");
   const periodButtons = Array.from(document.querySelectorAll("[data-assets-period]"));
@@ -39,6 +38,10 @@
   const assetsShiftForwardButton = document.getElementById("assets-shift-forward");
   const generationDebugOutput = document.getElementById("generation-debug-output");
   const headerProjectNameInput = document.getElementById("header-project-name");
+  const headerProjectNameDisplay = document.getElementById("header-project-name-display");
+  const headerProjectNameEditButton = document.getElementById("header-project-name-edit");
+  const headerProjectNameSaveButton = document.getElementById("header-project-name-save");
+  const headerProjectNameCancelButton = document.getElementById("header-project-name-cancel");
   const headerSettingsLink = document.getElementById("header-settings-link");
   const sidebarStorageLink = document.getElementById("sidebar-storage-link");
   const assetFieldTooltip = document.getElementById("asset-field-tooltip");
@@ -81,7 +84,7 @@
   const seriesVisibility = {
     solar: true,
     wind: true,
-    total: true,
+    total: false,
   };
   let assetsChart = null;
 
@@ -103,6 +106,50 @@
     windTemperatureKey: null,
     windPressureKey: null,
     weatherRevision: "",
+  };
+
+  const setProjectNameDisplay = (name) => {
+    const resolvedName = String(name || "Untitled Facility").trim() || "Untitled Facility";
+    if (headerProjectNameDisplay) {
+      headerProjectNameDisplay.textContent = resolvedName;
+    }
+    if (headerProjectNameInput) {
+      headerProjectNameInput.value = resolvedName;
+      headerProjectNameInput.size = Math.min(Math.max(resolvedName.length + 1, 8), 40);
+    }
+  };
+
+  const setProjectNameEditorMode = (isEditing) => {
+    if (headerProjectNameDisplay) {
+      headerProjectNameDisplay.hidden = isEditing;
+    }
+    if (headerProjectNameEditButton) {
+      headerProjectNameEditButton.hidden = isEditing;
+    }
+    if (headerProjectNameInput) {
+      headerProjectNameInput.hidden = !isEditing;
+    }
+    if (headerProjectNameSaveButton) {
+      headerProjectNameSaveButton.hidden = !isEditing;
+    }
+    if (headerProjectNameCancelButton) {
+      headerProjectNameCancelButton.hidden = !isEditing;
+    }
+  };
+
+  const saveProjectName = async () => {
+    if (!currentProject || !headerProjectNameInput) {
+      return;
+    }
+    const nextName = String(headerProjectNameInput.value || "").trim() || "Untitled Facility";
+    try {
+      currentProject = await withRetry(() => supabaseService.updateProject(currentProject.id, { name: nextName }));
+      setProjectNameDisplay(currentProject.name);
+      setProjectNameEditorMode(false);
+      setSyncMessage("", false);
+    } catch (error) {
+      setSyncMessage("Could not save project name.", true);
+    }
   };
 
   const pad2 = (value) => String(value).padStart(2, "0");
@@ -566,10 +613,8 @@
     return `${date.getMonth() + 1}/${date.getDate()}/${yy}`;
   };
 
-  const formatIndicatorDate = (date) => `${pad2(date.getMonth() + 1)}/${pad2(date.getDate())}`;
+  const formatIndicatorDate = (date) => `${date.getMonth() + 1}/${date.getDate()}`;
   const formatIndicatorTime = (date) => `${pad2(date.getHours())}:${pad2(date.getMinutes())}`;
-  const formatTooltipLabelHtml = (text) => String(text || "").replace(/\n/g, "<br />");
-
   const formatChartIndicator = (period, dateKey, index) => {
     const selectedDate = parseDateKey(dateKey);
     if (!(selectedDate instanceof Date) || Number.isNaN(selectedDate.getTime())) {
@@ -588,7 +633,7 @@
       const cursor = new Date(weekStart);
       cursor.setMinutes(index * WEATHER_INTERVAL_MINUTES);
       const dayOfWeek = cursor.toLocaleDateString("en-US", { weekday: "short" });
-      return `${dayOfWeek} ${formatIndicatorDate(cursor)}\n${formatIndicatorTime(cursor)}`;
+      return `${formatIndicatorTime(cursor)}\n${dayOfWeek} ${formatIndicatorDate(cursor)}`;
     }
 
     if (period === "month") {
@@ -602,6 +647,19 @@
     }
 
     return "";
+  };
+
+  const buildDisplayLabels = (labels, period, dateKey) => {
+    if (period !== "week") {
+      return labels;
+    }
+    return labels.map((label, index) => {
+      if (Array.isArray(label)) {
+        return label;
+      }
+      const formatted = formatChartIndicator("week", dateKey, index);
+      return formatted ? formatted.split("\n") : label;
+    });
   };
 
   const getDateRangeForPeriod = (period, selectedDate) => {
@@ -676,25 +734,43 @@
     return { lines, labels };
   };
 
-  const renderDonut = (solarEnergyKwh = 0, windEnergyKwh = 0, label = "Day Total") => {
+  const formatEnergyKwh = (value) =>
+    new Intl.NumberFormat("en-US", {
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2,
+    }).format(Math.max(0, Number(value) || 0));
+
+  const setDonutEnergyReadout = (value, prefix = "") => {
+    if (!generationTotalEnergy) {
+      return;
+    }
+    const formatted = `${formatEnergyKwh(value)} kWh`;
+    generationTotalEnergy.textContent = prefix ? `${prefix}: ${formatted}` : formatted;
+  };
+
+  const renderDonut = (solarEnergyKwh = 0, windEnergyKwh = 0) => {
     if (!generationDonut || !generationTotalEnergy) {
       return;
     }
-    const total = Math.max(0, solarEnergyKwh) + Math.max(0, windEnergyKwh);
-    generationTotalEnergy.textContent = `${total.toFixed(2)} kWh`;
+    const solarTotal = Math.max(0, Number(solarEnergyKwh) || 0);
+    const windTotal = Math.max(0, Number(windEnergyKwh) || 0);
+    const total = solarTotal + windTotal;
+    setDonutEnergyReadout(total);
 
     const cx = 110;
     const cy = 110;
     const r = 78;
     const strokeWidth = 32;
     const circumference = 2 * Math.PI * r;
-    const solarRatio = total > 0 ? solarEnergyKwh / total : 0;
+    const solarRatio = total > 0 ? solarTotal / total : 0;
     const solarLen = circumference * solarRatio;
     const windLen = Math.max(circumference - solarLen, 0);
 
     generationDonut.innerHTML = `
       <circle cx="${cx}" cy="${cy}" r="${r}" fill="none" stroke="#ececec" stroke-width="${strokeWidth}" />
       <circle
+        class="generation-donut__segment"
+        data-segment="wind"
         cx="${cx}"
         cy="${cy}"
         r="${r}"
@@ -706,6 +782,8 @@
         transform="rotate(-90 ${cx} ${cy})"
       />
       <circle
+        class="generation-donut__segment"
+        data-segment="solar"
         cx="${cx}"
         cy="${cy}"
         r="${r}"
@@ -717,56 +795,21 @@
         transform="rotate(-90 ${cx} ${cy})"
       />
       <circle cx="${cx}" cy="${cy}" r="${r - strokeWidth / 2}" fill="#ffffff" />
-      <text x="${cx}" y="${cy - 2}" text-anchor="middle" font-size="12" fill="#666666">${label}</text>
-      <text x="${cx}" y="${cy + 18}" text-anchor="middle" font-size="20" font-weight="700" fill="#000000">${total.toFixed(1)}</text>
-    `;
-  };
-
-  const hideTooltip = () => {
-    if (generationTooltip) {
-      generationTooltip.hidden = true;
-    }
-  };
-
-  const updateTooltip = (event) => {
-    if (!generationChartFrame || !generationTooltip || !chartState.total.length) {
-      return;
-    }
-    const rect = generationChartFrame.getBoundingClientRect();
-    const x = event.clientX - rect.left;
-    const clampedX = Math.max(0, Math.min(rect.width, x));
-    const ratio = rect.width > 0 ? clampedX / rect.width : 0;
-    const pointCount = chartState.total.length;
-    const index = Math.max(0, Math.min(pointCount - 1, Math.round(ratio * (pointCount - 1))));
-    const solarValue = chartState.solar[index] || 0;
-    const windValue = chartState.wind[index] || 0;
-    const totalValue = chartState.total[index] || 0;
-    const label = formatChartIndicator(chartState.period, selectedDateKey, index) || chartState.labels[index] || "";
-    const unit = getSeriesUnitLabel(chartState.period);
-
-    const rows = [];
-    if (seriesVisibility.solar) {
-      rows.push(`<div>Solar: ${solarValue.toFixed(2)} ${unit}</div>`);
-    }
-    if (seriesVisibility.wind) {
-      rows.push(`<div>Wind: ${windValue.toFixed(2)} ${unit}</div>`);
-    }
-    if (seriesVisibility.total) {
-      rows.push(`<div>Total: ${totalValue.toFixed(2)} ${unit}</div>`);
-    }
-    generationTooltip.innerHTML = `
-      <div class="generation-tooltip__time">${formatTooltipLabelHtml(label)}</div>
-      ${rows.join("") || `<div>Enable at least one series.</div>`}
     `;
 
-    const offset = 14;
-    const maxLeft = rect.width - generationTooltip.offsetWidth - 8;
-    const left = Math.max(8, Math.min(maxLeft, clampedX + offset));
-    const maxTop = rect.height - generationTooltip.offsetHeight - 8;
-    const top = Math.max(8, Math.min(maxTop, event.clientY - rect.top - generationTooltip.offsetHeight - 10));
-    generationTooltip.style.left = `${left}px`;
-    generationTooltip.style.top = `${top}px`;
-    generationTooltip.hidden = false;
+    const attachSegmentHover = (segment, value, label) => {
+      const arc = generationDonut.querySelector(`.generation-donut__segment[data-segment="${segment}"]`);
+      if (!arc) {
+        return;
+      }
+      const show = () => setDonutEnergyReadout(value, label);
+      const hide = () => setDonutEnergyReadout(total);
+      arc.addEventListener("mouseenter", show);
+      arc.addEventListener("mouseleave", hide);
+    };
+
+    attachSegmentHover("solar", solarTotal, "Solar");
+    attachSegmentHover("wind", windTotal, "Wind");
   };
 
   const hasZoneInTimestamp = (timestampLike) => /(?:z|[+-]\d{2}:?\d{2})$/i.test(cleanText(timestampLike));
@@ -1333,13 +1376,12 @@
       solarWeather.push({ timestamp: `${key}:00`, ...solarRecord });
       windWeather.push({ timestamp: `${key}:00`, ...windRecord });
 
-      labels.push(
-        period === "day"
-          ? `${pad2(cursor.getHours())}:${pad2(cursor.getMinutes())}`
-          : `${cursor.toLocaleString("en-US", {
-              weekday: "short",
-            })} ${cursor.getMonth() + 1}/${cursor.getDate()} ${pad2(cursor.getHours())}:${pad2(cursor.getMinutes())}`
-      );
+      if (period === "day") {
+        labels.push(`${pad2(cursor.getHours())}:${pad2(cursor.getMinutes())}`);
+      } else {
+        const dayOfWeek = cursor.toLocaleDateString("en-US", { weekday: "short" });
+        labels.push([formatIndicatorTime(cursor), `${dayOfWeek} ${formatIndicatorDate(cursor)}`]);
+      }
     }
 
     return computeSeriesFromWeather(solarWeather, windWeather, labels, {
@@ -1508,14 +1550,12 @@
     }
 
     if (weatherDay.loading) {
-      hideTooltip();
       assetsChart.update({ labels: [], solar: [], wind: [], total: [] });
       renderDonut(0, 0);
       return;
     }
 
     if (!weatherDay.loaded) {
-      hideTooltip();
       if (generationAxis) {
         generationAxis.innerHTML = "";
       }
@@ -1561,8 +1601,10 @@
     const windValues = series.wind;
     const totalValues = series.total;
     const yAxisLabel = `Generation (${getSeriesUnitLabel(series.period)})`;
+    const displayLabels = buildDisplayLabels(series.labels || [], series.period, selectedDateKey);
+
     assetsChart.update({
-      labels: series.labels,
+      labels: displayLabels,
       solar: solarValues,
       wind: windValues,
       total: totalValues,
@@ -1570,7 +1612,7 @@
       visible: seriesVisibility,
     });
 
-    chartState.labels = series.labels;
+    chartState.labels = displayLabels;
     chartState.solar = solarValues;
     chartState.wind = windValues;
     chartState.total = totalValues;
@@ -1581,8 +1623,7 @@
 
     const solarEnergyKwh = solarValues.reduce((sum, value) => sum + value, 0);
     const windEnergyKwh = windValues.reduce((sum, value) => sum + value, 0);
-    const label = `${series.period[0].toUpperCase()}${series.period.slice(1)} Total`;
-    renderDonut(solarEnergyKwh, windEnergyKwh, label);
+    renderDonut(solarEnergyKwh, windEnergyKwh);
 
     renderDebugData({ totalKw: Float64Array.from(totalValues) });
   };
@@ -1795,11 +1836,6 @@
     addWindButton.addEventListener("click", () => addAsset("wind"));
   }
 
-  if (generationChartFrame) {
-    generationChartFrame.addEventListener("mousemove", updateTooltip);
-    generationChartFrame.addEventListener("mouseleave", hideTooltip);
-  }
-
   window.addEventListener("scroll", hideAssetFieldTooltip, true);
   window.addEventListener("resize", hideAssetFieldTooltip);
 
@@ -1835,7 +1871,6 @@
       }
       seriesVisibility[series] = !seriesVisibility[series];
       button.classList.toggle("is-active", seriesVisibility[series]);
-      hideTooltip();
       scheduleRecompute();
     });
   });
@@ -1908,18 +1943,44 @@
     });
   }
 
+  if (headerProjectNameEditButton && headerProjectNameInput) {
+    headerProjectNameEditButton.addEventListener("click", () => {
+      setProjectNameEditorMode(true);
+      headerProjectNameInput.focus();
+      headerProjectNameInput.select();
+    });
+  }
+
+  if (headerProjectNameSaveButton) {
+    headerProjectNameSaveButton.addEventListener("click", () => {
+      void saveProjectName();
+    });
+  }
+
+  if (headerProjectNameCancelButton && headerProjectNameInput) {
+    headerProjectNameCancelButton.addEventListener("click", () => {
+      setProjectNameDisplay(currentProject?.name);
+      setProjectNameEditorMode(false);
+    });
+  }
+
   if (headerProjectNameInput) {
-    headerProjectNameInput.addEventListener("input", (event) => {
-      if (!currentProject) {
+    headerProjectNameInput.addEventListener("input", () => {
+      const text = String(headerProjectNameInput.value || "");
+      headerProjectNameInput.size = Math.min(Math.max(text.length + 1, 8), 40);
+    });
+
+    headerProjectNameInput.addEventListener("keydown", (event) => {
+      if (event.key === "Enter") {
+        event.preventDefault();
+        void saveProjectName();
         return;
       }
-      const nextName = event.target.value || "Untitled Facility";
-      void withRetry(() => supabaseService.updateProject(currentProject.id, { name: nextName }))
-        .then((project) => {
-          currentProject = project;
-          setSyncMessage("", false);
-        })
-        .catch(() => setSyncMessage("Could not save project name.", true));
+      if (event.key === "Escape") {
+        event.preventDefault();
+        setProjectNameDisplay(currentProject?.name);
+        setProjectNameEditorMode(false);
+      }
     });
   }
 
@@ -1960,9 +2021,8 @@
       assetsDatePickerInput.value = selectedDateKey;
     }
 
-    if (headerProjectNameInput) {
-      headerProjectNameInput.value = currentProject.name || "Untitled Facility";
-    }
+    setProjectNameDisplay(currentProject.name);
+    setProjectNameEditorMode(false);
 
     await restoreProjectAssets();
     scheduleRecompute();
