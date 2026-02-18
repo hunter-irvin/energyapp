@@ -4,7 +4,7 @@
   "private": true,
   "type": "commonjs",
   "scripts": {
-    "dev": "node server.js",
+    "dev": "set \"ENERGYAPP_ALLOW_INSECURE_OPEN_METEO_TLS=1\" && node server.js",
     "start": "node server.js",
     "test": "node tests/run-tests.js"
   }

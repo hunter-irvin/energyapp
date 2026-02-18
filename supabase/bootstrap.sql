@@ -16,7 +16,7 @@ create table if not exists public.projects (
 create table if not exists public.assets (
   id text primary key,
   project_id text not null references public.projects(id) on delete cascade,
-  asset_type text not null check (asset_type in ('solar', 'wind')),
+  asset_type text not null check (asset_type in ('solar', 'wind', 'storage')),
   name text not null default '',
   model jsonb not null default '{}'::jsonb,
   created_at timestamptz not null default now(),

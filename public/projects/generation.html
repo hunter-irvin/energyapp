@@ -3,9 +3,9 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Add Generation Assets</title>
+    <title>Generation | Energy Explorer</title>
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
-    <link rel="stylesheet" href="styles.css" />
+    <link rel="stylesheet" href="/assets/css/styles.css" />
   </head>
   <body class="project-page-body">
     <header class="project-header">
@@ -13,16 +13,17 @@
         <label class="project-header__label" for="header-project-name">Project Name</label>
         <input id="header-project-name" class="project-header__input" type="text" placeholder="Untitled Project" />
       </div>
-      <a class="btn" href="projects.html">Exit</a>
+      <a class="btn" href="/">Exit</a>
     </header>
     <main class="page page--project assets-page">
       <aside class="project-sidebar" aria-label="Project navigation">
-        <a class="project-nav-btn" id="header-settings-link" href="index.html">Settings</a>
-        <a class="project-nav-btn project-nav-btn--active" href="assets.html">Assets</a>
+        <a class="project-nav-btn" id="header-settings-link" href="/projects/location.html">Location</a>
+        <a class="project-nav-btn project-nav-btn--active" href="/projects/generation.html">Generation</a>
+        <a class="project-nav-btn" id="sidebar-storage-link" href="/projects/storage.html">Storage</a>
       </aside>
       <section class="card assets-card">
         <header class="assets-header">
-          <h1>Add Generation Assets</h1>
+          <h1>Generation</h1>
         </header>
         <section class="assets-summary">
           <div class="assets-inputs">
@@ -60,15 +61,16 @@
               </div>
             </div>
             <p class="assets-chart-legend">
-              <span class="legend-chip legend-chip--solar">Solar</span>
-              <span class="legend-chip legend-chip--wind">Wind</span>
-              <span class="legend-chip legend-chip--total">Total</span>
+              <button class="legend-chip legend-chip--toggle legend-chip--solar is-active" data-assets-series="solar" type="button">Solar</button>
+              <button class="legend-chip legend-chip--toggle legend-chip--wind is-active" data-assets-series="wind" type="button">Wind</button>
+              <button class="legend-chip legend-chip--toggle legend-chip--total is-active" data-assets-series="total" type="button">Total</button>
             </p>
           </div>
           <div class="assets-chart-layout">
             <div class="assets-timeseries-panel">
               <div class="assets-chart-frame" id="assets-chart-frame">
-                <svg id="generation-chart" class="generation-chart" viewBox="0 0 1000 260" preserveAspectRatio="none" aria-label="Typical generation chart"></svg>
+                <canvas id="generation-chart" class="generation-chart" aria-label="Typical generation chart"></canvas>
+                <div class="chart-loading" id="assets-chart-loading" hidden>Loading...</div>
                 <div id="generation-tooltip" class="generation-tooltip" hidden></div>
               </div>
               <div class="assets-chart-axis" id="generation-axis"></div>
@@ -195,12 +197,15 @@
     <div id="asset-field-tooltip" class="asset-field-tooltip" hidden></div>
 
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-    <script src="config.local.js"></script>
+    <script src="/config.local.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
+    <script src="/assets/js/core/charting.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
-    <script src="supabase-config.js"></script>
-    <script src="supabase-client.js"></script>
-    <script src="models.js"></script>
-    <script src="generation.js"></script>
-    <script src="assets.js"></script>
+    <script src="/assets/js/core/supabase-config.js"></script>
+    <script src="/assets/js/core/supabase-client.js"></script>
+    <script src="/assets/js/core/shared-cache.js"></script>
+    <script src="/assets/js/core/models.js"></script>
+    <script src="/assets/js/features/generation.js"></script>
+    <script src="/assets/js/pages/generation.js"></script>
   </body>
 </html>

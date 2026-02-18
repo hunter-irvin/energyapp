@@ -10,6 +10,7 @@ const chartAxis = document.getElementById("chart-axis");
 const chartDisplay = document.getElementById("chart-display");
 const chartTooltip = document.getElementById("chart-tooltip");
 const chartHoverLine = document.getElementById("chart-hover-line");
+const settingsChartLoading = document.getElementById("settings-chart-loading");
 const loadingStepBar = document.getElementById("loading-step-bar");
 const loadingOverallBar = document.getElementById("loading-overall-bar");
 const tablePanel = document.getElementById("table-panel");
@@ -19,6 +20,9 @@ const debugPanel = document.getElementById("debug-panel");
 const debugOutput = document.getElementById("debug-output");
 const datePickerButton = document.getElementById("date-picker-button");
 const datePickerInput = document.getElementById("date-picker");
+const weatherDateRangeReadout = document.getElementById("weather-date-range-readout");
+const weatherShiftBackButton = document.getElementById("weather-shift-back");
+const weatherShiftForwardButton = document.getElementById("weather-shift-forward");
 const nrelProviderButton = document.getElementById("provider-nrel");
 const openMeteoProviderButton = document.getElementById("provider-open-meteo");
 
@@ -30,7 +34,9 @@ const dataStore = {
 
 const headerProjectNameInput = document.getElementById("header-project-name");
 const headerAssetsLink = document.getElementById("header-assets-link");
+const headerStorageLink = document.getElementById("header-storage-link");
 const supabaseService = window.EnergySupabaseService;
+const sharedCache = window.EnergySharedCache || null;
 const queryParams = new URLSearchParams(window.location.search);
 const selectedProjectId = queryParams.get("projectId");
 const isValidProjectId = (value) => typeof value === "string" && /^[a-zA-Z0-9-]+$/.test(value);
@@ -40,6 +46,8 @@ const WIND_YEAR = "2014";
 const WEATHER_PROXY_ENDPOINT = "/api/weather-proxy";
 const WEATHER_CACHE_DATE_KEY = "all";
 const WEATHER_INTERVAL_MINUTES = 30;
+const PERIOD_STORAGE_SUFFIX = "selectedPeriod";
+const PERIOD_OPTIONS = ["day", "week", "month", "year"];
 const WEATHER_PROVIDERS = {
   nrel: "NREL",
   open_meteo: "Open-Meteo",
@@ -70,6 +78,7 @@ const tableState = {
   page: 1,
 };
 let currentSeries = null;
+let weatherChart = null;
 
 let selectionMode = false;
 let marker = null;
@@ -303,6 +312,9 @@ const setStatus = ({ loading = false, loadingMessage = "", success = "", error =
   loadingStatus.hidden = !loading;
   successStatus.hidden = !success;
   errorStatus.hidden = !error;
+  if (settingsChartLoading) {
+    settingsChartLoading.hidden = !loading;
+  }
   if (loading && loadingMessage) {
     loadingText.textContent = loadingMessage;
   }
@@ -390,6 +402,49 @@ const cleanText = (value) => String(value || "").replace(/^\ufeff/, "").trim();
 const formatDateKey = (date) =>
   `${date.getFullYear()}-${pad2(date.getMonth() + 1)}-${pad2(date.getDate())}`;
 
+const formatShortDate = (date) => {
+  const yy = String(date.getFullYear()).slice(-2);
+  return `${date.getMonth() + 1}/${date.getDate()}/${yy}`;
+};
+
+const formatIndicatorDate = (date) => `${pad2(date.getMonth() + 1)}/${pad2(date.getDate())}`;
+const formatIndicatorTime = (date) => `${pad2(date.getHours())}:${pad2(date.getMinutes())}`;
+const formatTooltipLabelHtml = (text) => String(text || "").replace(/\n/g, "<br />");
+
+const formatChartIndicator = (period, date, index) => {
+  if (!(date instanceof Date) || Number.isNaN(date.getTime())) {
+    return "";
+  }
+
+  if (period === "day") {
+    const cursor = new Date(date);
+    cursor.setHours(0, 0, 0, 0);
+    cursor.setMinutes(index * WEATHER_INTERVAL_MINUTES);
+    return formatIndicatorTime(cursor);
+  }
+
+  if (period === "week") {
+    const weekStart = getWeekStart(date);
+    weekStart.setHours(0, 0, 0, 0);
+    const cursor = new Date(weekStart);
+    cursor.setHours(cursor.getHours() + index);
+    const dayOfWeek = cursor.toLocaleDateString("en-US", { weekday: "short" });
+    return `${dayOfWeek} ${formatIndicatorDate(cursor)}\n${formatIndicatorTime(cursor)}`;
+  }
+
+  if (period === "month") {
+    const cursor = new Date(date.getFullYear(), date.getMonth(), 1 + index);
+    return formatIndicatorDate(cursor);
+  }
+
+  if (period === "year") {
+    const cursor = new Date(date.getFullYear(), 0, 1 + index);
+    return formatIndicatorDate(cursor);
+  }
+
+  return "";
+};
+
 const chooseDateForProvider = (provider, currentDate) => {
   if (provider === "open_meteo") {
     const today = new Date();
@@ -424,6 +479,9 @@ const clearLoadedWeatherData = () => {
   dataStore.daily.wind = [];
   currentSeries = null;
   tableState.page = 1;
+  if (currentProject?.id && sharedCache) {
+    sharedCache.clearWeather(currentProject.id);
+  }
   hideChartTooltip();
   setLoadingProgress(0, 0);
   updateView();
@@ -458,6 +516,71 @@ const getWeekEnd = (weekStart) => {
   end.setDate(end.getDate() + 6);
   end.setHours(23, 59, 59, 999);
   return end;
+};
+
+const getScopedUiKey = (projectId, suffix) => {
+  if (!projectId) {
+    return "";
+  }
+  if (typeof supabaseService?.buildScopedUiStorageKey === "function") {
+    return supabaseService.buildScopedUiStorageKey(projectId, suffix);
+  }
+  return `energyapp.project.${projectId}.${suffix}`;
+};
+
+const loadPersistedPeriod = (projectId, fallback = "week") => {
+  const key = getScopedUiKey(projectId, PERIOD_STORAGE_SUFFIX);
+  if (!key) {
+    return fallback;
+  }
+  const stored = localStorage.getItem(key);
+  return PERIOD_OPTIONS.includes(stored) ? stored : fallback;
+};
+
+const persistPeriod = (projectId, period) => {
+  if (!PERIOD_OPTIONS.includes(period)) {
+    return;
+  }
+  const key = getScopedUiKey(projectId, PERIOD_STORAGE_SUFFIX);
+  if (!key) {
+    return;
+  }
+  localStorage.setItem(key, period);
+};
+
+const getDateRangeForPeriod = (period, date) => {
+  const start = new Date(date);
+  start.setHours(0, 0, 0, 0);
+  const end = new Date(start);
+  if (period === "week") {
+    const weekStart = getWeekStart(start);
+    const weekEnd = new Date(weekStart);
+    weekEnd.setDate(weekEnd.getDate() + 6);
+    return { start: weekStart, end: weekEnd };
+  }
+  if (period === "month") {
+    return {
+      start: new Date(start.getFullYear(), start.getMonth(), 1),
+      end: new Date(start.getFullYear(), start.getMonth() + 1, 0),
+    };
+  }
+  if (period === "year") {
+    return {
+      start: new Date(start.getFullYear(), 0, 1),
+      end: new Date(start.getFullYear(), 11, 31),
+    };
+  }
+  return { start, end };
+};
+
+const updateWeatherDateRangeReadout = () => {
+  if (!weatherDateRangeReadout) {
+    return;
+  }
+  const { start, end } = getDateRangeForPeriod(viewState.period, selectedDate);
+  const startText = formatShortDate(start);
+  const endText = formatShortDate(end);
+  weatherDateRangeReadout.textContent = startText === endText ? startText : `${startText}-${endText}`;
 };
 
 const normalizeHeader = (header) => {
@@ -862,34 +985,24 @@ const getAnnualMaxValue = (records, metric) =>
     return Math.max(max, value);
   }, 0);
 
+const ensureWeatherChart = () => {
+  if (weatherChart || !chartSvg || !window.EnergyCharts) {
+    return;
+  }
+  weatherChart = window.EnergyCharts.createSettingsChart(chartSvg);
+};
+
 const renderChart = (series, maxValues = {}) => {
-  const width = 600;
-  const height = 220;
-  const solarMax = Math.max(maxValues.solar || 0, ...series.solar, 1);
-  const windMax = Math.max(maxValues.wind || 0, ...series.wind, 1);
-  const solarPath = seriesVisibility.solar
-    ? buildAreaPath(series.solar, height, width, solarMax)
-    : "";
-  const windPath = seriesVisibility.wind
-    ? buildAreaPath(series.wind, height, width, windMax)
-    : "";
-  chartSvg.innerHTML = `
-    <defs>
-      <linearGradient id="solar-gradient" x1="0" x2="1" y1="0" y2="0">
-        <stop offset="0%" stop-color="#f9a825" stop-opacity="0.2"></stop>
-        <stop offset="50%" stop-color="#f9a825" stop-opacity="0.8"></stop>
-        <stop offset="100%" stop-color="#f9a825" stop-opacity="0.2"></stop>
-      </linearGradient>
-      <linearGradient id="wind-gradient" x1="0" x2="1" y1="0" y2="0">
-        <stop offset="0%" stop-color="#1f77b4" stop-opacity="0.3"></stop>
-        <stop offset="50%" stop-color="#1f77b4" stop-opacity="0.8"></stop>
-        <stop offset="100%" stop-color="#1f77b4" stop-opacity="0.3"></stop>
-      </linearGradient>
-    </defs>
-    ${seriesVisibility.solar ? `<path d="${solarPath}" fill="url(#solar-gradient)"></path>` : ""}
-    ${seriesVisibility.wind ? `<path d="${windPath}" fill="url(#wind-gradient)"></path>` : ""}
-  `;
-  renderAxis(series.labels);
+  ensureWeatherChart();
+  if (!weatherChart) return;
+  weatherChart.update({
+    labels: series.labels,
+    solar: series.solar,
+    wind: series.wind,
+    showSolar: seriesVisibility.solar,
+    showWind: seriesVisibility.wind,
+  });
+  renderAxis([]);
 };
 
 const renderTable = (series) => {
@@ -930,7 +1043,7 @@ const updateChartTooltip = (event) => {
   const relativeX = Math.min(Math.max(event.clientX - rect.left, 0), rect.width);
   const pointCount = labels.length;
   const index = pointCount === 1 ? 0 : Math.round((relativeX / rect.width) * (pointCount - 1));
-  const label = labels[index];
+  const label = formatChartIndicator(viewState.period, selectedDate, index) || labels[index];
   const solarValue = formatNumber(solar[index]);
   const windValue = formatNumber(wind[index], viewState.period === "day" ? 2 : 0);
 
@@ -957,7 +1070,7 @@ const updateChartTooltip = (event) => {
   }
   chartTooltip.hidden = false;
   chartTooltip.innerHTML = `
-    <div class="chart-tooltip__label">${label}</div>
+    <div class="chart-tooltip__label">${formatTooltipLabelHtml(label)}</div>
     ${tooltipRows.join("") || `<div class="chart-tooltip__row">Enable a series.</div>`}
   `;
 
@@ -983,6 +1096,7 @@ const hideChartTooltip = () => {
 
 const updateView = () => {
   chartDate.textContent = formatDateLabel(selectedDate);
+  updateWeatherDateRangeReadout();
   const series = buildSeries(
     dataStore.raw15.solar,
     dataStore.raw15.wind,
@@ -1060,7 +1174,41 @@ const hydrateDataStore = (solarPayload, windPayload, provider) => {
   dataStore.hourly.wind = buildHourlyAggregation(nextWindRecords, [windMetricState.speed, windMetricState.direction, "temperature_100m", "pressure_100m"]);
   dataStore.daily.solar = toDailyAggregation(nextSolarRecords, ["ghi", "dni", "dhi", "air_temperature", "wind_speed"]);
   dataStore.daily.wind = toDailyAggregation(nextWindRecords, [windMetricState.speed, windMetricState.direction, "temperature_100m", "pressure_100m"]);
+  if (currentProject?.id && sharedCache) {
+    const weatherRevision = sharedCache.setParsedWeather(currentProject.id, {
+      provider,
+      timeZone: locationTimeZone,
+      raw15: dataStore.raw15,
+      hourly: dataStore.hourly,
+      daily: dataStore.daily,
+      windMetric: windMetricState,
+    });
+    sharedCache.setRevision(currentProject.id, "weather", weatherRevision);
+  }
   return { solarCount: nextSolarRecords.length, windCount: nextWindRecords.length };
+};
+
+const restoreWeatherFromSharedCache = (provider) => {
+  if (!currentProject?.id || !sharedCache) {
+    return false;
+  }
+  const cached = sharedCache.getParsedWeather(currentProject.id, { provider });
+  if (!cached?.raw15?.solar || !cached?.raw15?.wind) {
+    return false;
+  }
+  locationTimeZone = cached.timeZone || "UTC";
+  windMetricState = cached.windMetric || resolveWindMetrics(cached.raw15.wind);
+  dataStore.raw15.solar = cached.raw15.solar || [];
+  dataStore.raw15.wind = cached.raw15.wind || [];
+  dataStore.hourly.solar = cached.hourly?.solar || buildHourlyAggregation(dataStore.raw15.solar, ["ghi", "dni", "dhi", "air_temperature", "wind_speed"]);
+  dataStore.hourly.wind =
+    cached.hourly?.wind ||
+    buildHourlyAggregation(dataStore.raw15.wind, [windMetricState.speed, windMetricState.direction, "temperature_100m", "pressure_100m"]);
+  dataStore.daily.solar = cached.daily?.solar || toDailyAggregation(dataStore.raw15.solar, ["ghi", "dni", "dhi", "air_temperature", "wind_speed"]);
+  dataStore.daily.wind =
+    cached.daily?.wind ||
+    toDailyAggregation(dataStore.raw15.wind, [windMetricState.speed, windMetricState.direction, "temperature_100m", "pressure_100m"]);
+  return true;
 };
 
 const fetchDataset = async ({ provider, lat, lng }) => {
@@ -1187,6 +1335,8 @@ document.querySelectorAll("[data-period]").forEach((button) => {
   button.addEventListener("click", () => {
     viewState.period = button.dataset.period;
     applyToggleState(document.querySelectorAll("[data-period]"), viewState.period, "period");
+    persistPeriod(currentProject?.id, viewState.period);
+    updateWeatherDateRangeReadout();
     updateView();
   });
 });
@@ -1232,6 +1382,7 @@ if (datePickerInput) {
       return;
     }
     selectedDate = nextDate;
+    updateWeatherDateRangeReadout();
     if (currentProject) {
       try {
         currentProject = await withRetry(() =>
@@ -1242,6 +1393,48 @@ if (datePickerInput) {
       }
     }
     updateView();
+  });
+}
+
+const shiftSelectedDate = (direction) => {
+  const shifted = new Date(selectedDate);
+  if (viewState.period === "day") {
+    shifted.setDate(shifted.getDate() + direction);
+  } else if (viewState.period === "week") {
+    shifted.setDate(shifted.getDate() + direction * 7);
+  } else if (viewState.period === "month") {
+    shifted.setMonth(shifted.getMonth() + direction);
+  } else {
+    shifted.setFullYear(shifted.getFullYear() + direction);
+  }
+  selectedDate = shifted;
+  if (datePickerInput) {
+    datePickerInput.value = formatDateKey(selectedDate);
+  }
+  updateWeatherDateRangeReadout();
+  if (currentProject) {
+    void withRetry(() =>
+      supabaseService.updateProject(currentProject.id, { selectedDate: formatDateKey(selectedDate) })
+    )
+      .then((project) => {
+        currentProject = project;
+      })
+      .catch(() => {
+        setStatus({ loading: false, error: "Unable to save date selection. Please retry." });
+      });
+  }
+  updateView();
+};
+
+if (weatherShiftBackButton) {
+  weatherShiftBackButton.addEventListener("click", () => {
+    shiftSelectedDate(-1);
+  });
+}
+
+if (weatherShiftForwardButton) {
+  weatherShiftForwardButton.addEventListener("click", () => {
+    shiftSelectedDate(1);
   });
 }
 
@@ -1401,6 +1594,10 @@ const loadProjectWeather = async () => {
     updateView();
     return;
   }
+  if (restoreWeatherFromSharedCache(activeProvider)) {
+    updateView();
+    return;
+  }
   await loadWithProvider(activeProvider, { auto: true });
 };
 
@@ -1408,20 +1605,25 @@ const init = async () => {
   await supabaseService.migrateLegacyLocalData();
 
   if (!selectedProjectId || !isValidProjectId(selectedProjectId)) {
-    window.location.href = "projects.html";
+    window.location.href = "/";
     return;
   }
 
   const project = await withRetry(() => supabaseService.getProject(selectedProjectId));
   if (!project) {
-    window.location.href = "projects.html";
+    window.location.href = "/";
     return;
   }
 
   applyProjectToUi(project);
+  viewState.period = loadPersistedPeriod(project.id, viewState.period);
+  applyToggleState(document.querySelectorAll("[data-period]"), viewState.period, "period");
 
   if (headerAssetsLink) {
-    headerAssetsLink.href = `assets.html?projectId=${encodeURIComponent(project.id)}`;
+    headerAssetsLink.href = `/projects/generation.html?projectId=${encodeURIComponent(project.id)}`;
+  }
+  if (headerStorageLink) {
+    headerStorageLink.href = `/projects/storage.html?projectId=${encodeURIComponent(project.id)}`;
   }
 
   updateView();

@@ -47,7 +47,7 @@ alter table public.nrel_cache
 alter table public.assets
   drop constraint if exists assets_asset_type_check,
   add constraint assets_asset_type_check
-    check (asset_type in ('solar', 'wind'));
+    check (asset_type in ('solar', 'wind', 'storage'));
 
 alter table public.nrel_cache
   drop constraint if exists nrel_cache_dataset_check,

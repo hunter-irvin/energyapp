@@ -1,7 +1,9 @@
 const assert = require("assert");
 const path = require("path");
 
-const { computeSolarPower, sumSolarAssets } = require(path.join(__dirname, "..", "generation.js"));
+const { computeSolarPower, sumSolarAssets } = require(
+  path.join(__dirname, "..", "public", "assets", "js", "features", "generation.js")
+);
 
 const runSolarComputeTests = () => {
   const baseAsset = {

@@ -113,6 +113,10 @@ body {
   min-height: calc(100vh - 75px);
 }
 
+.page--project.page--project-no-sidebar {
+  grid-template-columns: minmax(0, 1fr);
+}
+
 .page--project > .project-sidebar {
   width: var(--project-sidebar-width) !important;
   min-width: var(--project-sidebar-width) !important;
@@ -590,10 +594,10 @@ body {
 
 
 .assets-chart-section {
-  background: #f9f9f9;
-  border: 1px solid #d0d0d0;
+  background: transparent;
+  border: 0;
   border-radius: 0px;
-  padding: 14px;
+  padding: 0;
 }
 
 .assets-chart-header {
@@ -646,15 +650,70 @@ body {
 
 .legend-chip--solar::before { background: #f9a825; }
 .legend-chip--wind::before { background: #1f77b4; }
-.legend-chip--total::before { background: #000000; }
+.legend-chip--total::before { background: #555555; }
+.legend-chip--soc::before { background: #000000; }
+
+.legend-chip--toggle {
+  border: 1px solid #d0d0d0;
+  background: #ffffff;
+  color: #666666;
+  padding: 4px 8px;
+  cursor: pointer;
+  font-size: 12px;
+  line-height: 1.2;
+}
+
+.legend-chip--toggle.is-active {
+  border-color: #000000;
+  color: #111111;
+}
+
+.storage-inputs {
+  grid-template-columns: 1fr;
+}
+
+.storage-formula {
+  margin: 10px 0 0;
+  color: #666666;
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+.field-help {
+  border: 1px solid #d0d0d0;
+  background: #ffffff;
+  color: #666666;
+  border-radius: 50%;
+  width: 16px;
+  height: 16px;
+  font-size: 10px;
+  line-height: 1;
+  cursor: pointer;
+  margin-left: 6px;
+  vertical-align: middle;
+}
+
+.field-tooltip {
+  position: fixed;
+  z-index: 30;
+  max-width: 280px;
+  padding: 8px 10px;
+  background: #ffffff;
+  border: 1px solid #d0d0d0;
+  color: #111111;
+  font-size: 11px;
+  line-height: 1.35;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.12);
+  pointer-events: none;
+}
 
 .assets-chart-frame {
   position: relative;
   height: 260px;
-  border: 1px solid #d0d0d0;
+  border: 0;
   border-radius: 0px;
   overflow: hidden;
-  background: #ffffff;
+  background: transparent;
 }
 
 .assets-chart-layout {
@@ -857,10 +916,10 @@ body {
 }
 
 .chart-panel {
-  background: #f9f9f9;
+  background: transparent;
   border-radius: 0px;
-  padding: 20px 24px 24px;
-  border: 1px solid #d0d0d0;
+  padding: 0;
+  border: 0;
 }
 
 .chart-panel__header {
@@ -929,10 +988,10 @@ body {
 .chart-display {
   position: relative;
   height: 220px;
-  border: 1px solid #d0d0d0;
+  border: 0;
   border-radius: 0px;
   overflow: hidden;
-  background: #ffffff;
+  background: transparent;
 }
 
 .chart-svg {
@@ -954,8 +1013,8 @@ body {
 }
 
 .chart-axis--below {
-  margin-top: 10px;
-  padding: 0 12px;
+  margin-top: 8px;
+  padding: 0;
 }
 
 .chart-axis-title {
@@ -965,6 +1024,22 @@ body {
   color: #999999;
   letter-spacing: 0.03em;
   text-transform: uppercase;
+  pointer-events: none;
+}
+
+.chart-loading {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  z-index: 4;
+  padding: 6px 10px;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  color: #333333;
+  background: rgba(255, 255, 255, 0.9);
+  border: 1px solid #d0d0d0;
   pointer-events: none;
 }
 
