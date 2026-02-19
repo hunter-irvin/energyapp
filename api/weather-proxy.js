@@ -485,7 +485,6 @@ const handleWeatherProxy = async (req, res) => {
   }
 };
 
-module.exports = {
-  handleWeatherProxy,
-  handleNrelCsvProxy,
-};
+module.exports = handleWeatherProxy;
+module.exports.handleWeatherProxy = handleWeatherProxy;
+module.exports.handleNrelCsvProxy = handleNrelCsvProxy;

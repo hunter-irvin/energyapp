@@ -3,7 +3,7 @@ const { parseIso } = require("./rates/series-utils");
 const { resolveProviderMetadata } = require("./rates/provider-resolver");
 const { getLmpSeries } = require("./rates/lmp-adapters");
 const { getTariffSeries } = require("./rates/tariff-adapters");
-const { buildHealthRows } = require("./rates/health");
+const { buildHealthRows } = require("./rates/health-utils");
 
 const sendJsonError = (res, status, message) => {
   res.writeHead(status, {
