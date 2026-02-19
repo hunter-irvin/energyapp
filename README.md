@@ -9,6 +9,7 @@ This repo is organized as a static multi-page web app served from `public/`.
   - `/projects/location.html`
   - `/projects/generation.html`
   - `/projects/storage.html`
+  - `/projects/rates.html`
 
 ### Frontend layout
 
@@ -22,6 +23,7 @@ This repo is organized as a static multi-page web app served from `public/`.
 - `server.js` static hosting + API proxy routes
 - `api/weather-proxy.js` shared weather proxy handlers (`/api/weather-proxy`, `/api/nrel-proxy`)
 - `api/nrel-proxy.js` compatibility wrapper exporting the NREL CSV handler
+- `api/rates-proxy.js` phase-1 rates provider, timeseries, health, and refresh handlers
 - `supabase/` schema/bootstrap/migrations
 - `tests/` automated tests
 
@@ -175,10 +177,27 @@ Define these globals before `public/assets/js/core/supabase-client.js` loads (fo
 Runtime resolution order:
 
 1. `window.ENERGYAPP_SUPABASE_URL` + `window.ENERGYAPP_SUPABASE_ANON_KEY`
-2. `window.ENERGYAPP_SUPABASE_CONFIG` (or `public/assets/js/core/supabase-config.js` defaults)
+2. `window.ENERGYAPP_SUPABASE_CONFIG` (if populated by non-sensitive runtime config)
 3. `GET /api/runtime-config` (when served by `server.js`)
 
 If no source provides both values, the app falls back to local browser persistence.
+
+#### Secrets policy (local + Vercel)
+
+- Store private keys only in environment variables.
+- Do not place private keys in client files such as `public/config.local.js`.
+- `.env`, `.env.local`, and `.env.*.local` are git-ignored for local development.
+- For Vercel, define env vars in Project Settings > Environment Variables.
+
+Recommended server env vars:
+
+- `ENERGYAPP_NREL_API_KEY` (private)
+- `ENERGYAPP_NREL_CONTACT_EMAIL` (non-secret but environment-specific)
+- `ENERGYAPP_SUPABASE_SERVICE_ROLE_KEY` (private; server-only)
+- `ENERGYAPP_SUPABASE_URL` (public project URL)
+- `ENERGYAPP_SUPABASE_ANON_KEY` (publishable/anon key; safe for client usage)
+- `ENERGYAPP_ERCOT_SUBSCRIPTION_KEY` (private; ERCOT live LMP adapter)
+- `ENERGYAPP_ERCOT_ID_TOKEN` (private; ERCOT live LMP adapter, optional if using username/password token flow)
 
 #### Where keys are read in code
 
@@ -230,6 +249,82 @@ Rollback notes:
 - Weather payloads are persisted in `nrel_cache` keyed by `project_id`, `provider`, `dataset`, `date_key`, `interval_minutes`, and `source_year`.
 - Cache rows store raw/normalized-compatible JSON payloads plus `fetched_at`, `wkt`, `timezone`, and `source` metadata for traceability.
 - UI loads cached payloads first and refreshes from `/api/weather-proxy` when cache is stale (24h TTL) or when the **Refresh Weather Data** action is used.
+
+### Rates Page (Phase 3)
+
+`/projects/rates.html` provides electricity-rate visualization with project-inferred location context.
+
+- Controls:
+  - service type: `LMP` or `Tariff`
+  - display unit: `kWh` or `MWh` (client-side conversion)
+  - market mode: `Real-Time` or `Day-Ahead` (LMP only)
+  - chart period: `Day`, `Week`, `Month`
+  - date picker + range shift controls
+- Fixed source window for ingestion/cache in phase 1: `last 30 days + next 7 days`.
+- Missing values are intentionally returned as `null` and rendered as:
+  - line breaks in the chart
+  - shaded missing-data bands over empty intervals
+- Empty-window notice appears when selected window has no published values for the active mode.
+- Debug table under chart reports status, coverage, source, source unit, and confidence.
+
+#### Rates API endpoints
+
+Served by `server.js` + `api/rates-proxy.js`:
+
+- `GET /api/rates/provider?lat={lat}&lng={lng}`
+  - resolves inferred `utilityName`, `isoRegion`, and `timezone`
+- `GET /api/v2/rates/timeseries?lat={lat}&lng={lng}&serviceType={lmp|tariff}&marketMode={real_time|day_ahead|tariff}&start={ISO}&end={ISO}`
+  - returns hourly points and missing intervals for charting
+  - includes contract metadata: `apiVersion`, `unit`, `sourceUnit`, `confidence`, `qualityStatus`
+  - Rates UI applies display-unit conversion (`USD/kWh` or `USD/MWh`) client-side
+- `GET /api/rates/health?lat={lat}&lng={lng}&serviceType={lmp|tariff}&start={ISO}&end={ISO}`
+  - returns per-region status rows (`good|partial|missing`) and coverage metrics
+- `GET /api/rates/refresh`
+  - phase-1 manual refresh acknowledgment endpoint
+
+#### Rates storage model
+
+Phase-1 persistence supports Supabase and local fallback:
+
+- Project metadata additions in `projects`:
+  - `utility_name`, `iso_region`, `timezone`, `rates_service_type`, `rates_market_mode`
+- New tables:
+  - `rate_series_cache`
+  - `rate_region_health`
+  - `rate_ingest_runs`
+
+Local fallback keys:
+
+- `energyapp.db.rateSeriesCache`
+- `energyapp.db.rateRegionHealth`
+
+`EnergySupabaseService` additions:
+
+- `getRateSeriesCache(projectId, options)`
+- `upsertRateSeriesCache(payload)`
+- `listRateRegionHealth(projectId, options)`
+- `upsertRateRegionHealth(payload)`
+
+#### Phase-2 freshness behavior
+
+Rates are fetched on-demand when an active user opens/interacts with the Rates page. Cache TTLs:
+
+- real-time LMP: 5 minutes
+- day-ahead LMP: 1 hour
+- tariff: 24 hours
+
+#### Phase-2 adapter behavior
+
+- Backend routes are unchanged, but rates processing is now modular:
+  - provider resolution
+  - LMP adapter
+  - tariff adapter
+  - health/status builder
+- CAISO LMP path attempts live retrieval from CAISO OASIS.
+- Live LMP adapters currently: CAISO OASIS and ERCOT Public API.
+- PJM/MISO/NYISO/ISO-NE/SPP are currently marked not live-capable for LMP and use modeled fallback.
+- When a live connector fails or credentials are missing, responses fall back to modeled series with explicit reason metadata (`source_unavailable`).
+- Tariff path now uses utility-program proxy schedules selected by inferred utility/region; program identifiers are exposed in response metadata/details.
 
 ### Backlog: future auth/ownership hardening
 

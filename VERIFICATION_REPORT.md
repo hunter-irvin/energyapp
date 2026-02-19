@@ -15,7 +15,7 @@ All backend services have been successfully integrated with Supabase for persist
 **Code modifications:**
 ```javascript
 // Added credentials variables (lines 16-18)
-const SUPABASE_URL = process.env.SUPABASE_URL || "https://wdsvqjbqftoxzlovyuzk.supabase.co";
+const SUPABASE_URL = process.env.SUPABASE_URL || "https://YOUR_PROJECT_REF.supabase.co";
 const SUPABASE_ANON_KEY = process.env.SUPABASE_ANON_KEY || "eyJhbGc...";
 
 // Updated serveStatic() to inject into HTML (lines 56-66)
@@ -187,7 +187,7 @@ public/index.html / public/projects/location.html / public/projects/generation.h
 ## Configuration & Credentials
 
 ### Current Configuration
-- **Supabase Project:** https://wdsvqjbqftoxzlovyuzk.supabase.co
+- **Supabase Project:** https://YOUR_PROJECT_REF.supabase.co
 - **Anon Key Type:** Legacy JWT (also available: modern publishable key)
 - **RLS Policies:** Intentionally permissive for no-login experience
 - **Database Location:** US East (Supabase default)
@@ -293,7 +293,7 @@ If Supabase credentials are not configured:
 ### "Supabase connection failed"
 1. Check server console for error messages
 2. Verify SUPABASE_URL and SUPABASE_ANON_KEY are set
-3. Test connectivity: `curl https://wdsvqjbqftoxzlovyuzk.supabase.co`
+3. Test connectivity: `curl https://YOUR_PROJECT_REF.supabase.co`
 4. Check browser console for RLS policy errors
 
 ### "Weather data won't load"
@@ -342,5 +342,6 @@ If Supabase credentials are not configured:
 - Zero authentication required for MVP
 
 The app is now production-ready for a no-auth, public-data scenario. Future enhancements can layer in user authentication and data privacy without breaking the existing schema.
+
 
 

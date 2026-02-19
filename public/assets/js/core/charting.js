@@ -1,5 +1,77 @@
 (() => {
   const hasChartJs = () => typeof window !== "undefined" && typeof window.Chart !== "undefined";
+  const TARGET_TIME_STEPS_HOURS = Object.freeze({ short: 3, medium: 6, long: 12 });
+
+  const toLabelText = (label) => {
+    if (Array.isArray(label)) return label.join("\n");
+    return String(label ?? "");
+  };
+
+  const parseLabelTime = (label) => {
+    const text = toLabelText(label);
+    const match = text.match(/(^|[^0-9])(\d{1,2}):(\d{2})(?!\d)/);
+    if (!match) return null;
+    const hour = Number(match[2]);
+    const minute = Number(match[3]);
+    if (!Number.isFinite(hour) || !Number.isFinite(minute) || hour < 0 || hour > 23 || minute < 0 || minute > 59) {
+      return null;
+    }
+    return { hour, minute };
+  };
+
+  const inferTimeTickStepHours = (labels = []) => {
+    const count = Array.isArray(labels) ? labels.length : 0;
+    if (!count) return TARGET_TIME_STEPS_HOURS.short;
+    if (count <= 48) return TARGET_TIME_STEPS_HOURS.short;
+    if (count <= 120) return TARGET_TIME_STEPS_HOURS.medium;
+    return TARGET_TIME_STEPS_HOURS.long;
+  };
+
+  const inferCountTickStep = (labels = []) => {
+    const count = Array.isArray(labels) ? labels.length : 0;
+    if (!count) return 1;
+    return Math.max(1, Math.ceil(count / 12));
+  };
+
+  const shouldShowAxisTick = (labels = [], index = 0) => {
+    const labelCount = Array.isArray(labels) ? labels.length : 0;
+    if (!labelCount) return false;
+    const sampled = labels.slice(0, Math.min(labelCount, 24));
+    const parsedCount = sampled.reduce((sum, label) => (parseLabelTime(label) ? sum + 1 : sum), 0);
+    const isTimeLike = parsedCount >= Math.ceil(sampled.length * 0.6);
+    if (!isTimeLike) {
+      const step = inferCountTickStep(labels);
+      return index % step === 0;
+    }
+    const tickHours = inferTimeTickStepHours(labels);
+    const parsed = parseLabelTime(labels[index]);
+    if (!parsed) {
+      const step = inferCountTickStep(labels);
+      return index % step === 0;
+    }
+    return parsed.minute === 0 && parsed.hour % tickHours === 0;
+  };
+
+  const axisTickLabelCallback = function axisTickLabelCallback(value, index) {
+    const labels = this?.chart?.data?.labels || [];
+    if (!shouldShowAxisTick(labels, index)) return "";
+    if (typeof this?.getLabelForValue === "function") return this.getLabelForValue(value);
+    return toLabelText(labels[index]);
+  };
+
+  const xGridColorCallback = (context) => {
+    const chart = context?.chart;
+    const labels = chart?.data?.labels || [];
+    const index = Number.isFinite(context?.index) ? context.index : Number(context?.tick?.value);
+    const label = labels[index];
+    const period = chart?.$energyappPeriod || "";
+    const isSubHourlyHiddenPeriod = period === "day" || period === "week";
+    if (isSubHourlyHiddenPeriod) {
+      const parsed = parseLabelTime(label);
+      if (parsed && parsed.minute !== 0) return "rgba(120,120,120,0)";
+    }
+    return "rgba(120,120,120,0.15)";
+  };
 
   const baseOptions = ({ showLegend = false, interactionMode = "index" } = {}) => ({
     responsive: true,
@@ -31,8 +103,13 @@
     },
     scales: {
       x: {
-        grid: { color: "rgba(120,120,120,0.15)" },
-        ticks: { color: "#353535", autoSkip: true, maxTicksLimit: 12, maxRotation: 0 },
+        grid: { color: xGridColorCallback },
+        ticks: {
+          color: "#353535",
+          autoSkip: false,
+          maxRotation: 0,
+          callback: axisTickLabelCallback,
+        },
       },
     },
   });
@@ -68,6 +145,13 @@
         ...baseOptions({ showLegend: false }),
         scales: {
           ...baseOptions().scales,
+          x: {
+            ...baseOptions().scales.x,
+            ticks: {
+              ...baseOptions().scales.x.ticks,
+              display: false,
+            },
+          },
           yWind: {
             type: "linear",
             position: "left",
@@ -89,12 +173,13 @@
     });
 
     return {
-      update({ labels = [], solar = [], wind = [], showSolar = true, showWind = true }) {
+      update({ labels = [], solar = [], wind = [], showSolar = true, showWind = true, period = "" }) {
         chart.data.labels = labels;
         chart.data.datasets[0].data = solar;
         chart.data.datasets[1].data = wind;
         chart.data.datasets[0].hidden = !showSolar;
         chart.data.datasets[1].hidden = !showWind;
+        chart.$energyappPeriod = period || "";
         chart.update();
       },
       destroy() {
@@ -164,6 +249,7 @@
         total = [],
         yTitle = "Generation (kWh)",
         visible = { solar: true, wind: true, total: true },
+        period = "",
       }) {
         const unitMatch = String(yTitle).match(/\(([^)]+)\)/);
         const generationUnit = unitMatch?.[1] || "kWh";
@@ -179,6 +265,7 @@
         chart.data.datasets[2].hidden = !visible.total;
         chart.options.scales.yGen.title.text = yTitle;
         chart.options.scales.yGen.suggestedMax = Math.max(1, ...total);
+        chart.$energyappPeriod = period || "";
         chart.update();
       },
       destroy() {
@@ -267,6 +354,7 @@
         total = [],
         soc = [],
         visible = { solar: true, wind: true, total: true, soc: true },
+        period = "",
       }) {
         chart.data.labels = labels;
         chart.data.datasets[0].data = wind;
@@ -282,6 +370,7 @@
         chart.data.datasets[2].hidden = !visible.total;
         chart.data.datasets[3].hidden = !visible.soc;
         chart.options.scales.yGen.suggestedMax = Math.max(1, ...total);
+        chart.$energyappPeriod = period || "";
         chart.update();
       },
       destroy() {
@@ -294,5 +383,7 @@
     createSettingsChart,
     createAssetsChart,
     createStorageChart,
+    shouldShowAxisTick,
+    toLabelText,
   };
 })();

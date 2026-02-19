@@ -44,6 +44,7 @@
   const headerProjectNameCancelButton = document.getElementById("header-project-name-cancel");
   const headerSettingsLink = document.getElementById("header-settings-link");
   const sidebarStorageLink = document.getElementById("sidebar-storage-link");
+  const sidebarRatesLink = document.getElementById("sidebar-rates-link");
   const assetFieldTooltip = document.getElementById("asset-field-tooltip");
 
   const queryParams = new URLSearchParams(window.location.search);
@@ -1460,10 +1461,13 @@
     }
     generationAxis.innerHTML = "";
     generationAxis.style.gridTemplateColumns = `repeat(${Math.max(labels.length, 1)}, minmax(0, 1fr))`;
-    const skip = labels.length > 120 ? 24 : labels.length > 60 ? 12 : labels.length > 30 ? 6 : 1;
+    const shouldShowTick =
+      window.EnergyCharts?.shouldShowAxisTick ||
+      ((nextLabels, index) => index % Math.max(1, Math.ceil((nextLabels?.length || 0) / 12)) === 0);
+    const toLabelText = window.EnergyCharts?.toLabelText || ((label) => String(label ?? ""));
     labels.forEach((label, index) => {
       const span = document.createElement("span");
-      span.textContent = index % skip === 0 ? label : "";
+      span.textContent = shouldShowTick(labels, index) ? toLabelText(label) : "";
       generationAxis.appendChild(span);
     });
   };
@@ -1550,7 +1554,7 @@
     }
 
     if (weatherDay.loading) {
-      assetsChart.update({ labels: [], solar: [], wind: [], total: [] });
+      assetsChart.update({ labels: [], solar: [], wind: [], total: [], period: viewState.period });
       renderDonut(0, 0);
       return;
     }
@@ -1559,7 +1563,7 @@
       if (generationAxis) {
         generationAxis.innerHTML = "";
       }
-      assetsChart.update({ labels: [], solar: [], wind: [], total: [] });
+      assetsChart.update({ labels: [], solar: [], wind: [], total: [], period: viewState.period });
       renderDonut(0, 0);
       renderDebugData({});
       return;
@@ -1610,6 +1614,7 @@
       total: totalValues,
       yTitle: yAxisLabel,
       visible: seriesVisibility,
+      period: series.period,
     });
 
     chartState.labels = displayLabels;
@@ -2010,6 +2015,9 @@
     }
     if (sidebarStorageLink) {
       sidebarStorageLink.href = `/projects/storage.html?projectId=${encodeURIComponent(currentProject.id)}`;
+    }
+    if (sidebarRatesLink) {
+      sidebarRatesLink.href = `/projects/rates.html?projectId=${encodeURIComponent(currentProject.id)}`;
     }
 
     selectedDateKey = currentProject.selectedDate || DEFAULT_DATE_KEY;

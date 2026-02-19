@@ -31,6 +31,9 @@
     assets: "energyapp.db.assets",
     weatherCache: "energyapp.db.weatherCache",
     nrelCache: "energyapp.db.nrelCache",
+    rateSeriesCache: "energyapp.db.rateSeriesCache",
+    rateRegionHealth: "energyapp.db.rateRegionHealth",
+    rateIngestRuns: "energyapp.db.rateIngestRuns",
   };
 
   const safeParse = (value, fallback) => {
@@ -221,6 +224,11 @@
     location_lng: project.lng ?? null,
     selected_date: project.selectedDate || null,
     weather_provider: project.weatherProvider || null,
+    utility_name: project.utilityName || null,
+    iso_region: project.isoRegion || null,
+    timezone: project.timezone || null,
+    rates_service_type: project.ratesServiceType || null,
+    rates_market_mode: project.ratesMarketMode || null,
     map_state: project.mapState || null,
     created_at: project.created_at || project.createdAt || new Date().toISOString(),
     updated_at: new Date().toISOString(),
@@ -233,6 +241,11 @@
     lng: row.location_lng == null ? null : Number(row.location_lng),
     selectedDate: row.selected_date || null,
     weatherProvider: row.weather_provider || null,
+    utilityName: row.utility_name || null,
+    isoRegion: row.iso_region || null,
+    timezone: row.timezone || null,
+    ratesServiceType: row.rates_service_type || null,
+    ratesMarketMode: row.rates_market_mode || null,
     mapState: row.map_state || null,
     createdAt: row.created_at || null,
     updatedAt: row.updated_at || null,
@@ -271,6 +284,10 @@
     return legacy;
   };
 
+  const getLocalRateSeriesRows = () => loadArray(DB_STORAGE_KEYS.rateSeriesCache);
+  const getLocalRateHealthRows = () => loadArray(DB_STORAGE_KEYS.rateRegionHealth);
+  const getLocalRateIngestRows = () => loadArray(DB_STORAGE_KEYS.rateIngestRuns);
+
   const localDb = {
     async listProjects() {
       return loadArray(DB_STORAGE_KEYS.projects).map(fromProjectRow);
@@ -306,6 +323,18 @@
       const weatherRows = getLocalWeatherRows().filter((entry) => entry.project_id !== projectId);
       saveArray(DB_STORAGE_KEYS.weatherCache, weatherRows);
       saveArray(DB_STORAGE_KEYS.nrelCache, []);
+      saveArray(
+        DB_STORAGE_KEYS.rateSeriesCache,
+        getLocalRateSeriesRows().filter((entry) => entry.project_id !== projectId)
+      );
+      saveArray(
+        DB_STORAGE_KEYS.rateRegionHealth,
+        getLocalRateHealthRows().filter((entry) => entry.project_id !== projectId)
+      );
+      saveArray(
+        DB_STORAGE_KEYS.rateIngestRuns,
+        getLocalRateIngestRows().filter((entry) => entry.project_id !== projectId)
+      );
 
       const scopedPrefix = `energyapp.project.${projectId}.`;
       const sharedCachePrefix = `energyapp.shared.project.${projectId}.`;
@@ -416,16 +445,168 @@
     async upsertNrelCache(payload) {
       return this.upsertWeatherCache({ ...payload, provider: "nrel" });
     },
+    async getRateSeriesCache(projectId, { regionId, serviceType, marketMode, windowStart, windowEnd } = {}) {
+      return (
+        getLocalRateSeriesRows()
+          .filter(
+            (entry) =>
+              entry.project_id === projectId &&
+              (!regionId || entry.region_id === regionId) &&
+              (!serviceType || entry.service_type === serviceType) &&
+              (!marketMode || entry.market_mode === marketMode) &&
+              (!windowStart || entry.window_start === windowStart) &&
+              (!windowEnd || entry.window_end === windowEnd)
+          )
+          .sort((a, b) => new Date(b.fetched_at || 0).getTime() - new Date(a.fetched_at || 0).getTime())[0] || null
+      );
+    },
+    async upsertRateSeriesCache(payload) {
+      const rows = getLocalRateSeriesRows();
+      const keyMatch = (entry) =>
+        entry.project_id === payload.projectId &&
+        entry.region_id === payload.regionId &&
+        entry.service_type === payload.serviceType &&
+        entry.market_mode === payload.marketMode &&
+        entry.window_start === payload.windowStart &&
+        entry.window_end === payload.windowEnd;
+      const index = rows.findIndex(keyMatch);
+      const row = {
+        id: index >= 0 ? rows[index].id : uid(),
+        project_id: payload.projectId,
+        region_id: payload.regionId,
+        service_type: payload.serviceType,
+        market_mode: payload.marketMode,
+        window_start: payload.windowStart,
+        window_end: payload.windowEnd,
+        timezone: payload.timezone || null,
+        source: payload.source || "rates_proxy_phase1",
+        source_unit: payload.sourceUnit || null,
+        confidence: payload.confidence || null,
+        quality_status: payload.qualityStatus || "unknown",
+        api_version: payload.apiVersion || "v2",
+        ingest_notes: payload.ingestNotes || {},
+        fetched_at: payload.fetchedAt || new Date().toISOString(),
+        payload: payload.payload,
+        updated_at: new Date().toISOString(),
+      };
+      if (index >= 0) rows[index] = { ...rows[index], ...row };
+      else rows.push({ ...row, created_at: new Date().toISOString() });
+      saveArray(DB_STORAGE_KEYS.rateSeriesCache, rows);
+      return rows.find(keyMatch) || row;
+    },
+    async listRateRegionHealth(projectId, { windowStart, windowEnd } = {}) {
+      return getLocalRateHealthRows()
+        .filter(
+          (entry) =>
+            entry.project_id === projectId &&
+            (!windowStart || entry.window_start === windowStart) &&
+            (!windowEnd || entry.window_end === windowEnd)
+        )
+        .sort((a, b) =>
+          `${a.region_id}-${a.service_type}-${a.market_mode || ""}`.localeCompare(
+            `${b.region_id}-${b.service_type}-${b.market_mode || ""}`
+          )
+        );
+    },
+    async upsertRateRegionHealth(payload = {}) {
+      const rows = getLocalRateHealthRows();
+      const inputRows = Array.isArray(payload.rows) ? payload.rows : [];
+      inputRows.forEach((healthRow) => {
+        const keyMatch = (entry) =>
+          entry.project_id === payload.projectId &&
+          entry.region_id === healthRow.regionId &&
+          entry.service_type === healthRow.serviceType &&
+          entry.market_mode === (healthRow.marketMode || "day_ahead") &&
+          entry.window_start === payload.windowStart &&
+          entry.window_end === payload.windowEnd;
+        const index = rows.findIndex(keyMatch);
+        const row = {
+          id: index >= 0 ? rows[index].id : uid(),
+          project_id: payload.projectId,
+          region_id: healthRow.regionId,
+          service_type: healthRow.serviceType,
+          market_mode: healthRow.marketMode || (healthRow.serviceType === "tariff" ? "tariff" : "day_ahead"),
+          status: healthRow.status,
+          last_updated_at: healthRow.lastUpdatedAt || null,
+          source: healthRow.source || null,
+          source_unit: healthRow.sourceUnit || null,
+          confidence: healthRow.confidence || null,
+          api_version: payload.apiVersion || "v2",
+          window_start: payload.windowStart,
+          window_end: payload.windowEnd,
+          expected_hours: Number(healthRow.expectedHours || 0),
+          missing_hours: Number(healthRow.missingHours || 0),
+          details: healthRow.details || {},
+          updated_at: new Date().toISOString(),
+        };
+        if (index >= 0) rows[index] = { ...rows[index], ...row };
+        else rows.push({ ...row, created_at: new Date().toISOString() });
+      });
+      saveArray(DB_STORAGE_KEYS.rateRegionHealth, rows);
+      return this.listRateRegionHealth(payload.projectId, {
+        windowStart: payload.windowStart,
+        windowEnd: payload.windowEnd,
+      });
+    },
+    async insertRateIngestRun(payload = {}) {
+      const rows = getLocalRateIngestRows();
+      const row = {
+        id: uid(),
+        project_id: payload.projectId || null,
+        region_id: payload.regionId || "NON-ISO",
+        service_type: payload.serviceType || "lmp",
+        market_mode: payload.marketMode || "day_ahead",
+        source: payload.source || null,
+        source_unit: payload.sourceUnit || null,
+        api_version: payload.apiVersion || "v2",
+        status: payload.status || "failed",
+        row_count: Number(payload.rowCount || 0),
+        missing_hours: Number(payload.missingHours || 0),
+        message: payload.message || null,
+        details: payload.details || {},
+        window_start: payload.windowStart || null,
+        window_end: payload.windowEnd || null,
+        run_started_at: payload.runStartedAt || new Date().toISOString(),
+        run_finished_at: payload.runFinishedAt || new Date().toISOString(),
+        created_at: new Date().toISOString(),
+      };
+      rows.push(row);
+      saveArray(DB_STORAGE_KEYS.rateIngestRuns, rows.slice(-500));
+      return row;
+    },
   };
 
   const supabaseDb = (client) => ({
+    _isMissingColumnError(error) {
+      const message = String(error?.message || "").toLowerCase();
+      return error?.code === "PGRST204" || message.includes("column") && message.includes("projects");
+    },
+    _isMissingTableError(error) {
+      const message = String(error?.message || "").toLowerCase();
+      return error?.code === "42P01" || error?.code === "PGRST205" || message.includes("does not exist");
+    },
     async listProjects() {
       const { data, error } = await client.from("projects").select("*").order("created_at", { ascending: true });
       if (error) throw error;
       return (data || []).map(fromProjectRow);
     },
     async createProject(payload = {}) {
-      const { data, error } = await client.from("projects").insert(toProjectRow({ id: payload.id || uid(), ...payload })).select().single();
+      const fullRow = toProjectRow({ id: payload.id || uid(), ...payload });
+      let { data, error } = await client.from("projects").insert(fullRow).select().single();
+      if (error && this._isMissingColumnError(error)) {
+        const fallbackRow = {
+          id: fullRow.id,
+          name: fullRow.name,
+          location_lat: fullRow.location_lat,
+          location_lng: fullRow.location_lng,
+          selected_date: fullRow.selected_date,
+          weather_provider: fullRow.weather_provider,
+          map_state: fullRow.map_state,
+          created_at: fullRow.created_at,
+          updated_at: fullRow.updated_at,
+        };
+        ({ data, error } = await client.from("projects").insert(fallbackRow).select().single());
+      }
       if (error) throw error;
       return fromProjectRow(data);
     },
@@ -441,9 +622,25 @@
       if (Object.prototype.hasOwnProperty.call(patch, "lng")) updatePayload.location_lng = patch.lng;
       if (Object.prototype.hasOwnProperty.call(patch, "selectedDate")) updatePayload.selected_date = patch.selectedDate;
       if (Object.prototype.hasOwnProperty.call(patch, "weatherProvider")) updatePayload.weather_provider = patch.weatherProvider;
+      if (Object.prototype.hasOwnProperty.call(patch, "utilityName")) updatePayload.utility_name = patch.utilityName;
+      if (Object.prototype.hasOwnProperty.call(patch, "isoRegion")) updatePayload.iso_region = patch.isoRegion;
+      if (Object.prototype.hasOwnProperty.call(patch, "timezone")) updatePayload.timezone = patch.timezone;
+      if (Object.prototype.hasOwnProperty.call(patch, "ratesServiceType"))
+        updatePayload.rates_service_type = patch.ratesServiceType;
+      if (Object.prototype.hasOwnProperty.call(patch, "ratesMarketMode"))
+        updatePayload.rates_market_mode = patch.ratesMarketMode;
       if (Object.prototype.hasOwnProperty.call(patch, "mapState")) updatePayload.map_state = patch.mapState;
       updatePayload.updated_at = new Date().toISOString();
-      const { data, error } = await client.from("projects").update(updatePayload).eq("id", projectId).select().single();
+      let { data, error } = await client.from("projects").update(updatePayload).eq("id", projectId).select().single();
+      if (error && this._isMissingColumnError(error)) {
+        const fallbackPayload = { ...updatePayload };
+        delete fallbackPayload.utility_name;
+        delete fallbackPayload.iso_region;
+        delete fallbackPayload.timezone;
+        delete fallbackPayload.rates_service_type;
+        delete fallbackPayload.rates_market_mode;
+        ({ data, error } = await client.from("projects").update(fallbackPayload).eq("id", projectId).select().single());
+      }
       if (error) throw error;
       return fromProjectRow(data);
     },
@@ -453,6 +650,12 @@
 
       const { error: cacheError } = await client.from("nrel_cache").delete().eq("project_id", projectId);
       if (cacheError) throw cacheError;
+
+      const { error: rateSeriesError } = await client.from("rate_series_cache").delete().eq("project_id", projectId);
+      if (rateSeriesError && rateSeriesError.code !== "42P01") throw rateSeriesError;
+
+      const { error: rateHealthError } = await client.from("rate_region_health").delete().eq("project_id", projectId);
+      if (rateHealthError && rateHealthError.code !== "42P01") throw rateHealthError;
 
       const { error: projectError } = await client.from("projects").delete().eq("id", projectId);
       if (projectError) throw projectError;
@@ -546,6 +749,140 @@
     async upsertNrelCache(payload) {
       return this.upsertWeatherCache({ ...payload, provider: "nrel" });
     },
+    async getRateSeriesCache(projectId, { regionId, serviceType, marketMode, windowStart, windowEnd } = {}) {
+      let query = client
+        .from("rate_series_cache")
+        .select("*")
+        .eq("project_id", projectId)
+        .eq("window_start", windowStart)
+        .eq("window_end", windowEnd);
+      if (regionId) query = query.eq("region_id", regionId);
+      if (serviceType) query = query.eq("service_type", serviceType);
+      if (marketMode) query = query.eq("market_mode", marketMode);
+      const { data, error } = await query.order("fetched_at", { ascending: false }).limit(1).maybeSingle();
+      if (error) {
+        if (this._isMissingTableError(error)) {
+          return localDb.getRateSeriesCache(projectId, { regionId, serviceType, marketMode, windowStart, windowEnd });
+        }
+        throw error;
+      }
+      return data || null;
+    },
+    async upsertRateSeriesCache(payload) {
+      const row = {
+        project_id: payload.projectId,
+        region_id: payload.regionId,
+        service_type: payload.serviceType,
+        market_mode: payload.marketMode,
+        window_start: payload.windowStart,
+        window_end: payload.windowEnd,
+        timezone: payload.timezone || null,
+        source: payload.source || "rates_proxy_phase1",
+        source_unit: payload.sourceUnit || null,
+        confidence: payload.confidence || null,
+        quality_status: payload.qualityStatus || "unknown",
+        api_version: payload.apiVersion || "v2",
+        ingest_notes: payload.ingestNotes || {},
+        fetched_at: payload.fetchedAt || new Date().toISOString(),
+        payload: payload.payload,
+        updated_at: new Date().toISOString(),
+      };
+      const { data, error } = await client
+        .from("rate_series_cache")
+        .upsert(row, { onConflict: "project_id,region_id,service_type,market_mode,window_start,window_end" })
+        .select()
+        .single();
+      if (error) {
+        if (this._isMissingTableError(error)) {
+          return localDb.upsertRateSeriesCache(payload);
+        }
+        throw error;
+      }
+      return data;
+    },
+    async listRateRegionHealth(projectId, { windowStart, windowEnd } = {}) {
+      let query = client
+        .from("rate_region_health")
+        .select("*")
+        .eq("project_id", projectId)
+        .eq("window_start", windowStart)
+        .eq("window_end", windowEnd);
+      const { data, error } = await query
+        .order("region_id", { ascending: true })
+        .order("service_type", { ascending: true })
+        .order("market_mode", { ascending: true });
+      if (error) {
+        if (this._isMissingTableError(error)) {
+          return localDb.listRateRegionHealth(projectId, { windowStart, windowEnd });
+        }
+        throw error;
+      }
+      return data || [];
+    },
+    async upsertRateRegionHealth(payload = {}) {
+      const rows = (Array.isArray(payload.rows) ? payload.rows : []).map((healthRow) => ({
+        project_id: payload.projectId,
+        region_id: healthRow.regionId,
+        service_type: healthRow.serviceType,
+        market_mode: healthRow.marketMode || (healthRow.serviceType === "tariff" ? "tariff" : "day_ahead"),
+        status: healthRow.status,
+        last_updated_at: healthRow.lastUpdatedAt || null,
+        source: healthRow.source || null,
+        source_unit: healthRow.sourceUnit || null,
+        confidence: healthRow.confidence || null,
+        api_version: payload.apiVersion || "v2",
+        window_start: payload.windowStart,
+        window_end: payload.windowEnd,
+        expected_hours: Number(healthRow.expectedHours || 0),
+        missing_hours: Number(healthRow.missingHours || 0),
+        details: healthRow.details || {},
+        updated_at: new Date().toISOString(),
+      }));
+      if (!rows.length) {
+        return [];
+      }
+      const { error } = await client
+        .from("rate_region_health")
+        .upsert(rows, { onConflict: "project_id,region_id,service_type,market_mode,window_start,window_end" });
+      if (error) {
+        if (this._isMissingTableError(error)) {
+          return localDb.upsertRateRegionHealth(payload);
+        }
+        throw error;
+      }
+      return this.listRateRegionHealth(payload.projectId, {
+        windowStart: payload.windowStart,
+        windowEnd: payload.windowEnd,
+      });
+    },
+    async insertRateIngestRun(payload = {}) {
+      const row = {
+        project_id: payload.projectId || null,
+        region_id: payload.regionId || "NON-ISO",
+        service_type: payload.serviceType || "lmp",
+        market_mode: payload.marketMode || "day_ahead",
+        source: payload.source || null,
+        source_unit: payload.sourceUnit || null,
+        api_version: payload.apiVersion || "v2",
+        status: payload.status || "failed",
+        row_count: Number(payload.rowCount || 0),
+        missing_hours: Number(payload.missingHours || 0),
+        message: payload.message || null,
+        details: payload.details || {},
+        window_start: payload.windowStart || null,
+        window_end: payload.windowEnd || null,
+        run_started_at: payload.runStartedAt || new Date().toISOString(),
+        run_finished_at: payload.runFinishedAt || new Date().toISOString(),
+      };
+      const { data, error } = await client.from("rate_ingest_runs").insert(row).select().single();
+      if (error) {
+        if (this._isMissingTableError(error)) {
+          return localDb.insertRateIngestRun(payload);
+        }
+        throw error;
+      }
+      return data;
+    },
   });
 
   const dataService = async () => {
@@ -576,6 +913,11 @@
   const getNrelCache = async (projectId, dataset, dateKey, options) =>
     (await dataService()).getNrelCache(projectId, dataset, dateKey, options);
   const upsertNrelCache = async (payload) => (await dataService()).upsertNrelCache(payload);
+  const getRateSeriesCache = async (projectId, options) => (await dataService()).getRateSeriesCache(projectId, options);
+  const upsertRateSeriesCache = async (payload) => (await dataService()).upsertRateSeriesCache(payload);
+  const listRateRegionHealth = async (projectId, options) => (await dataService()).listRateRegionHealth(projectId, options);
+  const upsertRateRegionHealth = async (payload) => (await dataService()).upsertRateRegionHealth(payload);
+  const insertRateIngestRun = async (payload) => (await dataService()).insertRateIngestRun(payload);
 
   const setLastOpenedProjectId = (projectId) => {
     if (projectId) {
@@ -654,6 +996,11 @@
     upsertWeatherCache,
     getNrelCache,
     upsertNrelCache,
+    getRateSeriesCache,
+    upsertRateSeriesCache,
+    listRateRegionHealth,
+    upsertRateRegionHealth,
+    insertRateIngestRun,
     getLastOpenedProjectId,
     setLastOpenedProjectId,
     migrateLegacyLocalData,

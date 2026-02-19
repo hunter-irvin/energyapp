@@ -1,0 +1,127 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Rates | Energy Explorer</title>
+    <link rel="stylesheet" href="/assets/css/styles.css" />
+  </head>
+  <body class="project-page-body">
+    <header class="project-header">
+      <div class="project-header__left">
+        <div class="project-name-editor" id="rates-project-name-editor">
+          <span id="rates-header-project-name-display" class="project-name-editor__display">Untitled Facility</span>
+          <button
+            id="rates-header-project-name-edit"
+            class="project-name-editor__icon"
+            type="button"
+            aria-label="Edit project name"
+            title="Edit project name"
+          >
+            ✎
+          </button>
+          <input id="rates-header-project-name" class="project-header__input" type="text" placeholder="Untitled Project" hidden />
+          <button id="rates-header-project-name-save" class="project-name-editor__action" type="button" hidden>Save</button>
+          <button id="rates-header-project-name-cancel" class="project-name-editor__action" type="button" hidden>Cancel</button>
+        </div>
+      </div>
+      <a class="btn" href="/">Exit</a>
+    </header>
+    <main class="page page--project assets-page">
+      <aside class="project-sidebar" aria-label="Project navigation">
+        <a class="project-nav-btn" id="rates-location-link" href="/projects/location.html">Location</a>
+        <a class="project-nav-btn" id="rates-generation-link" href="/projects/generation.html">Generation</a>
+        <a class="project-nav-btn" id="rates-storage-link" href="/projects/storage.html">Storage</a>
+        <a class="project-nav-btn project-nav-btn--active" href="/projects/rates.html">Rates</a>
+      </aside>
+      <section class="card assets-card rates-card">
+        <header class="card__header">
+          <h1>Electricity Rates</h1>
+          <button class="btn" id="rates-refresh-button" type="button">Refresh</button>
+        </header>
+
+        <section class="rates-summary">
+          <p class="location" id="rates-provider-label">Utility: --</p>
+          <p class="location" id="rates-region-label">Market Region: --</p>
+          <label class="assets-label rates-control-label">Service Type</label>
+          <div class="toggle-group">
+            <button class="btn btn--toggle is-active" data-rates-service="lmp" data-rates-help="lmp" type="button">LMP</button>
+            <button class="btn btn--toggle" data-rates-service="tariff" data-rates-help="tariff" type="button">Tariff</button>
+          </div>
+          <label class="assets-label rates-control-label" id="rates-market-label">Market Mode</label>
+          <div class="toggle-group" id="rates-market-mode-group">
+            <button class="btn btn--toggle" data-rates-market="real_time" data-rates-help="real_time" type="button">Real-Time</button>
+            <button class="btn btn--toggle is-active" data-rates-market="day_ahead" data-rates-help="day_ahead" type="button">Day-Ahead</button>
+          </div>
+        </section>
+
+        <div class="assets-divider"></div>
+
+        <section class="assets-chart-section">
+          <h3 class="assets-chart-title">Export Compensation Rate</h3>
+          <div class="assets-chart-header">
+            <div class="assets-chart-controls">
+              <div class="toggle-group assets-toggle-group">
+                <button class="btn btn--toggle" data-rates-period="day" type="button">Day</button>
+                <button class="btn btn--toggle is-active" data-rates-period="week" type="button">Week</button>
+                <button class="btn btn--toggle" data-rates-period="month" type="button">Month</button>
+                <span class="assets-label rates-control-label rates-control-label--inline">Units</span>
+                <button class="btn btn--toggle is-active" data-rates-unit="kwh" data-rates-help="kwh" type="button">kWh</button>
+                <button class="btn btn--toggle" data-rates-unit="mwh" data-rates-help="mwh" type="button">MWh</button>
+                <button class="btn btn--icon" id="rates-date-picker-button" aria-label="Pick a date">📅</button>
+                <input class="date-picker" id="rates-date-picker" type="date" aria-label="Select date" />
+                <button class="btn btn--icon" id="rates-shift-back" type="button" aria-label="Previous range">◀</button>
+                <span class="assets-date-range-readout" id="rates-date-range-readout">--</span>
+                <button class="btn btn--icon" id="rates-shift-forward" type="button" aria-label="Next range">▶</button>
+              </div>
+            </div>
+            <p class="chart-panel__legend">
+              <span class="legend legend--total is-active">Rate</span>
+              <span class="legend legend--missing is-active">Missing data</span>
+            </p>
+          </div>
+
+          <div class="assets-chart-frame rates-chart-frame" id="rates-chart-frame">
+            <canvas id="rates-chart" class="generation-chart" aria-label="Rates time series chart"></canvas>
+            <div class="rates-missing-overlay" id="rates-missing-overlay" aria-hidden="true"></div>
+            <div class="chart-loading" id="rates-chart-loading" hidden>Loading...</div>
+          </div>
+          <p class="rates-source-warning" id="rates-source-warning" hidden>❌ Using fallback modeled rates (live market source unavailable).</p>
+          <p class="rates-empty-window" id="rates-empty-window" hidden>No published rates in the selected window for this mode.</p>
+          <div class="assets-chart-axis" id="rates-axis"></div>
+        </section>
+
+        <section class="rates-debug-section">
+          <h3 class="assets-subtitle">Rates Data Availability</h3>
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th>Region</th>
+                <th>Service</th>
+                <th>Status</th>
+                <th>Last Updated</th>
+                <th>Source</th>
+                <th>Source Unit</th>
+                <th>Coverage (hours)</th>
+              </tr>
+            </thead>
+            <tbody id="rates-health-body">
+              <tr>
+                <td colspan="7">No status data yet.</td>
+              </tr>
+            </tbody>
+          </table>
+        </section>
+      </section>
+    </main>
+    <div id="rates-field-tooltip" class="asset-field-tooltip" hidden></div>
+
+    <script src="/config.local.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
+    <script src="/assets/js/core/charting.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+    <script src="/assets/js/core/supabase-config.js"></script>
+    <script src="/assets/js/core/supabase-client.js"></script>
+    <script src="/assets/js/pages/rates.js"></script>
+  </body>
+</html>

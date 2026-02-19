@@ -26,6 +26,7 @@
   const headerProjectNameCancelButton = document.getElementById("storage-header-project-name-cancel");
   const storageSettingsLink = document.getElementById("storage-settings-link");
   const storageAssetsLink = document.getElementById("storage-assets-link");
+  const storageRatesLink = document.getElementById("storage-rates-link");
   const storageAssetsHeaderLink = document.getElementById("storage-assets-header-link");
   const storageBackToFacility = document.getElementById("storage-back-to-facility");
   const storageProjectName = document.getElementById("storage-project-name");
@@ -984,10 +985,13 @@
     if (!chartAxis) return;
     chartAxis.innerHTML = "";
     chartAxis.style.gridTemplateColumns = `repeat(${Math.max(labels.length, 1)}, minmax(0, 1fr))`;
-    const skip = labels.length > 120 ? 24 : labels.length > 72 ? 12 : labels.length > 36 ? 6 : labels.length > 12 ? 3 : 1;
+    const shouldShowTick =
+      window.EnergyCharts?.shouldShowAxisTick ||
+      ((nextLabels, index) => index % Math.max(1, Math.ceil((nextLabels?.length || 0) / 12)) === 0);
+    const toLabelText = window.EnergyCharts?.toLabelText || ((label) => String(label ?? ""));
     labels.forEach((label, index) => {
       const span = document.createElement("span");
-      span.textContent = index % skip === 0 ? label : "";
+      span.textContent = shouldShowTick(labels, index) ? toLabelText(label) : "";
       chartAxis.appendChild(span);
     });
   };
@@ -1033,13 +1037,13 @@
     }
 
     if (weatherState.loading) {
-      storageChart.update({ labels: [], solar: [], wind: [], total: [], soc: [] });
+      storageChart.update({ labels: [], solar: [], wind: [], total: [], soc: [], period: viewState.period });
       renderAxis([]);
       renderDebug();
       return;
     }
     if (!weatherState.loaded) {
-      storageChart.update({ labels: [], solar: [], wind: [], total: [], soc: [] });
+      storageChart.update({ labels: [], solar: [], wind: [], total: [], soc: [], period: viewState.period });
       renderAxis([]);
       renderDebug();
       return;
@@ -1142,6 +1146,7 @@
       total: Array.from(currentSeries.generationKwh),
       soc: Array.from(currentSeries.socPct),
       visible: seriesVisibility,
+      period: viewState.period,
     });
 
     renderAxis([]);
@@ -1590,6 +1595,7 @@
 
     if (storageSettingsLink) storageSettingsLink.href = `/projects/location.html?projectId=${encodeURIComponent(currentProject.id)}`;
     if (storageAssetsLink) storageAssetsLink.href = `/projects/generation.html?projectId=${encodeURIComponent(currentProject.id)}`;
+    if (storageRatesLink) storageRatesLink.href = `/projects/rates.html?projectId=${encodeURIComponent(currentProject.id)}`;
     if (storageAssetsHeaderLink) storageAssetsHeaderLink.href = `/projects/generation.html?projectId=${encodeURIComponent(currentProject.id)}`;
     if (storageBackToFacility) storageBackToFacility.href = `/projects/location.html?projectId=${encodeURIComponent(currentProject.id)}`;
 

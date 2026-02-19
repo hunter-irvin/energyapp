@@ -7,7 +7,7 @@ The app is running but **no data is being written to Supabase**. The database ta
 ### What We've Confirmed
 
 ✅ **Server Configuration:** Correct
-- Supabase URL is configured: `https://wdsvqjbqftoxzlovyuzk.supabase.co`
+- Supabase URL is configured: `https://YOUR_PROJECT_REF.supabase.co`
 - Supabase ANON key is present (208 characters)
 - Server is successfully injecting credentials into HTML
 
@@ -90,7 +90,7 @@ Press **F12** > **Network** tab, then reload the page:
    - If **404** or **failed**, the SDK can't load
    
 2. Look for requests to Supabase REST API:
-   - Should see requests to `wdsvqjbqftoxzlovyuzk.supabase.co`
+   - Should see requests to `YOUR_PROJECT_REF.supabase.co`
    - If missing, the app isn't trying to connect to database
    
 3. Check those requests' Response Headers:
@@ -120,13 +120,13 @@ Press **F12** > **Network** tab, then reload the page:
 
 1. Check if you can access Supabase from your machine:
    ```
-   curl https://wdsvqjbqftoxzlovyuzk.supabase.co/rest/v1/projects
+   curl https://YOUR_PROJECT_REF.supabase.co/rest/v1/projects
    ```
    
 2. If 404 or timeout: 
    - Network is blocked
    - Firewall isn't allowing HTTPS to Supabase
-   - DNS can't resolve `wdsvqjbqftoxzlovyuzk.supabase.co`
+   - DNS can't resolve `YOUR_PROJECT_REF.supabase.co`
 
 ### If SDK loads but still no data in Supabase
 
@@ -176,8 +176,8 @@ You can check the database directly from your terminal:
 
 ```bash
 # Check if projects table has data
-curl -H "apikey: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..." \
-  "https://wdsvqjbqftoxzlovyuzk.supabase.co/rest/v1/projects"
+curl -H "apikey: <SUPABASE_ANON_OR_PUBLISHABLE_KEY>" \
+  "https://YOUR_PROJECT_REF.supabase.co/rest/v1/projects"
 
 # Check it using Supabase CLI (if installed)
 supabase db pull
@@ -193,4 +193,6 @@ supabase db list-postgres-tables
 5. **Test from a different network** to rule out firewall
 
 Once we identify where it fails, we can apply a targeted fix!
+
+
 

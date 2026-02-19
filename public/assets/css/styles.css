@@ -1080,6 +1080,10 @@ body {
   background: #000000;
 }
 
+.legend--missing::before {
+  background: rgba(139, 46, 46, 0.75);
+}
+
 .chart-panel__date {
   margin: 0;
   font-size: 13px;
@@ -1320,6 +1324,146 @@ body {
   margin-top: 50px;
   display: flex;
   gap: 0.5rem;
+}
+
+.rates-summary {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.rates-control-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+}
+
+.rates-control-label--inline {
+  margin-right: 8px;
+}
+
+.rates-card.is-tariff-service #rates-market-label,
+.rates-card.is-tariff-service #rates-market-mode-group {
+  display: none !important;
+}
+
+.rates-card .card__header {
+  margin-bottom: 14px;
+}
+
+.rates-chart-frame {
+  overflow: hidden;
+}
+
+.rates-missing-overlay {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+.rates-missing-band {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  background: repeating-linear-gradient(
+    -45deg,
+    rgba(139, 46, 46, 0.16),
+    rgba(139, 46, 46, 0.16) 6px,
+    rgba(139, 46, 46, 0.24) 6px,
+    rgba(139, 46, 46, 0.24) 12px
+  );
+  border-left: 1px solid rgba(139, 46, 46, 0.45);
+  border-right: 1px solid rgba(139, 46, 46, 0.45);
+}
+
+.rates-debug-section {
+  margin-top: 18px;
+}
+
+.rates-empty-window {
+  margin: 8px 0 0;
+  padding: 8px 10px;
+  border: 1px solid rgba(139, 46, 46, 0.35);
+  background: rgba(139, 46, 46, 0.08);
+  color: #6f2626;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.rates-source-warning {
+  margin: 10px 0 0;
+  padding: 8px 10px;
+  border: 1px solid rgba(161, 29, 29, 0.35);
+  background: rgba(161, 29, 29, 0.08);
+  color: #a11d1d;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.rates-health-parent {
+  cursor: pointer;
+}
+
+.rates-health-parent:hover {
+  background: #f7f7f7;
+}
+
+.rates-health-parent__region {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.rates-health-parent__caret {
+  display: inline-block;
+  width: 1em;
+  text-align: center;
+  color: #666666;
+}
+
+.rates-health-subrow td {
+  background: #fafafa;
+  font-size: 11px;
+}
+
+.rates-health-subrow td:first-child {
+  padding-left: 28px;
+}
+
+.rates-status {
+  display: inline-block;
+  min-width: 66px;
+  text-align: center;
+  text-transform: uppercase;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  padding: 3px 8px;
+  border: 1px solid #d0d0d0;
+}
+
+.rates-status--good {
+  color: #215d1f;
+  border-color: #8fb38e;
+  background: #eef8ee;
+}
+
+.rates-status--partial {
+  color: #7a5a12;
+  border-color: #ceb67b;
+  background: #fff9e9;
+}
+
+.rates-status--missing {
+  color: #8b2e2e;
+  border-color: #d4a1a1;
+  background: #fdf0f0;
+}
+
+.rates-source--fallback {
+  color: #a11d1d;
+  font-weight: 700;
 }
 
 .projects-page {
