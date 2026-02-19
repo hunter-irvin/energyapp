@@ -1,8 +1,9 @@
 const https = require("https");
 const { URL } = require("url");
 
-const API_KEY = "Courz8adc7n8ydX9QySvsL29qfViI8jafqzOwqju";
-const CONTACT_EMAIL = "hunter.irvin@jacobs.com";
+const API_KEY = process.env.ENERGYAPP_NREL_API_KEY || process.env.NREL_API_KEY || "";
+const CONTACT_EMAIL =
+  process.env.ENERGYAPP_NREL_CONTACT_EMAIL || process.env.NREL_CONTACT_EMAIL || "energyapp@example.com";
 const SOLAR_YEAR = "2014";
 const WIND_YEAR = "2014";
 const NREL_INTERVAL_MINUTES = 30;
@@ -212,6 +213,9 @@ const buildNrelRequestUrl = ({ dataset, wkt, intervalMinutes }) => {
 };
 
 const fetchNrelCsv = async ({ dataset, wkt, intervalMinutes }) => {
+  if (!API_KEY) {
+    throw new Error("NREL API key is missing. Set ENERGYAPP_NREL_API_KEY or NREL_API_KEY.");
+  }
   const cacheKey = `${dataset}-${wkt}-${intervalMinutes}`;
   if (nrelCsvCache.has(cacheKey)) {
     return { ...nrelCsvCache.get(cacheKey), fromCache: true };

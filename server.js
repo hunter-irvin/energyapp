@@ -2,7 +2,41 @@ const http = require("http");
 const { URL } = require("url");
 const fs = require("fs");
 const path = require("path");
+
+const loadEnvFile = (filePath) => {
+  if (!fs.existsSync(filePath)) {
+    return;
+  }
+  const lines = fs.readFileSync(filePath, "utf8").split(/\r?\n/);
+  lines.forEach((line) => {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith("#")) {
+      return;
+    }
+    const separator = trimmed.indexOf("=");
+    if (separator <= 0) {
+      return;
+    }
+    const key = trimmed.slice(0, separator).trim();
+    const value = trimmed.slice(separator + 1).trim().replace(/^"(.*)"$/, "$1").replace(/^'(.*)'$/, "$1");
+    if (!key || process.env[key] != null) {
+      return;
+    }
+    process.env[key] = value;
+  });
+};
+
+loadEnvFile(path.resolve(__dirname, ".env"));
+loadEnvFile(path.resolve(__dirname, ".env.local"));
+
 const { handleWeatherProxy, handleNrelCsvProxy } = require("./api/weather-proxy");
+const {
+  handleRatesProvider,
+  handleRatesTimeseries,
+  handleRatesTimeseriesV2,
+  handleRatesHealth,
+  handleRatesRefresh,
+} = require("./api/rates-proxy");
 
 const SUPABASE_URL = process.env.ENERGYAPP_SUPABASE_URL || process.env.SUPABASE_URL || "";
 const SUPABASE_ANON_KEY =
@@ -73,6 +107,26 @@ const server = http.createServer((req, res) => {
   }
   if (req.url.startsWith("/api/nrel-proxy")) {
     handleNrelCsvProxy(req, res);
+    return;
+  }
+  if (req.url.startsWith("/api/rates/provider")) {
+    handleRatesProvider(req, res);
+    return;
+  }
+  if (req.url.startsWith("/api/rates/timeseries")) {
+    handleRatesTimeseries(req, res);
+    return;
+  }
+  if (req.url.startsWith("/api/v2/rates/timeseries")) {
+    handleRatesTimeseriesV2(req, res);
+    return;
+  }
+  if (req.url.startsWith("/api/rates/health")) {
+    handleRatesHealth(req, res);
+    return;
+  }
+  if (req.url.startsWith("/api/rates/refresh")) {
+    handleRatesRefresh(req, res);
     return;
   }
 

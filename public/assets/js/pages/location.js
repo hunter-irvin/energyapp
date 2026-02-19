@@ -1,5 +1,6 @@
 const mapButton = document.getElementById("select-map");
 const locationValue = document.getElementById("location-value");
+const utilityValue = document.getElementById("utility-value");
 const loadingStatus = document.getElementById("loading-status");
 const loadingText = document.getElementById("loading-text");
 const successStatus = document.getElementById("success-status");
@@ -39,6 +40,7 @@ const headerProjectNameSaveButton = document.getElementById("header-project-name
 const headerProjectNameCancelButton = document.getElementById("header-project-name-cancel");
 const headerAssetsLink = document.getElementById("header-assets-link");
 const headerStorageLink = document.getElementById("header-storage-link");
+const headerRatesLink = document.getElementById("header-rates-link");
 const supabaseService = window.EnergySupabaseService;
 const sharedCache = window.EnergySharedCache || null;
 const queryParams = new URLSearchParams(window.location.search);
@@ -227,6 +229,9 @@ const applyProjectToUi = (project) => {
       marker = null;
     }
   }
+  if (utilityValue) {
+    utilityValue.textContent = `Utility: ${project?.utilityName || "--"}`;
+  }
 
   const mapState = project.mapState || null;
   if (mapState?.center && typeof mapState.zoom === "number") {
@@ -324,9 +329,13 @@ const updateLocation = async (latlng) => {
         lat,
         lng,
         mapState: { ...getMapState(), city: null },
+        utilityName: null,
+        isoRegion: null,
+        timezone: null,
       })
     );
     await refreshCityLabel({ lat, lng });
+    await refreshUtilityMetadata({ lat, lng });
     const changed = prevLat == null || prevLng == null || prevLat !== lat || prevLng !== lng;
     if (changed) {
       clearLoadedWeatherData();
@@ -341,6 +350,33 @@ const updateLocation = async (latlng) => {
     setStatus({ loading: false, error: "Unable to save location. Please retry." });
     return false;
   }
+};
+
+const refreshUtilityMetadata = async ({ lat, lng }) => {
+  if (!currentProject || lat == null || lng == null) return;
+  try {
+    const url = buildUrl("/api/rates/provider", { lat, lng });
+    const response = await fetch(url, {
+      cache: "no-store",
+      headers: { Accept: "application/json" },
+    });
+    if (!response.ok) return;
+    const payload = await response.json();
+    const provider = payload?.provider || {};
+    const utilityName = provider.utilityName || currentProject.utilityName || null;
+    const isoRegion = provider.isoRegion || currentProject.isoRegion || null;
+    const timezone = provider.timezone || currentProject.timezone || null;
+    currentProject = await withRetry(() =>
+      supabaseService.updateProject(currentProject.id, {
+        utilityName,
+        isoRegion,
+        timezone,
+      })
+    );
+    if (utilityValue) {
+      utilityValue.textContent = `Utility: ${currentProject.utilityName || "--"}`;
+    }
+  } catch (error) {}
 };
 
 const setStatus = ({ loading = false, loadingMessage = "", success = "", error = "" }) => {
@@ -976,16 +1012,20 @@ const buildSeries = (solarRecords, windRecords, period, date) => {
 const renderAxis = (labels) => {
   chartAxis.innerHTML = "";
   chartAxis.style.gridTemplateColumns = `repeat(${labels.length}, 1fr)`;
-  const skip = labels.length > 48 ? 6 : labels.length > 24 ? 3 : 1;
-  labels.forEach((label) => {
+  const shouldShowTick =
+    window.EnergyCharts?.shouldShowAxisTick ||
+    ((nextLabels, index) => index % Math.max(1, Math.ceil((nextLabels?.length || 0) / 12)) === 0);
+  const toLabelText = window.EnergyCharts?.toLabelText || ((label) => String(label ?? ""));
+  const formatAxisLabel = (labelText) => {
+    const text = String(labelText || "");
+    const dayTimeMatch = text.match(/^([A-Za-z]{3})\s+(\d{1,2}:\d{2}\s*[AP]M)$/i);
+    if (dayTimeMatch) return `${dayTimeMatch[1]}\n${dayTimeMatch[2]}`;
+    return text;
+  };
+  labels.forEach((label, index) => {
     const span = document.createElement("span");
-    span.textContent = label;
+    span.textContent = shouldShowTick(labels, index) ? formatAxisLabel(toLabelText(label)) : "";
     chartAxis.appendChild(span);
-  });
-  Array.from(chartAxis.children).forEach((node, index) => {
-    if (index % skip !== 0) {
-      node.textContent = "";
-    }
   });
 };
 
@@ -1036,8 +1076,9 @@ const renderChart = (series, maxValues = {}) => {
     wind: series.wind,
     showSolar: seriesVisibility.solar,
     showWind: seriesVisibility.wind,
+    period: viewState.period,
   });
-  renderAxis([]);
+  renderAxis(series.labels);
 };
 
 const renderTable = (series) => {
@@ -1704,8 +1745,14 @@ const init = async () => {
   if (headerStorageLink) {
     headerStorageLink.href = `/projects/storage.html?projectId=${encodeURIComponent(project.id)}`;
   }
+  if (headerRatesLink) {
+    headerRatesLink.href = `/projects/rates.html?projectId=${encodeURIComponent(project.id)}`;
+  }
 
   updateView();
+  if (project.lat != null && project.lng != null && !project.utilityName) {
+    void refreshUtilityMetadata({ lat: project.lat, lng: project.lng });
+  }
   await loadProjectWeather();
 };
 

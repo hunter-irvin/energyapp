@@ -9,7 +9,7 @@ The EnergyApp has been fully wired up with Supabase for persistent storage of pr
 **Status:** ✅ Complete
 
 The development server now automatically injects Supabase credentials into all HTML files before serving them to the browser:
-- `window.ENERGYAPP_SUPABASE_URL` - Project URL (https://wdsvqjbqftoxzlovyuzk.supabase.co)
+- `window.ENERGYAPP_SUPABASE_URL` - Project URL (https://YOUR_PROJECT_REF.supabase.co)
 - `window.ENERGYAPP_SUPABASE_ANON_KEY` - Anon API key for anonymous access
 
 **How it works:**
@@ -228,5 +228,6 @@ window.EnergySupabaseService  // Exposes all persistence methods
 - Click "Refresh Weather Data" button to force NREL fetch
 - Cache TTL is 24 hours - manually refresh if older data needed
 - Check `fetched_at` timestamp in nrel_cache table
+
 
 

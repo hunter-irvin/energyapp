@@ -2,3 +2,6 @@ config.local.js
 dev-startup.err.log
 dev-startup.out.log
 *.log
+.env
+.env.local
+.env.*.local
