@@ -61,13 +61,16 @@ body {
 }
 
 .project-name-editor__icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   margin-left: 25px;
   padding: 0;
   border: 0;
   background: transparent;
   color: #333333;
-  font-size: 14px;
-  line-height: 1;
+  font-size: 28px;
+  line-height: 1.15;
   cursor: pointer;
 }
 
@@ -348,6 +351,35 @@ body {
   background: transparent;
   padding: 6px;
   border-radius: 0px;
+}
+
+.time-window-controls {
+  display: flex;
+  width: 100%;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+}
+
+.time-window-controls__left,
+.time-window-controls__right {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.time-window-controls__left {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.time-window-controls__right {
+  justify-content: flex-end;
+}
+
+[id$="-control-strip-root"] {
+  width: 100%;
 }
 
 .date-picker {
@@ -1322,8 +1354,45 @@ body {
 
 .provider-actions {
   margin-top: 50px;
-  display: flex;
+  display: grid;
   gap: 0.5rem;
+  justify-items: start;
+}
+
+.other-sources {
+  width: 100%;
+}
+
+.other-sources__summary {
+  list-style: none;
+  cursor: pointer;
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: #666666;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.other-sources__summary::-webkit-details-marker {
+  display: none;
+}
+
+.other-sources__summary::before {
+  content: "▾";
+  font-size: 14px;
+  color: #666666;
+  transform: rotate(-90deg);
+  transition: transform 120ms ease-in-out;
+}
+
+.other-sources[open] .other-sources__summary::before {
+  transform: rotate(0deg);
+}
+
+.other-sources__content {
+  margin-top: 8px;
 }
 
 .rates-summary {
@@ -1379,6 +1448,18 @@ body {
 
 .rates-debug-section {
   margin-top: 18px;
+}
+
+.rates-last-updated-header {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.rates-refresh-inline {
+  padding: 3px 8px;
+  font-size: 11px;
+  line-height: 1.2;
 }
 
 .rates-empty-window {

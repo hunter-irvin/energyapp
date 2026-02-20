@@ -6,23 +6,31 @@ Phase 3 includes all prior behavior plus contract hardening, cache provenance, i
 
 - project page: `/projects/rates.html`
 - inferred utility/ISO/timezone from project location
-- hourly rate chart with day/week/month controls + date picker
+- rate chart with day/week/month/year controls + date picker
 - service toggle: `LMP` / `Tariff`
 - display unit toggle: `kWh` / `MWh` (client-side display conversion)
 - market mode toggle for LMP: `Real-Time` / `Day-Ahead`
+- period-aware interval toggle (source cadence-aware where applicable)
 - missing data visualization (line gaps + shaded empty periods)
 - empty-window notice when selected mode has no published values
 - debug table summarizing per-region data availability
 
 ### Adapter architecture
 
-- `api/rates/provider-resolver.js`
-- `api/rates/lmp-adapters.js`
-- `api/rates/tariff-adapters.js`
-- `api/rates/health.js`
-- `api/rates/series-utils.js`
+- `lib/rates/provider-resolver.js`
+- `lib/rates/lmp-adapters.js`
+- `lib/rates/tariff-adapters.js`
+- `lib/rates/health-utils.js`
+- `lib/rates/series-utils.js`
 
 `api/rates-proxy.js` is now an orchestrator that keeps route contracts stable while adapters evolve.
+
+Interval behavior (UI):
+
+- `day`: no `daily` option
+- `week`: hourly/daily (plus finer cadence options only when source supports them)
+- `month`: hourly/daily
+- `year`: daily only
 
 ## API contracts
 

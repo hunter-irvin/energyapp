@@ -7,37 +7,12 @@
     <link rel="stylesheet" href="/assets/css/styles.css" />
   </head>
   <body class="project-page-body">
-    <header class="project-header">
-      <div class="project-header__left">
-        <div class="project-name-editor" id="rates-project-name-editor">
-          <span id="rates-header-project-name-display" class="project-name-editor__display">Untitled Facility</span>
-          <button
-            id="rates-header-project-name-edit"
-            class="project-name-editor__icon"
-            type="button"
-            aria-label="Edit project name"
-            title="Edit project name"
-          >
-            ✎
-          </button>
-          <input id="rates-header-project-name" class="project-header__input" type="text" placeholder="Untitled Project" hidden />
-          <button id="rates-header-project-name-save" class="project-name-editor__action" type="button" hidden>Save</button>
-          <button id="rates-header-project-name-cancel" class="project-name-editor__action" type="button" hidden>Cancel</button>
-        </div>
-      </div>
-      <a class="btn" href="/">Exit</a>
-    </header>
+    <div id="project-header-root"></div>
     <main class="page page--project assets-page">
-      <aside class="project-sidebar" aria-label="Project navigation">
-        <a class="project-nav-btn" id="rates-location-link" href="/projects/location.html">Location</a>
-        <a class="project-nav-btn" id="rates-generation-link" href="/projects/generation.html">Generation</a>
-        <a class="project-nav-btn" id="rates-storage-link" href="/projects/storage.html">Storage</a>
-        <a class="project-nav-btn project-nav-btn--active" href="/projects/rates.html">Rates</a>
-      </aside>
+      <div id="project-sidebar-root"></div>
       <section class="card assets-card rates-card">
         <header class="card__header">
           <h1>Electricity Rates</h1>
-          <button class="btn" id="rates-refresh-button" type="button">Refresh</button>
         </header>
 
         <section class="rates-summary">
@@ -61,28 +36,13 @@
           <h3 class="assets-chart-title">Export Compensation Rate</h3>
           <div class="assets-chart-header">
             <div class="assets-chart-controls">
-              <div class="toggle-group assets-toggle-group">
-                <button class="btn btn--toggle" data-rates-period="day" type="button">Day</button>
-                <button class="btn btn--toggle is-active" data-rates-period="week" type="button">Week</button>
-                <button class="btn btn--toggle" data-rates-period="month" type="button">Month</button>
-                <span class="assets-label rates-control-label rates-control-label--inline">Units</span>
-                <button class="btn btn--toggle is-active" data-rates-unit="kwh" data-rates-help="kwh" type="button">kWh</button>
-                <button class="btn btn--toggle" data-rates-unit="mwh" data-rates-help="mwh" type="button">MWh</button>
-                <button class="btn btn--icon" id="rates-date-picker-button" aria-label="Pick a date">📅</button>
-                <input class="date-picker" id="rates-date-picker" type="date" aria-label="Select date" />
-                <button class="btn btn--icon" id="rates-shift-back" type="button" aria-label="Previous range">◀</button>
-                <span class="assets-date-range-readout" id="rates-date-range-readout">--</span>
-                <button class="btn btn--icon" id="rates-shift-forward" type="button" aria-label="Next range">▶</button>
-              </div>
+              <div id="rates-control-strip-root"></div>
             </div>
-            <p class="chart-panel__legend">
-              <span class="legend legend--total is-active">Rate</span>
-              <span class="legend legend--missing is-active">Missing data</span>
-            </p>
+            <div id="rates-chart-legend-root"></div>
           </div>
 
           <div class="assets-chart-frame rates-chart-frame" id="rates-chart-frame">
-            <canvas id="rates-chart" class="generation-chart" aria-label="Rates time series chart"></canvas>
+            <div id="rates-chart-root" class="generation-chart"></div>
             <div class="rates-missing-overlay" id="rates-missing-overlay" aria-hidden="true"></div>
             <div class="chart-loading" id="rates-chart-loading" hidden>Loading...</div>
           </div>
@@ -99,7 +59,12 @@
                 <th>Region</th>
                 <th>Service</th>
                 <th>Status</th>
-                <th>Last Updated</th>
+                <th>
+                  <span class="rates-last-updated-header">
+                    <span>Last Updated</span>
+                    <button class="btn rates-refresh-inline" id="rates-refresh-button" type="button">Refresh</button>
+                  </span>
+                </th>
                 <th>Source</th>
                 <th>Source Unit</th>
                 <th>Coverage (hours)</th>
@@ -117,11 +82,42 @@
     <div id="rates-field-tooltip" class="asset-field-tooltip" hidden></div>
 
     <script src="/config.local.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/react@18/umd/react.production.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/react-dom@18/umd/react-dom.production.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
     <script src="/assets/js/core/charting.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
     <script src="/assets/js/core/supabase-config.js"></script>
     <script src="/assets/js/core/supabase-client.js"></script>
+    <script src="/assets/js/components/chart-ui.js"></script>
+    <script src="/assets/js/components/time-series-chart.js"></script>
+    <script src="/assets/js/components/project-shell.js"></script>
+    <script>
+      window.EnergyProjectShell?.mount({
+        headerRootId: "project-header-root",
+        sidebarRootId: "project-sidebar-root",
+        header: {
+          editor: {
+            editorId: "rates-project-name-editor",
+            displayId: "rates-header-project-name-display",
+            editButtonId: "rates-header-project-name-edit",
+            inputId: "rates-header-project-name",
+            saveButtonId: "rates-header-project-name-save",
+            cancelButtonId: "rates-header-project-name-cancel",
+          },
+          exitHref: "/",
+        },
+        sidebar: {
+          ariaLabel: "Project navigation",
+          items: [
+            { key: "location", label: "Location", href: "/projects/location.html", id: "rates-location-link" },
+            { key: "generation", label: "Generation", href: "/projects/generation.html", id: "rates-generation-link" },
+            { key: "storage", label: "Storage", href: "/projects/storage.html", id: "rates-storage-link" },
+            { key: "rates", label: "Rates", href: "/projects/rates.html", active: true },
+          ],
+        },
+      });
+    </script>
     <script src="/assets/js/pages/rates.js"></script>
   </body>
 </html>

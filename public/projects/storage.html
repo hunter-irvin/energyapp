@@ -7,39 +7,9 @@
     <link rel="stylesheet" href="/assets/css/styles.css" />
   </head>
   <body class="project-page-body">
-    <header class="project-header">
-      <div class="project-header__left">
-        <div class="project-name-editor" id="storage-project-name-editor">
-          <span id="storage-header-project-name-display" class="project-name-editor__display">Untitled Facility</span>
-          <button
-            id="storage-header-project-name-edit"
-            class="project-name-editor__icon"
-            type="button"
-            aria-label="Edit project name"
-            title="Edit project name"
-          >
-            ✎
-          </button>
-          <input
-            id="storage-header-project-name"
-            class="project-header__input"
-            type="text"
-            placeholder="Untitled Project"
-            hidden
-          />
-          <button id="storage-header-project-name-save" class="project-name-editor__action" type="button" hidden>Save</button>
-          <button id="storage-header-project-name-cancel" class="project-name-editor__action" type="button" hidden>Cancel</button>
-        </div>
-      </div>
-      <a class="btn" href="/">Exit</a>
-    </header>
+    <div id="project-header-root"></div>
     <main class="page page--project assets-page">
-      <aside class="project-sidebar" aria-label="Project navigation">
-        <a class="project-nav-btn" id="storage-settings-link" href="/projects/location.html">Location</a>
-        <a class="project-nav-btn" id="storage-assets-link" href="/projects/generation.html">Generation</a>
-        <a class="project-nav-btn project-nav-btn--active" href="/projects/storage.html">Storage</a>
-        <a class="project-nav-btn" id="storage-rates-link" href="/projects/rates.html">Rates</a>
-      </aside>
+      <div id="project-sidebar-root"></div>
       <section class="card assets-card">
         <section class="assets-summary">
           <div class="assets-inputs storage-inputs">
@@ -59,31 +29,16 @@
           <h3 class="assets-chart-title">State of charge</h3>
           <div class="assets-chart-header">
             <div class="assets-chart-controls">
-              <div class="toggle-group assets-toggle-group">
-                <button class="btn btn--toggle is-active" data-storage-period="day" type="button">Day</button>
-                <button class="btn btn--toggle" data-storage-period="week" type="button">Week</button>
-                <button class="btn btn--toggle" data-storage-period="month" type="button">Month</button>
-                <button class="btn btn--toggle" data-storage-period="year" type="button">Year</button>
-                <button class="btn btn--icon" id="storage-date-picker-button" aria-label="Pick a date">📅</button>
-                <input class="date-picker" id="storage-date-picker" type="date" aria-label="Select date" />
-                <button class="btn btn--icon" id="storage-shift-back" type="button" aria-label="Previous range">◀</button>
-                <span class="assets-date-range-readout" id="storage-date-range-readout">--</span>
-                <button class="btn btn--icon" id="storage-shift-forward" type="button" aria-label="Next range">▶</button>
-              </div>
+              <div id="storage-control-strip-root"></div>
             </div>
-            <p class="chart-panel__legend">
-              <button class="legend legend--solar is-active" data-storage-series="solar" type="button">Solar</button>
-              <button class="legend legend--wind is-active" data-storage-series="wind" type="button">Wind</button>
-              <button class="legend legend--total" data-storage-series="total" type="button">Total</button>
-              <button class="legend legend--soc is-active" data-storage-series="soc" type="button">SOC</button>
-            </p>
+            <div id="storage-chart-legend-root"></div>
           </div>
           <div class="assets-chart-frame" id="storage-chart-frame">
-            <canvas
-              id="storage-chart"
+            <div
+              id="storage-chart-root"
               class="generation-chart"
               aria-label="State of charge chart"
-            ></canvas>
+            ></div>
             <div class="chart-loading" id="storage-chart-loading" hidden>Loading...</div>
           </div>
           <div class="assets-chart-axis" id="storage-axis"></div>
@@ -94,62 +49,6 @@
         </section>
       </section>
     </main>
-
-    <template id="storage-asset-template">
-      <div class="asset-card" data-asset-type="storage">
-        <button class="asset-delete" type="button" aria-label="Delete storage asset">×</button>
-        <input class="asset-title-input" type="text" data-storage-field="name" aria-label="Storage asset name" />
-
-        <div class="asset-section asset-section--basic">
-          <div class="asset-section__header">
-            <p class="assets-subtitle">Basic</p>
-            <button class="asset-section-toggle" type="button" aria-expanded="true" aria-label="Collapse basic fields">▾</button>
-          </div>
-          <div class="asset-section__body assets-fields">
-            <label class="assets-label">
-              Capacity (kWh)
-            </label>
-            <input class="assets-input" type="number" min="0" step="1" data-storage-field="capacity_kwh" />
-            <label class="assets-label">
-              Battery Type
-            </label>
-            <select class="assets-input" data-storage-field="battery_type">
-              <option value="lfp">LFP</option>
-              <option value="nmc">NMC</option>
-            </select>
-            <label class="assets-label">
-              State of Charge Initial (%)
-            </label>
-            <input class="assets-input" type="number" min="0" max="100" step="1" data-storage-field="soc_init" />
-          </div>
-        </div>
-
-        <div class="asset-section asset-section--advanced is-collapsed">
-          <div class="asset-section__header">
-            <p class="assets-subtitle assets-subtitle--muted">Advanced</p>
-            <button class="asset-section-toggle" type="button" aria-expanded="false" aria-label="Expand advanced fields">▸</button>
-          </div>
-          <div class="asset-section__body assets-fields">
-            <label class="assets-label">
-              Charge Rate C
-            </label>
-            <input class="assets-input" type="number" min="0" step="0.01" data-storage-field="charge_rate_c" />
-            <label class="assets-label">
-              Round Trip Eff (0-1)
-            </label>
-            <input class="assets-input" type="number" min="0" max="1" step="0.01" data-storage-field="round_trip_efficiency" />
-            <label class="assets-label">
-              Temp Ref (°C)
-            </label>
-            <input class="assets-input" type="number" step="1" data-storage-field="temp_ref_c" />
-            <label class="assets-label">
-              Temp Derate (/°C)
-            </label>
-            <input class="assets-input" type="number" min="0" step="0.001" data-storage-field="temp_charge_derate_per_c" />
-          </div>
-        </div>
-      </div>
-    </template>
 
     <dialog class="delete-modal" id="delete-storage-modal">
       <form method="dialog" class="delete-modal__content">
@@ -165,11 +64,42 @@
     <div id="storage-field-tooltip" class="asset-field-tooltip" hidden></div>
 
     <script src="/config.local.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/react@18/umd/react.production.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/react-dom@18/umd/react-dom.production.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
     <script src="/assets/js/core/charting.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
     <script src="/assets/js/core/supabase-config.js"></script>
     <script src="/assets/js/core/supabase-client.js"></script>
+    <script src="/assets/js/components/chart-ui.js"></script>
+    <script src="/assets/js/components/time-series-chart.js"></script>
+    <script src="/assets/js/components/project-shell.js"></script>
+    <script>
+      window.EnergyProjectShell?.mount({
+        headerRootId: "project-header-root",
+        sidebarRootId: "project-sidebar-root",
+        header: {
+          editor: {
+            editorId: "storage-project-name-editor",
+            displayId: "storage-header-project-name-display",
+            editButtonId: "storage-header-project-name-edit",
+            inputId: "storage-header-project-name",
+            saveButtonId: "storage-header-project-name-save",
+            cancelButtonId: "storage-header-project-name-cancel",
+          },
+          exitHref: "/",
+        },
+        sidebar: {
+          ariaLabel: "Project navigation",
+          items: [
+            { key: "location", label: "Location", href: "/projects/location.html", id: "storage-settings-link" },
+            { key: "generation", label: "Generation", href: "/projects/generation.html", id: "storage-assets-link" },
+            { key: "storage", label: "Storage", href: "/projects/storage.html", active: true },
+            { key: "rates", label: "Rates", href: "/projects/rates.html", id: "storage-rates-link" },
+          ],
+        },
+      });
+    </script>
     <script src="/assets/js/core/shared-cache.js"></script>
     <script src="/assets/js/core/models.js"></script>
     <script src="/assets/js/features/generation.js"></script>

@@ -16,7 +16,28 @@ This repo is organized as a static multi-page web app served from `public/`.
 - `public/assets/css/` shared styles
 - `public/assets/js/core/` shared runtime modules (`charting`, cache, models, data utilities, Supabase client/config)
 - `public/assets/js/features/` domain feature modules (for example generation modeling logic)
-- `public/assets/js/pages/` page entry scripts (`projects`, `location`, `generation`, `storage`)
+- `public/assets/js/components/` React bridge components (`project-shell`, `chart-ui`, `time-series-chart`)
+- `public/assets/js/pages/` page entry scripts (`projects`, `location`, `generation`, `storage`, `rates`)
+
+### UI Architecture (Current)
+
+The app now uses a hybrid static-page + React-islands model:
+
+- Shared project header/sidebar are rendered via `public/assets/js/components/project-shell.js`.
+- Shared chart controls and legends are rendered via `public/assets/js/components/chart-ui.js`.
+- Shared chart rendering is standardized through `public/assets/js/components/time-series-chart.js` (Chart.js wrapper).
+- Generation and Storage asset editors are React-rendered; legacy HTML template card rendering has been removed.
+
+### Period/Interval Rules (Current)
+
+Intervals are now period-aware across Location/Generation/Storage/Rates:
+
+- `day`: no `daily` option (sub-daily only)
+- `week`: `half_hour`/`hourly`/`daily`
+- `month`: `hourly`/`daily`
+- `year`: `daily`
+
+Rates additionally exposes `five_min`/`half_hour` only when source cadence supports it.
 
 ### Backend layout
 

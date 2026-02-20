@@ -52,6 +52,8 @@ const isTlsIssuerError = (error) =>
     "DEPTH_ZERO_SELF_SIGNED_CERT",
   ].includes(error?.code);
 
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
 const fetchBuffer = (targetUrl, redirectsRemaining = 5, options = {}) =>
   new Promise((resolve, reject) => {
     const { rejectUnauthorized = true, tlsRetryAttempted = false } = options;
@@ -125,6 +127,13 @@ const fetchBuffer = (targetUrl, redirectsRemaining = 5, options = {}) =>
 const pad2 = (value) => String(value).padStart(2, "0");
 const cleanText = (value) => String(value || "").replace(/^\ufeff/, "").trim();
 const formatDate = (date) => `${date.getUTCFullYear()}-${pad2(date.getUTCMonth() + 1)}-${pad2(date.getUTCDate())}`;
+const parseDateInput = (value) => {
+  if (!value) return null;
+  const match = String(value).match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (!match) return null;
+  const [, year, month, day] = match;
+  return new Date(Date.UTC(Number(year), Number(month) - 1, Number(day)));
+};
 
 const parseIsoUtcParts = (timestamp) => {
   const match = String(timestamp).match(
@@ -269,6 +278,22 @@ const fetchOpenMeteoJson = async (targetUrl) => {
   return parsed;
 };
 
+const fetchOpenMeteoJsonWithRetry = async (targetUrl, { retries = 2, delayMs = 800 } = {}) => {
+  let lastError = null;
+  for (let attempt = 0; attempt <= retries; attempt += 1) {
+    try {
+      return await fetchOpenMeteoJson(targetUrl);
+    } catch (error) {
+      lastError = error;
+      if (attempt === retries) {
+        break;
+      }
+      await sleep(delayMs * (attempt + 1));
+    }
+  }
+  throw lastError;
+};
+
 const buildOpenMeteoUrl = (baseUrl, { lat, lng, startDate, endDate, forecastDays = null }) => {
   const url = new URL(baseUrl);
   url.searchParams.set("latitude", String(lat));
@@ -348,32 +373,60 @@ const mergeUniqueByTimestamp = (rows) => {
   });
 };
 
-const fetchAndNormalizeOpenMeteo = async ({ lat, lng }) => {
+const fetchAndNormalizeOpenMeteo = async ({ lat, lng, startDate = null, endDate = null }) => {
   const today = new Date();
-  const historyStart = new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate()));
-  historyStart.setUTCDate(historyStart.getUTCDate() - OPEN_METEO_HISTORY_DAYS);
-  const historyEnd = new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate()));
-  const historyUrl = buildOpenMeteoUrl(OPEN_METEO_HISTORY_ENDPOINT, {
-    lat,
-    lng,
-    startDate: formatDate(historyStart),
-    endDate: formatDate(historyEnd),
-  });
-  const forecastUrl = buildOpenMeteoUrl(OPEN_METEO_FORECAST_ENDPOINT, {
-    lat,
-    lng,
-    forecastDays: OPEN_METEO_FORECAST_DAYS,
-  });
+  const todayUtc = new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate()));
+  const windowStart = startDate ? parseDateInput(startDate) : null;
+  const windowEnd = endDate ? parseDateInput(endDate) : null;
+  const useWindow = Boolean(windowStart && windowEnd && windowStart <= windowEnd);
 
-  const [historyPayload, forecastPayload] = await Promise.all([
-    fetchOpenMeteoJson(historyUrl),
-    fetchOpenMeteoJson(forecastUrl),
-  ]);
+  const requestPlan = [];
+  if (useWindow) {
+    if (windowStart <= todayUtc) {
+      const historyEnd = windowEnd <= todayUtc ? windowEnd : todayUtc;
+      requestPlan.push({
+        endpoint: OPEN_METEO_HISTORY_ENDPOINT,
+        startDate: formatDate(windowStart),
+        endDate: formatDate(historyEnd),
+      });
+    }
+    if (windowEnd >= todayUtc) {
+      const forecastStart = windowStart >= todayUtc ? windowStart : todayUtc;
+      requestPlan.push({
+        endpoint: OPEN_METEO_FORECAST_ENDPOINT,
+        startDate: formatDate(forecastStart),
+        endDate: formatDate(windowEnd),
+      });
+    }
+  } else {
+    const historyStart = new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate()));
+    historyStart.setUTCDate(historyStart.getUTCDate() - OPEN_METEO_HISTORY_DAYS);
+    requestPlan.push({
+      endpoint: OPEN_METEO_HISTORY_ENDPOINT,
+      startDate: formatDate(historyStart),
+      endDate: formatDate(todayUtc),
+    });
+    requestPlan.push({
+      endpoint: OPEN_METEO_FORECAST_ENDPOINT,
+      forecastDays: OPEN_METEO_FORECAST_DAYS,
+    });
+  }
 
-  const merged = mergeUniqueByTimestamp([
-    ...normalizeOpenMeteoPayload(historyPayload),
-    ...normalizeOpenMeteoPayload(forecastPayload),
-  ]);
+  const payloads = await Promise.all(
+    requestPlan.map((request) =>
+      fetchOpenMeteoJsonWithRetry(
+        buildOpenMeteoUrl(request.endpoint, {
+          lat,
+          lng,
+          startDate: request.startDate || null,
+          endDate: request.endDate || null,
+          forecastDays: request.forecastDays ?? null,
+        })
+      )
+    )
+  );
+
+  const merged = mergeUniqueByTimestamp(payloads.flatMap((payload) => normalizeOpenMeteoPayload(payload)));
 
   const downsampled = downsampleTo30Minutes(merged);
   const solar = downsampled.map((row) => ({
@@ -414,10 +467,12 @@ const fetchAndNormalizeOpenMeteo = async ({ lat, lng }) => {
       sourceYear: null,
       intervalMinutes: NREL_INTERVAL_MINUTES,
       timezone: "UTC",
-      fetchMode: "historical+forecast_minutely_15",
+      fetchMode: useWindow ? "window_minutely_15" : "historical+forecast_minutely_15",
       historyDays: OPEN_METEO_HISTORY_DAYS,
       forecastDays: OPEN_METEO_FORECAST_DAYS,
       upstreamIntervalMinutes: OPEN_METEO_INTERVAL_MINUTES,
+      requestStartDate: useWindow ? formatDate(windowStart) : null,
+      requestEndDate: useWindow ? formatDate(windowEnd) : null,
     },
   };
 };
@@ -454,6 +509,9 @@ const handleNrelCsvProxy = async (req, res) => {
 const handleWeatherProxy = async (req, res) => {
   const url = new URL(req.url, `http://${req.headers.host}`);
   const provider = url.searchParams.get("provider") || "nrel";
+  const mode = url.searchParams.get("mode") || "load_default";
+  const requestStartDate = cleanText(url.searchParams.get("startDate") || "");
+  const requestEndDate = cleanText(url.searchParams.get("endDate") || "");
   const lat = Number(url.searchParams.get("lat"));
   const lng = Number(url.searchParams.get("lng"));
 
@@ -466,7 +524,11 @@ const handleWeatherProxy = async (req, res) => {
     return;
   }
 
-  const cacheKey = `${provider}-${lat.toFixed(4)}-${lng.toFixed(4)}`;
+  const cacheSuffix =
+    provider === "open_meteo" && mode === "load_window" && requestStartDate && requestEndDate
+      ? `-${mode}-${requestStartDate}-${requestEndDate}`
+      : "";
+  const cacheKey = `${provider}-${lat.toFixed(4)}-${lng.toFixed(4)}${cacheSuffix}`;
   if (weatherJsonCache.has(cacheKey)) {
     sendJson(res, 200, weatherJsonCache.get(cacheKey), { "X-Cache": "HIT" });
     return;
@@ -475,7 +537,12 @@ const handleWeatherProxy = async (req, res) => {
   try {
     const payload =
       provider === "open_meteo"
-        ? await fetchAndNormalizeOpenMeteo({ lat, lng })
+        ? await fetchAndNormalizeOpenMeteo({
+            lat,
+            lng,
+            startDate: mode === "load_window" ? requestStartDate : null,
+            endDate: mode === "load_window" ? requestEndDate : null,
+          })
         : await fetchAndNormalizeNrel({ lat, lng });
 
     weatherJsonCache.set(cacheKey, payload);
@@ -485,7 +552,6 @@ const handleWeatherProxy = async (req, res) => {
   }
 };
 
-module.exports = {
-  handleWeatherProxy,
-  handleNrelCsvProxy,
-};
+module.exports = handleWeatherProxy;
+module.exports.handleWeatherProxy = handleWeatherProxy;
+module.exports.handleNrelCsvProxy = handleNrelCsvProxy;

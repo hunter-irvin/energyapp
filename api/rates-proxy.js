@@ -1,9 +1,9 @@
 const { URL } = require("url");
-const { parseIso } = require("./rates/series-utils");
-const { resolveProviderMetadata } = require("./rates/provider-resolver");
-const { getLmpSeries } = require("./rates/lmp-adapters");
-const { getTariffSeries } = require("./rates/tariff-adapters");
-const { buildHealthRows } = require("./rates/health");
+const { parseIso } = require("../lib/rates/series-utils");
+const { resolveProviderMetadata } = require("../lib/rates/provider-resolver");
+const { getLmpSeries } = require("../lib/rates/lmp-adapters");
+const { getTariffSeries } = require("../lib/rates/tariff-adapters");
+const { buildHealthRows } = require("../lib/rates/health-utils");
 
 const sendJsonError = (res, status, message) => {
   res.writeHead(status, {
