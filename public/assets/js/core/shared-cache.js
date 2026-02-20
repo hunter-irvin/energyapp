@@ -154,7 +154,16 @@
 
   const setParsedWeather = (
     projectId,
-    { provider = "nrel", timeZone = "UTC", raw15 = {}, hourly = {}, daily = {}, windMetric = {}, weatherRevision = "" } = {}
+    {
+      provider = "nrel",
+      timeZone = "UTC",
+      raw15 = {},
+      hourly = {},
+      daily = {},
+      windMetric = {},
+      weatherRevision = "",
+      metadata = {},
+    } = {}
   ) => {
     const state = getState(projectId);
     const nextRevision =
@@ -173,6 +182,7 @@
       hourly: cloneValue(hourly),
       daily: cloneValue(daily),
       windMetric: cloneValue(windMetric),
+      metadata: cloneValue(metadata || {}),
       weatherRevision: nextRevision,
       savedAt: Date.now(),
     };

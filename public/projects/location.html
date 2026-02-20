@@ -8,33 +8,9 @@
     <link rel="stylesheet" href="/assets/css/styles.css" />
   </head>
   <body class="project-page-body">
-    <header class="project-header">
-      <div class="project-header__left">
-        <div class="project-name-editor" id="project-name-editor">
-          <span id="header-project-name-display" class="project-name-editor__display">Untitled Facility</span>
-          <button
-            id="header-project-name-edit"
-            class="project-name-editor__icon"
-            type="button"
-            aria-label="Edit project name"
-            title="Edit project name"
-          >
-            ✎
-          </button>
-          <input id="header-project-name" class="project-header__input" type="text" placeholder="Untitled Project" hidden />
-          <button id="header-project-name-save" class="project-name-editor__action" type="button" hidden>Save</button>
-          <button id="header-project-name-cancel" class="project-name-editor__action" type="button" hidden>Cancel</button>
-        </div>
-      </div>
-      <a class="btn" href="/">Exit</a>
-    </header>
+    <div id="project-header-root"></div>
     <main class="page page--project">
-      <aside class="project-sidebar" aria-label="Project navigation">
-        <a class="project-nav-btn project-nav-btn--active" href="/projects/location.html">Location</a>
-        <a class="project-nav-btn" id="header-assets-link" href="/projects/generation.html">Generation</a>
-        <a class="project-nav-btn" id="header-storage-link" href="/projects/storage.html">Storage</a>
-        <a class="project-nav-btn" id="header-rates-link" href="/projects/rates.html">Rates</a>
-      </aside>
+      <div id="project-sidebar-root"></div>
       <section class="card">
         <header class="card__header">
           <h1>Location</h1>
@@ -49,8 +25,13 @@
                 <button class="btn btn--primary" id="select-map">Select on Map</button>
               </div>
               <div class="provider-actions">
-                <button class="btn btn--toggle" id="provider-nrel" type="button">2014 NREL Data</button>
-                <button class="btn btn--toggle" id="provider-open-meteo" type="button">Last Year + 7 Day Forecast</button>
+                <button class="btn btn--toggle" id="provider-open-meteo" type="button">Get Weather Data</button>
+                <details class="other-sources" id="other-sources">
+                  <summary class="other-sources__summary">Other data sources</summary>
+                  <div class="other-sources__content">
+                    <button class="btn btn--toggle" id="provider-nrel" type="button">2014 NREL Data</button>
+                  </div>
+                </details>
               </div>
               <div class="status status--loading" id="loading-status" hidden>
                 <span class="status__text" id="loading-text">Loading data for 2024…</span>
@@ -70,77 +51,69 @@
           <div class="map" id="map"></div>
         </div>
         <div class="toolbar">
-          <div class="toggle-group">
-            <button class="btn btn--toggle" data-period="day">Day</button>
-            <button class="btn btn--toggle is-active" data-period="week">Week</button>
-            <button class="btn btn--toggle" data-period="month">Month</button>
-            <button class="btn btn--toggle" data-period="year">Year</button>
-            <button class="btn btn--icon" id="date-picker-button" aria-label="Pick a date">
-              📅
-            </button>
-            <input class="date-picker" id="date-picker" type="date" aria-label="Select date" />
-            <button class="btn btn--icon" id="weather-shift-back" type="button" aria-label="Previous range">◀</button>
-            <span class="assets-date-range-readout" id="weather-date-range-readout">--</span>
-            <button class="btn btn--icon" id="weather-shift-forward" type="button" aria-label="Next range">▶</button>
-          </div>
-          <div class="toggle-group">
-            <button class="btn btn--toggle is-active" data-view="chart">Chart</button>
-            <button class="btn btn--toggle" data-view="table">Table</button>
-          </div>
+          <div id="location-control-strip-root"></div>
         </div>
         <section class="chart-panel">
           <header class="chart-panel__header">
             <div>
               <h2>Weather Profile</h2>
-              <p class="chart-panel__legend">
-                <button class="legend legend--solar is-active" data-series="solar" type="button">
-                  Solar
-                </button>
-                <button class="legend legend--wind is-active" data-series="wind" type="button">
-                  Wind
-                </button>
-              </p>
+              <div id="location-chart-legend-root"></div>
             </div>
             <p class="chart-panel__date" id="chart-date">February 9, 2024</p>
           </header>
           <div class="chart-display" id="chart-display" title="Solar/wind values for each time bucket.">
-            <canvas class="chart-svg" id="chart-svg" aria-label="Weather chart"></canvas>
+            <div class="chart-svg" id="weather-chart-root" aria-label="Weather chart"></div>
             <div class="chart-hover-line" id="chart-hover-line" hidden></div>
             <div class="chart-tooltip" id="chart-tooltip" hidden></div>
             <div class="chart-loading" id="settings-chart-loading" hidden>Loading...</div>
           </div>
           <div class="chart-axis chart-axis--below" id="chart-axis"></div>
-          <div class="table-panel" id="table-panel" hidden>
-            <table class="data-table">
-              <thead>
-                <tr>
-                  <th title="Local time bucket for this reading.">Timestamp</th>
-                  <th title="Solar irradiance in watts per square meter.">Solar (GHI)</th>
-                  <th title="Wind speed in meters per second.">Wind Speed</th>
-                  <th title="Wind direction in degrees from north.">Direction</th>
-                </tr>
-              </thead>
-              <tbody id="table-body"></tbody>
-            </table>
-            <div class="table-actions">
-              <button class="btn btn--toggle" id="table-load-more" hidden>Load more</button>
-            </div>
-            <details class="debug-panel" id="debug-panel">
-              <summary>Data debug</summary>
-              <pre id="debug-output">No debug data yet.</pre>
-            </details>
-          </div>
+          <details class="debug-panel" id="debug-panel">
+            <summary>Data debug</summary>
+            <pre id="debug-output">No debug data yet.</pre>
+          </details>
         </section>
       </section>
     </main>
 
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
     <script src="/config.local.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/react@18/umd/react.production.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/react-dom@18/umd/react-dom.production.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
     <script src="/assets/js/core/charting.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
     <script src="/assets/js/core/supabase-config.js"></script>
     <script src="/assets/js/core/supabase-client.js"></script>
+    <script src="/assets/js/components/chart-ui.js"></script>
+    <script src="/assets/js/components/time-series-chart.js"></script>
+    <script src="/assets/js/components/project-shell.js"></script>
+    <script>
+      window.EnergyProjectShell?.mount({
+        headerRootId: "project-header-root",
+        sidebarRootId: "project-sidebar-root",
+        header: {
+          editor: {
+            editorId: "project-name-editor",
+            displayId: "header-project-name-display",
+            editButtonId: "header-project-name-edit",
+            inputId: "header-project-name",
+            saveButtonId: "header-project-name-save",
+            cancelButtonId: "header-project-name-cancel",
+          },
+          exitHref: "/",
+        },
+        sidebar: {
+          ariaLabel: "Project navigation",
+          items: [
+            { key: "location", label: "Location", href: "/projects/location.html", active: true },
+            { key: "generation", label: "Generation", href: "/projects/generation.html", id: "header-assets-link" },
+            { key: "storage", label: "Storage", href: "/projects/storage.html", id: "header-storage-link" },
+            { key: "rates", label: "Rates", href: "/projects/rates.html", id: "header-rates-link" },
+          ],
+        },
+      });
+    </script>
     <script src="/assets/js/core/shared-cache.js"></script>
     <script src="/assets/js/core/models.js"></script>
     <script src="/assets/js/core/data-utils.js"></script>

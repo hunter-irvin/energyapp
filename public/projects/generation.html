@@ -8,33 +8,9 @@
     <link rel="stylesheet" href="/assets/css/styles.css" />
   </head>
   <body class="project-page-body">
-    <header class="project-header">
-      <div class="project-header__left">
-        <div class="project-name-editor" id="project-name-editor">
-          <span id="header-project-name-display" class="project-name-editor__display">Untitled Facility</span>
-          <button
-            id="header-project-name-edit"
-            class="project-name-editor__icon"
-            type="button"
-            aria-label="Edit project name"
-            title="Edit project name"
-          >
-            ✎
-          </button>
-          <input id="header-project-name" class="project-header__input" type="text" placeholder="Untitled Project" hidden />
-          <button id="header-project-name-save" class="project-name-editor__action" type="button" hidden>Save</button>
-          <button id="header-project-name-cancel" class="project-name-editor__action" type="button" hidden>Cancel</button>
-        </div>
-      </div>
-      <a class="btn" href="/">Exit</a>
-    </header>
+    <div id="project-header-root"></div>
     <main class="page page--project assets-page">
-      <aside class="project-sidebar" aria-label="Project navigation">
-        <a class="project-nav-btn" id="header-settings-link" href="/projects/location.html">Location</a>
-        <a class="project-nav-btn project-nav-btn--active" href="/projects/generation.html">Generation</a>
-        <a class="project-nav-btn" id="sidebar-storage-link" href="/projects/storage.html">Storage</a>
-        <a class="project-nav-btn" id="sidebar-rates-link" href="/projects/rates.html">Rates</a>
-      </aside>
+      <div id="project-sidebar-root"></div>
       <section class="card assets-card">
         <header class="assets-header">
           <h1>Generation</h1>
@@ -62,28 +38,14 @@
           <h3 class="assets-chart-title">Expected Generation</h3>
           <div class="assets-chart-header">
             <div class="assets-chart-controls">
-              <div class="toggle-group assets-toggle-group">
-                <button class="btn btn--toggle" data-assets-period="day" type="button">Day</button>
-                <button class="btn btn--toggle is-active" data-assets-period="week" type="button">Week</button>
-                <button class="btn btn--toggle" data-assets-period="month" type="button">Month</button>
-                <button class="btn btn--toggle" data-assets-period="year" type="button">Year</button>
-                <button class="btn btn--icon" id="assets-date-picker-button" aria-label="Pick a date">📅</button>
-                <input class="date-picker" id="assets-date-picker" type="date" aria-label="Select date" />
-                <button class="btn btn--icon" id="assets-shift-back" type="button" aria-label="Previous range">◀</button>
-                <span class="assets-date-range-readout" id="assets-date-range-readout">--</span>
-                <button class="btn btn--icon" id="assets-shift-forward" type="button" aria-label="Next range">▶</button>
-              </div>
+              <div id="generation-control-strip-root"></div>
             </div>
-            <p class="chart-panel__legend">
-              <button class="legend legend--solar is-active" data-assets-series="solar" type="button">Solar</button>
-              <button class="legend legend--wind is-active" data-assets-series="wind" type="button">Wind</button>
-              <button class="legend legend--total" data-assets-series="total" type="button">Total</button>
-            </p>
+            <div id="generation-chart-legend-root"></div>
           </div>
           <div class="assets-chart-layout">
             <div class="assets-timeseries-panel">
               <div class="assets-chart-frame" id="assets-chart-frame">
-                <canvas id="generation-chart" class="generation-chart" aria-label="Typical generation chart"></canvas>
+                <div id="generation-chart-root" class="generation-chart" aria-label="Typical generation chart"></div>
                 <div class="chart-loading" id="assets-chart-loading" hidden>Loading...</div>
               </div>
               <div class="assets-chart-axis" id="generation-axis"></div>
@@ -102,100 +64,6 @@
       </section>
     </main>
 
-    <template id="solar-asset-template">
-      <div class="asset-card" data-asset-type="solar">
-        <button class="asset-delete" type="button" aria-label="Delete asset">×</button>
-        <input class="asset-title-input" type="text" data-solar-field="name" aria-label="Solar asset name" />
-        <div class="asset-section asset-section--basic">
-          <div class="asset-section__header">
-            <p class="assets-subtitle">Basic</p>
-            <button class="asset-section-toggle" type="button" aria-expanded="true" aria-label="Collapse basic fields">▾</button>
-          </div>
-          <div class="asset-section__body assets-fields">
-            <label class="assets-label">Capacity (AC kW)</label>
-            <input class="assets-input" type="number" min="0" step="1" data-solar-field="capacity_ac_kw" />
-            <label class="assets-label">System Losses (frac; includes orientation effects)</label>
-            <input class="assets-input" type="number" step="0.01" data-solar-field="system_losses_frac" />
-          </div>
-        </div>
-        <div class="asset-section asset-section--advanced is-collapsed">
-          <div class="asset-section__header">
-            <p class="assets-subtitle assets-subtitle--muted">Advanced</p>
-            <button class="asset-section-toggle" type="button" aria-expanded="false" aria-label="Expand advanced fields">▸</button>
-          </div>
-          <div class="asset-section__body assets-fields">
-            <label class="assets-label">DC/AC Ratio <span class="assets-optional">(Optional)</span></label>
-            <input class="assets-input" type="number" min="0" step="0.01" data-solar-field="dc_ac_ratio" />
-            <label class="assets-label">Availability (frac) <span class="assets-optional">(Optional)</span></label>
-            <input class="assets-input" type="number" step="0.01" data-solar-field="availability_frac" />
-            <label class="assets-label">Clip at AC Capacity <span class="assets-optional">(Optional)</span></label>
-            <select class="assets-input" data-solar-field="clip_at_ac_capacity">
-              <option value="true">True</option>
-              <option value="false">False</option>
-            </select>
-            <label class="assets-label">NOCT (°C) <span class="assets-optional">(Optional)</span></label>
-            <input class="assets-input" type="number" step="1" data-solar-field="noct_c" />
-            <label class="assets-label">Temp Coeff (/°C) <span class="assets-optional">(Optional)</span></label>
-            <input class="assets-input" type="number" step="0.001" data-solar-field="temp_coeff_per_c" />
-          </div>
-        </div>
-      </div>
-    </template>
-
-    <template id="wind-asset-template">
-      <div class="asset-card" data-asset-type="wind">
-        <button class="asset-delete" type="button" aria-label="Delete asset">×</button>
-        <input class="asset-title-input" type="text" data-wind-field="name" aria-label="Wind asset name" />
-        <div class="asset-section asset-section--basic">
-          <div class="asset-section__header">
-            <p class="assets-subtitle">Basic</p>
-            <button class="asset-section-toggle" type="button" aria-expanded="true" aria-label="Collapse basic fields">▾</button>
-          </div>
-          <div class="asset-section__body assets-fields">
-            <label class="assets-label">Rated Power (kW)</label>
-            <input class="assets-input" type="number" min="0" step="1" data-wind-field="rated_power_kw" />
-            <label class="assets-label"># Turbines <span class="assets-optional">(Optional)</span></label>
-            <input class="assets-input" type="number" min="1" step="1" data-wind-field="num_turbines" />
-            <label class="assets-label">Hub Height (m) <span class="assets-optional">(Optional)</span></label>
-            <input class="assets-input" type="number" step="1" data-wind-field="hub_height_m" />
-            <label class="assets-label">Power Curve <span class="assets-optional">(Optional)</span></label>
-            <input class="assets-input" type="text" data-wind-field="power_curve_id" />
-          </div>
-        </div>
-        <div class="asset-section asset-section--advanced is-collapsed">
-          <div class="asset-section__header">
-            <p class="assets-subtitle assets-subtitle--muted">Advanced</p>
-            <button class="asset-section-toggle" type="button" aria-expanded="false" aria-label="Expand advanced fields">▸</button>
-          </div>
-          <div class="asset-section__body assets-fields">
-            <label class="assets-label">Cut-in (m/s) <span class="assets-optional">(Optional)</span></label>
-            <input class="assets-input" type="number" step="0.1" data-wind-field="cut_in_mps" />
-            <label class="assets-label">Rated (m/s) <span class="assets-optional">(Optional)</span></label>
-            <input class="assets-input" type="number" step="0.1" data-wind-field="rated_mps" />
-            <label class="assets-label">Cut-out (m/s) <span class="assets-optional">(Optional)</span></label>
-            <input class="assets-input" type="number" step="0.1" data-wind-field="cut_out_mps" />
-            <label class="assets-label">Availability (frac) <span class="assets-optional">(Optional)</span></label>
-            <input class="assets-input" type="number" step="0.01" data-wind-field="availability_frac" />
-            <label class="assets-label">Wake Losses (frac) <span class="assets-optional">(Optional)</span></label>
-            <input class="assets-input" type="number" step="0.01" data-wind-field="wake_losses_frac" />
-            <label class="assets-label">Electrical Losses (frac) <span class="assets-optional">(Optional)</span></label>
-            <input class="assets-input" type="number" step="0.01" data-wind-field="electrical_losses_frac" />
-            <label class="assets-label">Density Correction <span class="assets-optional">(Optional)</span></label>
-            <select class="assets-input" data-wind-field="density_correction_enabled">
-              <option value="true">True</option>
-              <option value="false">False</option>
-            </select>
-            <label class="assets-label">Air Density Std <span class="assets-optional">(Optional)</span></label>
-            <input class="assets-input" type="number" step="0.001" data-wind-field="air_density_std" />
-            <label class="assets-label">Shear Exponent α <span class="assets-optional">(Optional)</span></label>
-            <input class="assets-input" type="number" step="0.01" data-wind-field="shear_exponent_alpha" />
-            <label class="assets-label">Reference Height (m) <span class="assets-optional">(Optional)</span></label>
-            <input class="assets-input" type="number" step="1" data-wind-field="reference_height_m" />
-          </div>
-        </div>
-      </div>
-    </template>
-
     <dialog class="delete-modal" id="delete-asset-modal">
       <form method="dialog" class="delete-modal__content">
         <h3>Delete asset?</h3>
@@ -211,11 +79,42 @@
 
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
     <script src="/config.local.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/react@18/umd/react.production.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/react-dom@18/umd/react-dom.production.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
     <script src="/assets/js/core/charting.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
     <script src="/assets/js/core/supabase-config.js"></script>
     <script src="/assets/js/core/supabase-client.js"></script>
+    <script src="/assets/js/components/chart-ui.js"></script>
+    <script src="/assets/js/components/time-series-chart.js"></script>
+    <script src="/assets/js/components/project-shell.js"></script>
+    <script>
+      window.EnergyProjectShell?.mount({
+        headerRootId: "project-header-root",
+        sidebarRootId: "project-sidebar-root",
+        header: {
+          editor: {
+            editorId: "project-name-editor",
+            displayId: "header-project-name-display",
+            editButtonId: "header-project-name-edit",
+            inputId: "header-project-name",
+            saveButtonId: "header-project-name-save",
+            cancelButtonId: "header-project-name-cancel",
+          },
+          exitHref: "/",
+        },
+        sidebar: {
+          ariaLabel: "Project navigation",
+          items: [
+            { key: "location", label: "Location", href: "/projects/location.html", id: "header-settings-link" },
+            { key: "generation", label: "Generation", href: "/projects/generation.html", active: true },
+            { key: "storage", label: "Storage", href: "/projects/storage.html", id: "sidebar-storage-link" },
+            { key: "rates", label: "Rates", href: "/projects/rates.html", id: "sidebar-rates-link" },
+          ],
+        },
+      });
+    </script>
     <script src="/assets/js/core/shared-cache.js"></script>
     <script src="/assets/js/core/models.js"></script>
     <script src="/assets/js/features/generation.js"></script>

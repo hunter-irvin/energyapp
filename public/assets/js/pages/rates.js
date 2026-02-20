@@ -9,6 +9,9 @@
     day_ahead: 60 * 60 * 1000,
     tariff: 24 * 60 * 60 * 1000,
   };
+  const INTERVAL_STORAGE_SUFFIX = "ratesInterval";
+  const INTERVAL_OPTIONS = Object.freeze(["five_min", "half_hour", "hourly", "daily"]);
+  const DEFAULT_AVAILABLE_INTERVALS = Object.freeze(["hourly", "daily"]);
 
   const HELP_TEXT = {
     lmp: {
@@ -42,6 +45,11 @@
   };
 
   const MODE_ORDER = ["real_time", "day_ahead", "tariff"];
+  const RATE_FEED_PLAN = [
+    { serviceType: "lmp", marketMode: "real_time" },
+    { serviceType: "lmp", marketMode: "day_ahead" },
+    { serviceType: "tariff", marketMode: "tariff" },
+  ];
   const MODE_LABEL = {
     real_time: "Real-Time",
     day_ahead: "Day-Ahead",
@@ -51,7 +59,7 @@
 
   const supabaseService = window.EnergySupabaseService;
   const queryParams = new URLSearchParams(window.location.search);
-  const projectId = queryParams.get("projectId");
+  const requestedProjectId = queryParams.get("projectId");
   const isValidProjectId = (value) => typeof value === "string" && /^[a-zA-Z0-9-]+$/.test(value);
 
   const headerProjectNameInput = document.getElementById("rates-header-project-name");
@@ -71,14 +79,9 @@
   const ratesMarketLabel = document.getElementById("rates-market-label");
   const ratesServiceButtons = Array.from(document.querySelectorAll("[data-rates-service]"));
   const ratesMarketButtons = Array.from(document.querySelectorAll("[data-rates-market]"));
-  const ratesUnitButtons = Array.from(document.querySelectorAll("[data-rates-unit]"));
-  const ratesPeriodButtons = Array.from(document.querySelectorAll("[data-rates-period]"));
-  const ratesDatePickerButton = document.getElementById("rates-date-picker-button");
-  const ratesDatePickerInput = document.getElementById("rates-date-picker");
-  const ratesShiftBack = document.getElementById("rates-shift-back");
-  const ratesShiftForward = document.getElementById("rates-shift-forward");
-  const ratesDateRangeReadout = document.getElementById("rates-date-range-readout");
-  const ratesChartCanvas = document.getElementById("rates-chart");
+  const ratesControlStripRoot = document.getElementById("rates-control-strip-root");
+  const ratesChartLegendRoot = document.getElementById("rates-chart-legend-root");
+  const ratesChartRoot = document.getElementById("rates-chart-root");
   const ratesAxis = document.getElementById("rates-axis");
   const ratesChartLoading = document.getElementById("rates-chart-loading");
   const ratesSourceWarning = document.getElementById("rates-source-warning");
@@ -135,6 +138,14 @@
     if (explicit.includes("/kwh")) return "USD/kWh";
     if (serviceType === "lmp") return detectLikelyMwhScale(points) ? "USD/MWh" : "USD/kWh";
     return "USD/kWh";
+  };
+
+  const shouldPersistRateCache = (metadata = {}) => {
+    const source = String(metadata?.source || "").toLowerCase();
+    const reason = String(metadata?.details?.reason || "").toLowerCase();
+    if (source.includes("modeled_fallback")) return false;
+    if (reason === "source_unavailable") return false;
+    return true;
   };
 
   const repairLikelyLegacyLmpScale = ({ points = [], serviceType, sourceUnit }) => {
@@ -213,15 +224,15 @@
       const weekStart = getWeekStart(start);
       const weekEnd = new Date(weekStart);
       weekEnd.setDate(weekEnd.getDate() + 6);
-      weekEnd.setHours(23, 0, 0, 0);
+      weekEnd.setHours(23, 59, 59, 999);
       return { start: weekStart, end: weekEnd };
     }
     if (period === "month") {
       const monthStart = new Date(start.getFullYear(), start.getMonth(), 1);
-      const monthEnd = new Date(start.getFullYear(), start.getMonth() + 1, 0, 23, 0, 0, 0);
+      const monthEnd = new Date(start.getFullYear(), start.getMonth() + 1, 0, 23, 59, 59, 999);
       return { start: monthStart, end: monthEnd };
     }
-    end.setHours(23, 0, 0, 0);
+    end.setHours(23, 59, 59, 999);
     return { start, end };
   };
 
@@ -238,6 +249,7 @@
 
   const viewState = {
     period: "week",
+    interval: "hourly",
     serviceType: "lmp",
     marketMode: "day_ahead",
     displayUnit: "kwh",
@@ -252,12 +264,41 @@
     lastReason: "",
     lastFetchedAt: null,
     rawPoints: [],
+    availableIntervals: Array.from(DEFAULT_AVAILABLE_INTERVALS),
     healthRows: [],
     expandedRegions: new Set(),
+    legend: {
+      rate: true,
+      missing: true,
+    },
   };
 
   let currentProject = null;
-  let ratesChart = null;
+  let ratesChartBridge = null;
+  let ratesControlStripBridge = null;
+  let ratesLegendBridge = null;
+
+  const getScopedUiKey = (projectIdValue, suffix) => {
+    if (!projectIdValue) return "";
+    if (typeof supabaseService?.buildScopedUiStorageKey === "function") {
+      return supabaseService.buildScopedUiStorageKey(projectIdValue, suffix);
+    }
+    return `energyapp.project.${projectIdValue}.${suffix}`;
+  };
+
+  const loadPersistedInterval = (projectIdValue, fallback = "hourly") => {
+    const key = getScopedUiKey(projectIdValue, INTERVAL_STORAGE_SUFFIX);
+    if (!key) return fallback;
+    const stored = localStorage.getItem(key);
+    return INTERVAL_OPTIONS.includes(stored) ? stored : fallback;
+  };
+
+  const persistInterval = (projectIdValue, interval) => {
+    if (!INTERVAL_OPTIONS.includes(interval)) return;
+    const key = getScopedUiKey(projectIdValue, INTERVAL_STORAGE_SUFFIX);
+    if (!key) return;
+    localStorage.setItem(key, interval);
+  };
 
   const setProjectNameDisplay = (name) => {
     const resolved = String(name || "Untitled Facility").trim() || "Untitled Facility";
@@ -293,13 +334,220 @@
     buttons.forEach((button) => button.classList.toggle("is-active", button.dataset[attribute] === activeValue));
   };
 
-  const updateDateRangeReadout = () => {
-    if (!ratesDateRangeReadout) return;
+  const getIntervalLabel = (intervalKey) => {
+    if (intervalKey === "five_min") return "5 Min";
+    if (intervalKey === "half_hour") return "30 Min";
+    if (intervalKey === "hourly") return "Hourly";
+    return "Daily";
+  };
+
+  const inferCadenceMinutes = (points = []) => {
+    const timestamps = Array.from(
+      new Set(
+        (Array.isArray(points) ? points : [])
+          .map((point) => new Date(point?.ts).getTime())
+          .filter((value) => Number.isFinite(value))
+      )
+    ).sort((a, b) => a - b);
+    if (timestamps.length < 2) return null;
+    let minDiff = null;
+    for (let index = 1; index < timestamps.length; index += 1) {
+      const diffMinutes = Math.round((timestamps[index] - timestamps[index - 1]) / 60000);
+      if (!Number.isFinite(diffMinutes) || diffMinutes <= 0) continue;
+      minDiff = minDiff == null ? diffMinutes : Math.min(minDiff, diffMinutes);
+    }
+    return Number.isFinite(minDiff) ? minDiff : null;
+  };
+
+  const resolveAvailableIntervals = () => {
+    const cadenceMinutes = inferCadenceMinutes(viewState.rawPoints);
+    const available = Array.from(DEFAULT_AVAILABLE_INTERVALS);
+    if (Number.isFinite(cadenceMinutes) && cadenceMinutes <= 30) {
+      available.unshift("half_hour");
+    }
+    if (Number.isFinite(cadenceMinutes) && cadenceMinutes <= 5) {
+      available.unshift("five_min");
+    }
+    if (viewState.period === "month") {
+      return available.filter((intervalKey) => intervalKey === "hourly" || intervalKey === "daily");
+    }
+    if (viewState.period === "day") {
+      return available.filter((intervalKey) => intervalKey !== "daily");
+    }
+    return available;
+  };
+
+  const ensureIntervalAvailable = () => {
+    const available = Array.isArray(viewState.availableIntervals)
+      ? viewState.availableIntervals
+      : Array.from(DEFAULT_AVAILABLE_INTERVALS);
+    if (available.includes(viewState.interval)) return;
+    viewState.interval = available.includes("hourly") ? "hourly" : "daily";
+    persistInterval(currentProject?.id, viewState.interval);
+  };
+
+  const refreshAvailableIntervals = () => {
+    viewState.availableIntervals = resolveAvailableIntervals();
+    ensureIntervalAvailable();
+  };
+
+  const buildIntervalButtons = () =>
+    (Array.isArray(viewState.availableIntervals) ? viewState.availableIntervals : Array.from(DEFAULT_AVAILABLE_INTERVALS)).map(
+      (intervalKey) => ({
+        key: intervalKey,
+        label: getIntervalLabel(intervalKey),
+        active: viewState.interval === intervalKey,
+        onClick: () => {
+          viewState.interval = intervalKey;
+          persistInterval(currentProject?.id, viewState.interval);
+          syncControlStrip();
+          renderChart();
+        },
+      })
+    );
+
+  const getDateRangeReadout = () => {
     const selectedDate = parseDateKey(viewState.selectedDateKey) || new Date();
     const { start, end } = getDateRangeForPeriod(viewState.period, selectedDate);
     const startText = formatShortDate(start);
     const endText = formatShortDate(end);
-    ratesDateRangeReadout.textContent = startText === endText ? startText : `${startText}-${endText}`;
+    return startText === endText ? startText : `${startText}-${endText}`;
+  };
+
+  const buildControlStripProps = () => ({
+    className: "toggle-group assets-toggle-group",
+    groups: [
+      {
+        key: "period",
+        buttons: [
+          {
+            key: "day",
+            label: "Day",
+            active: viewState.period === "day",
+            onClick: () => {
+              viewState.period = "day";
+              refreshAvailableIntervals();
+              syncControlStrip();
+              renderChart();
+            },
+          },
+          {
+            key: "week",
+            label: "Week",
+            active: viewState.period === "week",
+            onClick: () => {
+              viewState.period = "week";
+              refreshAvailableIntervals();
+              syncControlStrip();
+              renderChart();
+            },
+          },
+          {
+            key: "month",
+            label: "Month",
+            active: viewState.period === "month",
+            onClick: () => {
+              viewState.period = "month";
+              refreshAvailableIntervals();
+              syncControlStrip();
+              renderChart();
+            },
+          },
+        ],
+      },
+      {
+        key: "interval",
+        label: "Interval",
+        labelClassName: "assets-label rates-control-label rates-control-label--inline",
+        buttons: buildIntervalButtons(),
+      },
+      {
+        key: "unit",
+        label: "Units",
+        labelClassName: "assets-label rates-control-label rates-control-label--inline",
+        buttons: [
+          {
+            key: "kwh",
+            label: "kWh",
+            active: viewState.displayUnit === "kwh",
+            dataAttr: { "data-rates-help": "kwh" },
+            onClick: () => {
+              viewState.displayUnit = "kwh";
+              syncControlStrip();
+              renderChart();
+            },
+          },
+          {
+            key: "mwh",
+            label: "MWh",
+            active: viewState.displayUnit === "mwh",
+            dataAttr: { "data-rates-help": "mwh" },
+            onClick: () => {
+              viewState.displayUnit = "mwh";
+              syncControlStrip();
+              renderChart();
+            },
+          },
+        ],
+      },
+    ],
+    rightGroupKeys: ["interval"],
+    selectedDateKey: viewState.selectedDateKey,
+    dateRangeText: getDateRangeReadout(),
+    onDateChange: (nextValue) => {
+      if (!nextValue) return;
+      viewState.selectedDateKey = nextValue;
+      syncControlStrip();
+      renderChart();
+      if (currentProject) {
+        void supabaseService
+          .updateProject(currentProject.id, { selectedDate: viewState.selectedDateKey })
+          .then((project) => {
+            currentProject = project;
+          })
+          .catch(() => {});
+      }
+    },
+    onShift: (direction) => shiftDate(Number(direction) >= 0 ? 1 : -1),
+  });
+
+  const buildLegendProps = () => ({
+    className: "chart-panel__legend",
+    tagName: "p",
+    items: [
+      {
+        key: "rate",
+        label: "Rate",
+        className: "legend--total",
+        active: Boolean(viewState.legend.rate),
+        onToggle: () => {
+          viewState.legend.rate = !viewState.legend.rate;
+          syncLegend();
+          renderChart();
+        },
+      },
+      {
+        key: "missing",
+        label: "Missing data",
+        className: "legend--missing",
+        active: Boolean(viewState.legend.missing),
+        onToggle: () => {
+          viewState.legend.missing = !viewState.legend.missing;
+          syncLegend();
+          renderChart();
+        },
+      },
+    ],
+  });
+
+  const syncControlStrip = () => {
+    if (!ratesControlStripBridge) return;
+    ratesControlStripBridge.update(buildControlStripProps());
+  };
+
+  const syncLegend = () => {
+    if (!ratesLegendBridge) return;
+    ratesLegendBridge.update(buildLegendProps());
   };
 
   const updateProviderLabels = () => {
@@ -324,12 +572,41 @@
     }
   };
 
+  const toBucketTimestamp = (date, bucketMinutes) => {
+    const parsed = new Date(date);
+    if (Number.isNaN(parsed.getTime())) return "";
+    const bucketMs = Math.max(1, Number(bucketMinutes)) * 60 * 1000;
+    const flooredMs = Math.floor(parsed.getTime() / bucketMs) * bucketMs;
+    return new Date(flooredMs).toISOString();
+  };
+
+  const aggregateSeriesByMinutes = (series = [], bucketMinutes) => {
+    const buckets = new Map();
+    series.forEach((point) => {
+      const ts = new Date(point?.ts);
+      if (Number.isNaN(ts.getTime())) return;
+      const bucketTs = toBucketTimestamp(ts, bucketMinutes);
+      const bucket = buckets.get(bucketTs) || { ts: bucketTs, sum: 0, count: 0 };
+      if (Number.isFinite(point?.value)) {
+        bucket.sum += Number(point.value);
+        bucket.count += 1;
+      }
+      buckets.set(bucketTs, bucket);
+    });
+    return Array.from(buckets.values())
+      .sort((a, b) => new Date(a.ts).getTime() - new Date(b.ts).getTime())
+      .map((bucket) => ({
+        ts: bucket.ts,
+        value: bucket.count > 0 ? Number((bucket.sum / bucket.count).toFixed(6)) : null,
+      }));
+  };
+
   const getDisplaySeries = () => {
     const selectedDate = parseDateKey(viewState.selectedDateKey) || new Date();
     const { start, end } = getDateRangeForPeriod(viewState.period, selectedDate);
     const startMs = start.getTime();
     const endMs = end.getTime();
-    return viewState.rawPoints
+    const series = viewState.rawPoints
       .filter((point) => {
         const ts = new Date(point.ts).getTime();
         return Number.isFinite(ts) && ts >= startMs && ts <= endMs;
@@ -341,6 +618,10 @@
             ? null
             : convertRateValue(Number(point.value), viewState.sourceUnit, viewState.displayUnit),
       }));
+    if (viewState.interval === "five_min") return aggregateSeriesByMinutes(series, 5);
+    if (viewState.interval === "half_hour") return aggregateSeriesByMinutes(series, 30);
+    if (viewState.interval === "hourly") return aggregateSeriesByMinutes(series, 60);
+    return aggregateSeriesByMinutes(series, 24 * 60);
   };
 
   const renderAxis = (labels) => {
@@ -364,6 +645,7 @@
   const renderMissingBands = (series) => {
     if (!ratesMissingOverlay) return;
     ratesMissingOverlay.innerHTML = "";
+    if (!viewState.legend.missing) return;
     const total = series.length;
     if (!total) return;
     let start = -1;
@@ -416,103 +698,107 @@
     ratesSourceWarning.textContent = `❌ Live market source unavailable. Showing fallback modeled rates. Source: ${sourceText}`;
   };
 
-  const ensureChart = () => {
-    if (ratesChart || !ratesChartCanvas || typeof window.Chart === "undefined") return;
-    ratesChart = new window.Chart(ratesChartCanvas, {
+  const ensureChartBridge = () => {
+    if (ratesChartBridge || !ratesChartRoot || !window.EnergyTimeSeriesChart?.createBridge) return;
+    ratesChartBridge = window.EnergyTimeSeriesChart.createBridge();
+    ratesChartBridge.mount(ratesChartRoot, {
       type: "line",
-      data: {
-        labels: [],
-        datasets: [
-          {
-            label: "Rate",
-            data: [],
-            borderColor: "#000000",
-            backgroundColor: "transparent",
-            tension: 0.22,
-            borderWidth: 2,
-            pointRadius: 0,
-            spanGaps: false,
-          },
-        ],
-      },
-      options: {
-        responsive: true,
-        maintainAspectRatio: false,
-        animation: false,
-        interaction: { mode: "index", intersect: false },
-        plugins: {
-          legend: { display: false },
-          tooltip: {
-            callbacks: {
-              label(context) {
-                const value = context?.parsed?.y;
-                if (!Number.isFinite(value)) return "Rate: Missing";
-                const decimals = viewState.displayUnit === "mwh" ? 2 : 4;
-                return `Rate: ${Number(value).toFixed(decimals)} ${getDisplayUnitLabel()}`;
-              },
-            },
-          },
-        },
-        scales: {
-          x: {
-            grid: { color: "rgba(120,120,120,0.15)" },
-            ticks: {
-              color: "#353535",
-              display: false,
-              autoSkip: false,
-              maxRotation: 0,
-              callback(value, index) {
-                const labels = this?.chart?.data?.labels || [];
-                const shouldShow =
-                  window.EnergyCharts?.shouldShowAxisTick?.(labels, index) ??
-                  (index % Math.max(1, Math.ceil((labels?.length || 0) / 12)) === 0);
-                if (!shouldShow) return "";
-                return typeof this?.getLabelForValue === "function" ? this.getLabelForValue(value) : labels[index] || "";
-              },
-            },
-          },
-          y: {
-            min: 0,
-            grid: { color: "rgba(120,120,120,0.2)" },
-            ticks: { color: "#353535" },
-            title: {
-              display: true,
-              text: `Rate (${getDisplayUnitLabel()})`,
-              color: "#2d2d2d",
-              font: { weight: "700" },
-            },
-          },
-        },
-      },
+      className: "generation-chart",
+      ariaLabel: "Rates time series chart",
+      labels: [],
+      datasets: [],
+      yTitle: `Rate (${getDisplayUnitLabel()})`,
+      minY: 0,
     });
   };
 
+  const buildChartProps = ({ labels = [], values = [] } = {}) => ({
+    type: "line",
+    className: "generation-chart",
+    ariaLabel: "Rates time series chart",
+    labels,
+    scales: {
+      x: {
+        grid: {
+          color: (context) => {
+            const labelsList = context?.chart?.data?.labels || [];
+            const index = Number.isFinite(context?.index) ? context.index : Number(context?.tick?.value);
+            const shouldShow =
+              window.EnergyCharts?.shouldShowAxisTick?.(labelsList, index) ??
+              (index % Math.max(1, Math.ceil((labelsList?.length || 0) / 12)) === 0);
+            return shouldShow ? "rgba(120,120,120,0.2)" : "rgba(120,120,120,0)";
+          },
+        },
+        ticks: {
+          color: "#353535",
+          autoSkip: false,
+          maxRotation: 0,
+          callback(value, index) {
+            const labelsList = this?.chart?.data?.labels || [];
+            const shouldShow =
+              window.EnergyCharts?.shouldShowAxisTick?.(labelsList, index) ??
+              (index % Math.max(1, Math.ceil((labelsList?.length || 0) / 12)) === 0);
+            if (!shouldShow) return "";
+            if (typeof this?.getLabelForValue === "function") return this.getLabelForValue(value);
+            return labelsList[index] || "";
+          },
+        },
+      },
+      y: {
+        min: 0,
+        grid: { color: "rgba(120,120,120,0.2)" },
+        ticks: { color: "#353535" },
+        title: {
+          display: true,
+          text: `Rate (${getDisplayUnitLabel()})`,
+          color: "#2d2d2d",
+          font: { weight: "700" },
+        },
+      },
+    },
+    datasets: [
+      {
+        label: "Rate",
+        data: values,
+        borderColor: "#000000",
+        backgroundColor: "transparent",
+        tension: 0.22,
+        borderWidth: 2,
+        pointRadius: 0,
+        spanGaps: false,
+        hidden: !viewState.legend.rate,
+      },
+    ],
+    tooltipLabel: (context) => {
+      const value = context?.parsed?.y;
+      if (!Number.isFinite(value)) return "Rate: Missing";
+      const decimals = viewState.displayUnit === "mwh" ? 2 : 4;
+      return `Rate: ${Number(value).toFixed(decimals)} ${getDisplayUnitLabel()}`;
+    },
+  });
+
   const renderChart = () => {
-    ensureChart();
-    if (!ratesChart) return;
+    ensureChartBridge();
+    if (!ratesChartBridge) return;
     const series = getDisplaySeries();
     const labels = series.map((point) => {
       const ts = new Date(point.ts);
       const month = ts.getMonth() + 1;
       const day = ts.getDate();
+      if (viewState.interval === "daily") return `${month}/${day}`;
+      const minute = pad2(ts.getMinutes());
+      if (viewState.interval === "half_hour" || viewState.interval === "five_min") {
+        return [`${month}/${day}`, `${pad2(ts.getHours())}:${minute}`];
+      }
       const hour = pad2(ts.getHours());
-      return `${month}/${day} ${hour}:00`;
-    });
-    const axisLabels = series.map((point) => {
-      const ts = new Date(point.ts);
-      const month = ts.getMonth() + 1;
-      const day = ts.getDate();
-      const hour = pad2(ts.getHours());
-      return `${month}/${day}\n${hour}:00`;
+      return [`${month}/${day}`, `${hour}:00`];
     });
     const values = series.map((point) => (Number.isFinite(point.value) ? Number(point.value) : null));
-    ratesChart.data.labels = labels;
-    ratesChart.data.datasets[0].data = values;
-    if (ratesChart.options?.scales?.y?.title) {
-      ratesChart.options.scales.y.title.text = `Rate (${getDisplayUnitLabel()})`;
+    ratesChartBridge.update(buildChartProps({ labels, values }));
+    if (ratesAxis) {
+      ratesAxis.innerHTML = "";
+      ratesAxis.style.display = "none";
     }
-    ratesChart.update();
-    renderAxis(axisLabels);
     renderMissingBands(series);
     updateEmptyWindowBanner(series);
     updateSourceWarning();
@@ -671,7 +957,7 @@
     }
   };
 
-  const fetchRatesSeries = async ({ forceRefresh = false } = {}) => {
+  const fetchRatesSeries = async ({ forceRefresh = false, suppressRender = false } = {}) => {
     if (!currentProject || currentProject.lat == null || currentProject.lng == null) return;
     const { start, end } = buildActiveWindow();
     const windowStart = start.toISOString();
@@ -722,13 +1008,14 @@
         });
         viewState.sourceUnit = repairedMwhLabel.sourceUnit;
         viewState.rawPoints = repairedMwhLabel.points;
+        refreshAvailableIntervals();
         if (repaired.repaired) {
           console.warn("Repaired legacy LMP cache scale by x1000 (USD/kWh).");
         }
         if (repairedMwhLabel.repaired) {
           console.warn("Repaired mislabeled legacy LMP cache source unit (USD/MWh -> USD/kWh).");
         }
-        renderChart();
+        if (!suppressRender) renderChart();
         return;
       }
     }
@@ -780,37 +1067,42 @@
     viewState.lastReason = metadata?.details?.reason || "";
     viewState.lastFetchedAt = metadata.fetchedAt || new Date().toISOString();
     viewState.rawPoints = repairedMwhLabel.points;
-    await supabaseService.upsertRateSeriesCache({
-      projectId: currentProject.id,
-      regionId: payload?.metadata?.regionId || viewState.regionId || "NON-ISO",
-      serviceType: viewState.serviceType,
-      marketMode,
-      windowStart,
-      windowEnd,
-      timezone: payload?.metadata?.timezone || viewState.timezone || "UTC",
-      source: payload?.metadata?.source || "rates_proxy_phase2",
-      sourceUnit: repairedMwhLabel.sourceUnit,
-      qualityStatus: metadata.qualityStatus || "unknown",
-      apiVersion: metadata.apiVersion || "v2",
-      ingestNotes: {
-        reason: metadata?.details?.reason || null,
-        fetchedFrom: "timeseries",
-      },
-      fetchedAt: payload?.metadata?.fetchedAt || new Date().toISOString(),
-      payload: {
-        points: repairedPayload.points,
-        missingIntervals: payload?.missingIntervals || [],
-        metadata: {
-          ...(payload?.metadata || {}),
-          cacheSchemaVersion: RATES_CACHE_SCHEMA_VERSION,
-          apiVersion: metadata.apiVersion || "v2",
-          qualityStatus: metadata.qualityStatus || "unknown",
-          unit: payload?.metadata?.unit || repairedMwhLabel.sourceUnit,
-          sourceUnit:
-            payload?.metadata?.sourceUnit || payload?.metadata?.unit || repairedMwhLabel.sourceUnit,
+    refreshAvailableIntervals();
+    if (shouldPersistRateCache(metadata)) {
+      await supabaseService.upsertRateSeriesCache({
+        projectId: currentProject.id,
+        regionId: payload?.metadata?.regionId || viewState.regionId || "NON-ISO",
+        serviceType: viewState.serviceType,
+        marketMode,
+        windowStart,
+        windowEnd,
+        timezone: payload?.metadata?.timezone || viewState.timezone || "UTC",
+        source: payload?.metadata?.source || "rates_proxy_phase2",
+        sourceUnit: repairedMwhLabel.sourceUnit,
+        qualityStatus: metadata.qualityStatus || "unknown",
+        apiVersion: metadata.apiVersion || "v2",
+        ingestNotes: {
+          reason: metadata?.details?.reason || null,
+          fetchedFrom: "timeseries",
         },
-      },
-    });
+        fetchedAt: payload?.metadata?.fetchedAt || new Date().toISOString(),
+        payload: {
+          points: repairedPayload.points,
+          missingIntervals: payload?.missingIntervals || [],
+          metadata: {
+            ...(payload?.metadata || {}),
+            cacheSchemaVersion: RATES_CACHE_SCHEMA_VERSION,
+            apiVersion: metadata.apiVersion || "v2",
+            qualityStatus: metadata.qualityStatus || "unknown",
+            unit: payload?.metadata?.unit || repairedMwhLabel.sourceUnit,
+            sourceUnit:
+              payload?.metadata?.sourceUnit || payload?.metadata?.unit || repairedMwhLabel.sourceUnit,
+          },
+        },
+      });
+    } else {
+      console.warn("Skipping rate cache write for fallback/unavailable source response.");
+    }
     const missingHours = repairedMwhLabel.points.reduce((sum, point) => (point?.value == null ? sum + 1 : sum), 0);
     void supabaseService
       .insertRateIngestRun({
@@ -834,7 +1126,7 @@
         runFinishedAt: new Date().toISOString(),
       })
       .catch(() => {});
-    renderChart();
+    if (!suppressRender) renderChart();
   };
 
   const fetchHealth = async () => {
@@ -923,8 +1215,7 @@
     else if (viewState.period === "week") next.setDate(next.getDate() + direction * 7);
     else next.setMonth(next.getMonth() + direction);
     viewState.selectedDateKey = formatDateKey(next);
-    if (ratesDatePickerInput) ratesDatePickerInput.value = viewState.selectedDateKey;
-    updateDateRangeReadout();
+    syncControlStrip();
     renderChart();
     if (currentProject) {
       void supabaseService
@@ -936,15 +1227,124 @@
     }
   };
 
-  const bindControls = () => {
-    ratesPeriodButtons.forEach((button) => {
-      button.addEventListener("click", () => {
-        viewState.period = button.dataset.ratesPeriod || "week";
-        applyToggleState(ratesPeriodButtons, viewState.period, "ratesPeriod");
-        updateDateRangeReadout();
-        renderChart();
-      });
+  const manualRefreshAllRateFeeds = async () => {
+    if (!currentProject || currentProject.lat == null || currentProject.lng == null) return;
+
+    const originalServiceType = viewState.serviceType;
+    const originalMarketMode = viewState.marketMode;
+
+    setLoading(true);
+    try {
+      await resolveProvider();
+      const { start, end } = buildActiveWindow();
+      const windowStart = start.toISOString();
+      const windowEnd = end.toISOString();
+
+      if (typeof supabaseService.clearRateSeriesCache === "function") {
+        await Promise.all(
+          RATE_FEED_PLAN.map((feed) =>
+            supabaseService.clearRateSeriesCache(currentProject.id, {
+              regionId: viewState.regionId || undefined,
+              serviceType: feed.serviceType,
+              marketMode: feed.marketMode,
+              windowStart,
+              windowEnd,
+            })
+          )
+        );
+      }
+
+      await fetch(`${RATES_PROXY_ENDPOINT}/refresh`, { cache: "no-store" }).catch(() => {});
+
+      for (const feed of RATE_FEED_PLAN) {
+        viewState.serviceType = feed.serviceType;
+        viewState.marketMode = feed.marketMode;
+        // Force API fetch for every feed; skip intermediate re-renders.
+        // eslint-disable-next-line no-await-in-loop
+        await fetchRatesSeries({ forceRefresh: true, suppressRender: true });
+      }
+
+      viewState.serviceType = originalServiceType;
+      viewState.marketMode = originalMarketMode;
+      applyToggleState(ratesServiceButtons, viewState.serviceType, "ratesService");
+      applyToggleState(ratesMarketButtons, viewState.marketMode, "ratesMarket");
+      updateMarketModeVisibility();
+
+      await fetchRatesSeries({ forceRefresh: false });
+      await fetchHealth();
+
+      try {
+        currentProject = await withRetry(() =>
+          supabaseService.updateProject(currentProject.id, {
+            ratesServiceType: viewState.serviceType,
+            ratesMarketMode: viewState.serviceType === "tariff" ? "tariff" : viewState.marketMode,
+          })
+        );
+      } catch (error) {
+        console.warn("Rates settings could not be persisted to project; continuing.", error);
+      }
+    } catch (error) {
+      console.error("Failed to manually refresh all rate feeds.", error);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const bindControlStripTooltips = () => {
+    if (!ratesControlStripRoot) return;
+    const getHelpButton = (target) => target?.closest?.("[data-rates-help]");
+
+    ratesControlStripRoot.addEventListener("mouseover", (event) => {
+      const button = getHelpButton(event.target);
+      if (!button) return;
+      const key = button.dataset.ratesHelp;
+      if (!key) return;
+      showRatesFieldTooltip(key, event);
     });
+
+    ratesControlStripRoot.addEventListener("mousemove", (event) => {
+      if (ratesFieldTooltip?.hidden) return;
+      const button = getHelpButton(event.target);
+      if (!button) return;
+      positionRatesFieldTooltip(event);
+    });
+
+    ratesControlStripRoot.addEventListener("mouseout", (event) => {
+      const fromButton = getHelpButton(event.target);
+      if (!fromButton) return;
+      const toButton = getHelpButton(event.relatedTarget);
+      if (toButton === fromButton) return;
+      hideRatesFieldTooltip();
+    });
+
+    ratesControlStripRoot.addEventListener("focusin", (event) => {
+      const button = getHelpButton(event.target);
+      if (!button) return;
+      const key = button.dataset.ratesHelp;
+      if (!key) return;
+      showRatesFieldTooltip(key);
+    });
+
+    ratesControlStripRoot.addEventListener("focusout", (event) => {
+      const fromButton = getHelpButton(event.target);
+      if (!fromButton) return;
+      const toButton = getHelpButton(event.relatedTarget);
+      if (toButton === fromButton) return;
+      hideRatesFieldTooltip();
+    });
+  };
+
+  const bindControls = () => {
+    if (ratesControlStripRoot && window.EnergyChartUI?.createTimeWindowControlsBridge) {
+      ratesControlStripBridge = window.EnergyChartUI.createTimeWindowControlsBridge();
+      ratesControlStripBridge.mount(ratesControlStripRoot, buildControlStripProps());
+      bindControlStripTooltips();
+    }
+
+    if (ratesChartLegendRoot && window.EnergyChartUI?.createLegendTogglesBridge) {
+      ratesLegendBridge = window.EnergyChartUI.createLegendTogglesBridge();
+      ratesLegendBridge.mount(ratesChartLegendRoot, buildLegendProps());
+    }
 
     ratesServiceButtons.forEach((button) => {
       button.addEventListener("click", () => {
@@ -958,14 +1358,6 @@
       });
     });
 
-    ratesUnitButtons.forEach((button) => {
-      button.addEventListener("click", () => {
-        viewState.displayUnit = button.dataset.ratesUnit === "mwh" ? "mwh" : "kwh";
-        applyToggleState(ratesUnitButtons, viewState.displayUnit, "ratesUnit");
-        renderChart();
-      });
-    });
-
     ratesMarketButtons.forEach((button) => {
       button.addEventListener("click", () => {
         if (viewState.serviceType !== "lmp") return;
@@ -975,34 +1367,7 @@
       });
     });
 
-    if (ratesDatePickerButton && ratesDatePickerInput) {
-      ratesDatePickerButton.addEventListener("click", () => {
-        if (typeof ratesDatePickerInput.showPicker === "function") ratesDatePickerInput.showPicker();
-        else ratesDatePickerInput.click();
-      });
-    }
-
-    if (ratesDatePickerInput) {
-      ratesDatePickerInput.addEventListener("change", (event) => {
-        const nextValue = event.target.value;
-        if (!nextValue) return;
-        viewState.selectedDateKey = nextValue;
-        updateDateRangeReadout();
-        renderChart();
-        if (currentProject) {
-          void supabaseService
-            .updateProject(currentProject.id, { selectedDate: viewState.selectedDateKey })
-            .then((project) => {
-              currentProject = project;
-            })
-            .catch(() => {});
-        }
-      });
-    }
-
-    if (ratesShiftBack) ratesShiftBack.addEventListener("click", () => shiftDate(-1));
-    if (ratesShiftForward) ratesShiftForward.addEventListener("click", () => shiftDate(1));
-    if (ratesRefreshButton) ratesRefreshButton.addEventListener("click", () => void reloadAll({ forceRefresh: true }));
+    if (ratesRefreshButton) ratesRefreshButton.addEventListener("click", () => void manualRefreshAllRateFeeds());
 
     if (ratesHealthBody) {
       ratesHealthBody.addEventListener("click", (event) => {
@@ -1015,15 +1380,6 @@
         renderHealthTable();
       });
     }
-
-    document.querySelectorAll("[data-rates-help]").forEach((button) => {
-      const key = button.dataset.ratesHelp;
-      button.addEventListener("mouseenter", (event) => showRatesFieldTooltip(key, event));
-      button.addEventListener("mousemove", positionRatesFieldTooltip);
-      button.addEventListener("mouseleave", hideRatesFieldTooltip);
-      button.addEventListener("focus", () => showRatesFieldTooltip(key));
-      button.addEventListener("blur", hideRatesFieldTooltip);
-    });
 
     window.addEventListener("scroll", hideRatesFieldTooltip, true);
     window.addEventListener("resize", hideRatesFieldTooltip);
@@ -1063,28 +1419,50 @@
 
   const init = async () => {
     await supabaseService.migrateLegacyLocalData();
-    if (!projectId || !isValidProjectId(projectId)) {
-      window.location.href = "/";
-      return;
+    const candidateProjectIds = [];
+    if (isValidProjectId(requestedProjectId)) {
+      candidateProjectIds.push(requestedProjectId);
     }
-    currentProject = await withRetry(() => supabaseService.getProject(projectId));
+    const lastOpenedProjectId = supabaseService.getLastOpenedProjectId?.();
+    if (isValidProjectId(lastOpenedProjectId) && !candidateProjectIds.includes(lastOpenedProjectId)) {
+      candidateProjectIds.push(lastOpenedProjectId);
+    }
+
+    for (let i = 0; i < candidateProjectIds.length; i += 1) {
+      const candidateId = candidateProjectIds[i];
+      // eslint-disable-next-line no-await-in-loop
+      const project = await withRetry(() => supabaseService.getProject(candidateId));
+      if (project) {
+        currentProject = project;
+        break;
+      }
+    }
+
+    if (!currentProject) {
+      const projects = await withRetry(() => supabaseService.listProjects());
+      currentProject = Array.isArray(projects) && projects.length ? projects[0] : null;
+    }
+
     if (!currentProject) {
       window.location.href = "/";
       return;
     }
 
+    if (requestedProjectId !== currentProject.id) {
+      const canonicalUrl = `/projects/rates.html?projectId=${encodeURIComponent(currentProject.id)}`;
+      window.history.replaceState({}, "", canonicalUrl);
+    }
+
     viewState.selectedDateKey = currentProject.selectedDate || formatDateKey(new Date());
     viewState.serviceType = currentProject.ratesServiceType || "lmp";
     viewState.marketMode = currentProject.ratesMarketMode || "day_ahead";
+    viewState.interval = loadPersistedInterval(currentProject.id, "hourly");
     if (viewState.serviceType === "tariff") viewState.marketMode = "tariff";
+    refreshAvailableIntervals();
 
-    if (ratesDatePickerInput) ratesDatePickerInput.value = viewState.selectedDateKey;
-    applyToggleState(ratesPeriodButtons, viewState.period, "ratesPeriod");
     applyToggleState(ratesServiceButtons, viewState.serviceType, "ratesService");
     applyToggleState(ratesMarketButtons, viewState.marketMode, "ratesMarket");
-    applyToggleState(ratesUnitButtons, viewState.displayUnit, "ratesUnit");
     updateMarketModeVisibility();
-    updateDateRangeReadout();
     setProjectNameDisplay(currentProject.name);
     setProjectNameEditorMode(false);
 
@@ -1093,6 +1471,8 @@
     if (ratesStorageLink) ratesStorageLink.href = `/projects/storage.html?projectId=${encodeURIComponent(currentProject.id)}`;
 
     bindControls();
+    syncControlStrip();
+    syncLegend();
     await reloadAll();
   };
 

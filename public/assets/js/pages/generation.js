@@ -6,8 +6,11 @@
   const POINTS_PER_DAY = (24 * 60) / WEATHER_INTERVAL_MINUTES;
   const WEATHER_CACHE_TTL_MS = 1000 * 60 * 60 * 24;
   const ASSET_EDIT_DEBOUNCE_MS = 200;
+  const GENERATION_DERIVED_SCHEMA_VERSION = "gen_month_interval_v2";
   const PERIOD_STORAGE_SUFFIX = "selectedPeriod";
   const PERIOD_OPTIONS = ["day", "week", "month", "year"];
+  const INTERVAL_STORAGE_SUFFIX = "selectedInterval";
+  const INTERVAL_OPTIONS = ["half_hour", "hourly", "daily"];
   const WEATHER_PROVIDERS = {
     nrel: "NREL",
     open_meteo: "Open-Meteo",
@@ -19,23 +22,16 @@
   const windList = document.getElementById("wind-assets");
   const addSolarButton = document.getElementById("add-solar");
   const addWindButton = document.getElementById("add-wind");
-  const solarTemplate = document.getElementById("solar-asset-template");
-  const windTemplate = document.getElementById("wind-asset-template");
   const deleteModal = document.getElementById("delete-asset-modal");
   const confirmDeleteButton = document.getElementById("confirm-delete-asset");
-  const generationChart = document.getElementById("generation-chart");
+  const generationChartRoot = document.getElementById("generation-chart-root");
   const generationAxis = document.getElementById("generation-axis");
   const generationChartFrame = document.getElementById("assets-chart-frame");
   const assetsChartLoading = document.getElementById("assets-chart-loading");
   const generationDonut = document.getElementById("generation-donut");
   const generationTotalEnergy = document.getElementById("generation-total-energy");
-  const periodButtons = Array.from(document.querySelectorAll("[data-assets-period]"));
-  const seriesToggleButtons = Array.from(document.querySelectorAll("[data-assets-series]"));
-  const assetsDatePickerButton = document.getElementById("assets-date-picker-button");
-  const assetsDatePickerInput = document.getElementById("assets-date-picker");
-  const assetsDateRangeReadout = document.getElementById("assets-date-range-readout");
-  const assetsShiftBackButton = document.getElementById("assets-shift-back");
-  const assetsShiftForwardButton = document.getElementById("assets-shift-forward");
+  const generationControlStripRoot = document.getElementById("generation-control-strip-root");
+  const generationChartLegendRoot = document.getElementById("generation-chart-legend-root");
   const generationDebugOutput = document.getElementById("generation-debug-output");
   const headerProjectNameInput = document.getElementById("header-project-name");
   const headerProjectNameDisplay = document.getElementById("header-project-name-display");
@@ -53,7 +49,7 @@
 
   let currentProject = null;
   let selectedDateKey = DEFAULT_DATE_KEY;
-  const viewState = { period: "week" };
+  const viewState = { period: "week", interval: "hourly" };
 
   const solarDefaults = window.EnergyModels?.DEFAULT_SOLAR_ASSET || {};
   const windDefaults = window.EnergyModels?.DEFAULT_WIND_ASSET || {};
@@ -70,6 +66,10 @@
   let pendingDeleteType = null;
   let recomputeRaf = 0;
   let recomputeDebounceTimer = null;
+  let generationControlStripBridge = null;
+  let generationLegendBridge = null;
+  let solarEditorsBridge = null;
+  let windEditorsBridge = null;
 
   const solarAssets = [];
   const windAssets = [];
@@ -87,7 +87,7 @@
     wind: true,
     total: false,
   };
-  let assetsChart = null;
+  let generationChartBridge = null;
 
   const weatherDay = {
     provider: "nrel",
@@ -228,6 +228,44 @@
     localStorage.setItem(key, period);
   };
 
+  const loadPersistedInterval = (projectId, fallback = "hourly") => {
+    const key = getScopedUiKey(projectId, INTERVAL_STORAGE_SUFFIX);
+    if (!key) {
+      return fallback;
+    }
+    const stored = localStorage.getItem(key);
+    return INTERVAL_OPTIONS.includes(stored) ? stored : fallback;
+  };
+
+  const persistInterval = (projectId, interval) => {
+    if (!INTERVAL_OPTIONS.includes(interval)) {
+      return;
+    }
+    const key = getScopedUiKey(projectId, INTERVAL_STORAGE_SUFFIX);
+    if (!key) {
+      return;
+    }
+    localStorage.setItem(key, interval);
+  };
+
+  const getAllowedIntervalsForPeriod = (period) => {
+    if (period === "day") return ["half_hour", "hourly"];
+    if (period === "year") return ["daily"];
+    if (period === "month") return ["hourly", "daily"];
+    return ["half_hour", "hourly", "daily"];
+  };
+
+  const getIntervalButtonsForPeriod = () => getAllowedIntervalsForPeriod(viewState.period);
+
+  const normalizeIntervalForPeriod = ({ persist = false } = {}) => {
+    const allowed = getIntervalButtonsForPeriod();
+    if (allowed.includes(viewState.interval)) return;
+    viewState.interval = allowed.includes("hourly") ? "hourly" : allowed[0];
+    if (persist) {
+      persistInterval(currentProject?.id, viewState.interval);
+    }
+  };
+
   const buildAssetsRevision = () => {
     if (!sharedCache) {
       return "";
@@ -312,6 +350,15 @@
     const cached = sharedCache.getParsedWeather(currentProject.id, { provider });
     if (!cached?.raw15?.solar || !cached?.raw15?.wind) {
       return false;
+    }
+    const fetchMode = cleanText(cached?.metadata?.fetchMode || "");
+    if (provider === "open_meteo") {
+      const solarRows = Array.isArray(cached.raw15.solar) ? cached.raw15.solar.length : 0;
+      const windRows = Array.isArray(cached.raw15.wind) ? cached.raw15.wind.length : 0;
+      const looksWindowOnly = fetchMode === "window_minutely_15" || solarRows < POINTS_PER_DAY * 60 || windRows < POINTS_PER_DAY * 60;
+      if (looksWindowOnly) {
+        return false;
+      }
     }
     applyWeatherRecords({
       provider: cached.provider || provider,
@@ -415,6 +462,81 @@
     },
   };
 
+  const SOLAR_EDITOR_SECTIONS = [
+    {
+      key: "basic",
+      title: "Basic",
+      collapsed: false,
+      fields: [
+        { key: "capacity_ac_kw", label: "Capacity (AC kW)", type: "number", min: 0, step: 1 },
+        { key: "system_losses_frac", label: "System Losses (frac; includes orientation effects)", type: "number", step: 0.01 },
+      ],
+    },
+    {
+      key: "advanced",
+      title: "Advanced",
+      muted: true,
+      collapsed: true,
+      fields: [
+        { key: "dc_ac_ratio", label: "DC/AC Ratio", type: "number", min: 0, step: 0.01, optional: true },
+        { key: "availability_frac", label: "Availability (frac)", type: "number", step: 0.01, optional: true },
+        {
+          key: "clip_at_ac_capacity",
+          label: "Clip at AC Capacity",
+          type: "select",
+          optional: true,
+          options: [
+            { value: "true", label: "True" },
+            { value: "false", label: "False" },
+          ],
+        },
+        { key: "noct_c", label: "NOCT (°C)", type: "number", step: 1, optional: true },
+        { key: "temp_coeff_per_c", label: "Temp Coeff (/°C)", type: "number", step: 0.001, optional: true },
+      ],
+    },
+  ];
+
+  const WIND_EDITOR_SECTIONS = [
+    {
+      key: "basic",
+      title: "Basic",
+      collapsed: false,
+      fields: [
+        { key: "rated_power_kw", label: "Rated Power (kW)", type: "number", min: 0, step: 1 },
+        { key: "num_turbines", label: "# Turbines", type: "number", min: 1, step: 1, optional: true },
+        { key: "hub_height_m", label: "Hub Height (m)", type: "number", step: 1, optional: true },
+        { key: "power_curve_id", label: "Power Curve", type: "text", optional: true },
+      ],
+    },
+    {
+      key: "advanced",
+      title: "Advanced",
+      muted: true,
+      collapsed: true,
+      fields: [
+        { key: "cut_in_mps", label: "Cut-in (m/s)", type: "number", step: 0.1, optional: true },
+        { key: "rated_mps", label: "Rated (m/s)", type: "number", step: 0.1, optional: true },
+        { key: "cut_out_mps", label: "Cut-out (m/s)", type: "number", step: 0.1, optional: true },
+        { key: "availability_frac", label: "Availability (frac)", type: "number", step: 0.01, optional: true },
+        { key: "wake_losses_frac", label: "Wake Losses (frac)", type: "number", step: 0.01, optional: true },
+        { key: "electrical_losses_frac", label: "Electrical Losses (frac)", type: "number", step: 0.01, optional: true },
+        {
+          key: "density_correction_enabled",
+          label: "Density Correction",
+          type: "select",
+          optional: true,
+          options: [
+            { value: "true", label: "True" },
+            { value: "false", label: "False" },
+          ],
+        },
+        { key: "air_density_std", label: "Air Density Std", type: "number", step: 0.001, optional: true },
+        { key: "shear_exponent_alpha", label: "Shear Exponent α", type: "number", step: 0.01, optional: true },
+        { key: "reference_height_m", label: "Reference Height (m)", type: "number", step: 1, optional: true },
+      ],
+    },
+  ];
+
   const buildFormulaVariable = (token, highlightSet, label = token) => {
     const highlighted = highlightSet.has(token) ? " is-highlighted" : "";
     return `<span class="asset-help__var${highlighted}">${label}</span>`;
@@ -451,12 +573,6 @@
       `<span class="asset-field-tooltip__line">${v("V_HUB", "v")}<sub>hub</sub> = ${v("V_REF", "v")}<sub>ref</sub> * (${v("H_HUB", "H")}<sub>hub</sub> / ${v("H_REF", "H")}<sub>ref</sub>)<sup>${v("ALPHA", "&alpha;")}</sup></span>`,
       `<span class="asset-field-tooltip__line">${v("V_EFF", "v")}<sub>eff</sub> = ${v("V_HUB", "v")}<sub>hub</sub> * (${v("RHO", "&rho;")} / ${v("RHO0", "&rho;")}<sub>0</sub>)<sup>1/3</sup>; ${v("F_V", "f")}(${v("V_EFF", "v")}<sub>eff</sub>) = 0 if ${v("V_EFF", "v")}<sub>eff</sub> &lt; ${v("V_IN")} or ${v("V_EFF", "v")}<sub>eff</sub> &ge; ${v("V_OUT")}</span>`,
     ].join("");
-  };
-
-  const getAssetFieldLabelText = (labelElement) => {
-    const clone = labelElement.cloneNode(true);
-    clone.querySelectorAll(".assets-optional").forEach((node) => node.remove());
-    return clone.textContent?.trim() || "Variable";
   };
 
   const positionAssetFieldTooltipAt = (clientX, clientY) => {
@@ -531,42 +647,6 @@
     if (assetFieldTooltip) {
       assetFieldTooltip.hidden = true;
     }
-  };
-
-  const wireFieldHelp = (card, type) => {
-    const sectionBodies = card.querySelectorAll(".assets-fields");
-    sectionBodies.forEach((body) => {
-      body.querySelectorAll(".assets-label").forEach((labelElement) => {
-        const fieldElement = labelElement.nextElementSibling;
-        if (!(fieldElement instanceof HTMLInputElement || fieldElement instanceof HTMLSelectElement)) {
-          return;
-        }
-        const datasetKey = type === "solar" ? "solarField" : "windField";
-        const fieldKey = fieldElement.dataset[datasetKey];
-        if (!fieldKey) {
-          return;
-        }
-        const labelText = getAssetFieldLabelText(labelElement);
-        const openTooltip = (eventTarget, event = null) =>
-          showAssetFieldTooltip(eventTarget, labelText, type, fieldKey, event);
-        const followCursor = (event) => {
-          if (!assetFieldTooltip || assetFieldTooltip.hidden) {
-            return;
-          }
-          positionAssetFieldTooltipAt(event.clientX, event.clientY);
-        };
-        labelElement.addEventListener("mouseenter", (event) => openTooltip(labelElement, event));
-        fieldElement.addEventListener("mouseenter", (event) => openTooltip(fieldElement, event));
-        labelElement.addEventListener("mousemove", followCursor);
-        fieldElement.addEventListener("mousemove", followCursor);
-        labelElement.addEventListener("focusin", () => openTooltip(labelElement));
-        fieldElement.addEventListener("focus", () => openTooltip(fieldElement));
-        labelElement.addEventListener("mouseleave", hideAssetFieldTooltip);
-        fieldElement.addEventListener("mouseleave", hideAssetFieldTooltip);
-        labelElement.addEventListener("focusout", hideAssetFieldTooltip);
-        fieldElement.addEventListener("blur", hideAssetFieldTooltip);
-      });
-    });
   };
 
   const withRetry = async (operation, { retries = 2, delayMs = 400 } = {}) => {
@@ -687,16 +767,160 @@
     return { start, end };
   };
 
-  const updateDateRangeReadout = () => {
-    if (!assetsDateRangeReadout) {
-      return;
-    }
+  const getDateRangeReadout = () => {
     const selectedDate = parseDateKey(selectedDateKey) || new Date();
     const { start, end } = getDateRangeForPeriod(viewState.period, selectedDate);
     const startText = formatShortDate(start);
     const endText = formatShortDate(end);
-    assetsDateRangeReadout.textContent = startText === endText ? startText : `${startText}-${endText}`;
+    return startText === endText ? startText : `${startText}-${endText}`;
   };
+
+  const syncControlStrip = () => {
+    if (!generationControlStripBridge) {
+      return;
+    }
+    generationControlStripBridge.update(buildControlStripProps());
+  };
+
+  const syncLegend = () => {
+    if (!generationLegendBridge) {
+      return;
+    }
+    generationLegendBridge.update(buildLegendProps());
+  };
+
+  const buildControlStripProps = () => ({
+    className: "toggle-group assets-toggle-group",
+    groups: [
+      {
+        key: "period",
+        buttons: [
+          {
+            key: "day",
+            label: "Day",
+            active: viewState.period === "day",
+            onClick: () => {
+              viewState.period = "day";
+              persistPeriod(currentProject?.id, viewState.period);
+              normalizeIntervalForPeriod({ persist: true });
+              syncControlStrip();
+              scheduleRecompute();
+            },
+          },
+          {
+            key: "week",
+            label: "Week",
+            active: viewState.period === "week",
+            onClick: () => {
+              viewState.period = "week";
+              persistPeriod(currentProject?.id, viewState.period);
+              normalizeIntervalForPeriod({ persist: true });
+              syncControlStrip();
+              scheduleRecompute();
+            },
+          },
+          {
+            key: "month",
+            label: "Month",
+            active: viewState.period === "month",
+            onClick: () => {
+              viewState.period = "month";
+              persistPeriod(currentProject?.id, viewState.period);
+              normalizeIntervalForPeriod({ persist: true });
+              syncControlStrip();
+              scheduleRecompute();
+            },
+          },
+          {
+            key: "year",
+            label: "Year",
+            active: viewState.period === "year",
+            onClick: () => {
+              viewState.period = "year";
+              persistPeriod(currentProject?.id, viewState.period);
+              normalizeIntervalForPeriod({ persist: true });
+              syncControlStrip();
+              scheduleRecompute();
+            },
+          },
+        ],
+      },
+      {
+        key: "interval",
+        label: "Interval",
+        labelClassName: "assets-label rates-control-label rates-control-label--inline",
+        buttons: getIntervalButtonsForPeriod().map((intervalKey) => ({
+          key: intervalKey,
+          label: intervalKey === "half_hour" ? "30 Min" : intervalKey === "hourly" ? "Hourly" : "Daily",
+          active: viewState.interval === intervalKey,
+          onClick: () => {
+            viewState.interval = intervalKey;
+            persistInterval(currentProject?.id, viewState.interval);
+            syncControlStrip();
+            scheduleRecompute();
+          },
+        })),
+      },
+    ],
+    rightGroupKeys: ["interval"],
+    selectedDateKey,
+    dateRangeText: getDateRangeReadout(),
+    onDateChange: (value) => {
+      if (!value || !currentProject) {
+        return;
+      }
+      selectedDateKey = value;
+      syncControlStrip();
+      void withRetry(() => supabaseService.updateProject(currentProject.id, { selectedDate: value }))
+        .then((project) => {
+          currentProject = project;
+          setSyncMessage("", false);
+        })
+        .catch(() => setSyncMessage("Could not save selected date.", true));
+      void fetchWeatherForDay();
+    },
+    onShift: (direction) => shiftSelectedDate(Number(direction) >= 0 ? 1 : -1),
+  });
+
+  const buildLegendProps = () => ({
+    className: "chart-panel__legend",
+    tagName: "p",
+    items: [
+      {
+        key: "solar",
+        label: "Solar",
+        className: "legend--solar",
+        active: Boolean(seriesVisibility.solar),
+        onToggle: () => {
+          seriesVisibility.solar = !seriesVisibility.solar;
+          syncLegend();
+          scheduleRecompute();
+        },
+      },
+      {
+        key: "wind",
+        label: "Wind",
+        className: "legend--wind",
+        active: Boolean(seriesVisibility.wind),
+        onToggle: () => {
+          seriesVisibility.wind = !seriesVisibility.wind;
+          syncLegend();
+          scheduleRecompute();
+        },
+      },
+      {
+        key: "total",
+        label: "Total",
+        className: "legend--total",
+        active: Boolean(seriesVisibility.total),
+        onToggle: () => {
+          seriesVisibility.total = !seriesVisibility.total;
+          syncLegend();
+          scheduleRecompute();
+        },
+      },
+    ],
+  });
 
   const buildRecordDateKey = (record) =>
     `${record.year}-${pad2(record.month)}-${pad2(record.day)}`;
@@ -711,6 +935,13 @@
     start.setDate(start.getDate() - diff);
     start.setHours(0, 0, 0, 0);
     return start;
+  };
+
+  const getWeekEnd = (weekStart) => {
+    const end = new Date(weekStart);
+    end.setDate(end.getDate() + 6);
+    end.setHours(23, 59, 59, 999);
+    return end;
   };
 
   const buildGridLines = (maxValue, width, height, tickCount = 4) => {
@@ -1167,13 +1398,29 @@
       supabaseService.getWeatherCache(currentProject.id, provider, "solar", WEATHER_CACHE_DATE_KEY, cacheLookup),
       supabaseService.getWeatherCache(currentProject.id, provider, "wind", WEATHER_CACHE_DATE_KEY, cacheLookup),
     ]);
+    const openMeteoCacheLooksFull =
+      provider !== "open_meteo" ||
+      ((Array.isArray(cachedSolar?.payload) ? cachedSolar.payload.length : 0) >= POINTS_PER_DAY * 60 &&
+        (Array.isArray(cachedWind?.payload) ? cachedWind.payload.length : 0) >= POINTS_PER_DAY * 60);
 
-    if (!forceRefresh && isFreshCache(cachedSolar) && isFreshCache(cachedWind) && cachedSolar?.payload && cachedWind?.payload) {
+    if (
+      !forceRefresh &&
+      isFreshCache(cachedSolar) &&
+      isFreshCache(cachedWind) &&
+      cachedSolar?.payload &&
+      cachedWind?.payload &&
+      openMeteoCacheLooksFull
+    ) {
       return {
         provider,
         rawSolarRecords: cachedSolar.payload,
         rawWindRecords: cachedWind.payload,
         timeZone: cachedSolar.timezone || cachedWind.timezone || (await fetchTimeZone({ lat: currentProject.lat, lng: currentProject.lng })),
+        metadata: {
+          fetchMode: "cache",
+          requestStartDate: null,
+          requestEndDate: null,
+        },
       };
     }
 
@@ -1225,7 +1472,17 @@
       }),
     ]);
 
-    return { provider, rawSolarRecords, rawWindRecords, timeZone };
+    return {
+      provider,
+      rawSolarRecords,
+      rawWindRecords,
+      timeZone,
+      metadata: weatherPayload?.meta || {
+        fetchMode: "load_default",
+        requestStartDate: null,
+        requestEndDate: null,
+      },
+    };
   };
 
   const fetchWeatherForDay = async (options = {}) => {
@@ -1245,7 +1502,7 @@
     scheduleRecompute();
 
     try {
-      const { provider, rawSolarRecords, rawWindRecords, timeZone } = await withRetry(() =>
+      const { provider, rawSolarRecords, rawWindRecords, timeZone, metadata } = await withRetry(() =>
         loadPersistedOrRemoteWeather({ forceRefresh })
       );
 
@@ -1263,6 +1520,7 @@
             timeZone: timeZone || "UTC",
             raw15: { solar: solarRecords, wind: windRecords },
             windMetric: { speed: pickWindSpeedKey(windRecords) },
+            metadata: metadata || {},
           })
         : "";
       if (sharedCache) {
@@ -1360,10 +1618,19 @@
     const solarWeather = [];
     const windWeather = [];
 
-    const start = period === "week" ? getWeekStart(selectedDate) : new Date(selectedDate);
+    const start =
+      period === "week"
+        ? getWeekStart(selectedDate)
+        : period === "month"
+          ? new Date(selectedDate.getFullYear(), selectedDate.getMonth(), 1)
+          : new Date(selectedDate);
     start.setHours(0, 0, 0, 0);
-    const end = new Date(start);
-    end.setDate(end.getDate() + (period === "week" ? 6 : 0));
+    const end =
+      period === "week"
+        ? getWeekEnd(getWeekStart(selectedDate))
+        : period === "month"
+          ? new Date(selectedDate.getFullYear(), selectedDate.getMonth() + 1, 0)
+          : new Date(start);
     end.setHours(23, 60 - WEATHER_INTERVAL_MINUTES, 0, 0);
 
     for (
@@ -1379,6 +1646,8 @@
 
       if (period === "day") {
         labels.push(`${pad2(cursor.getHours())}:${pad2(cursor.getMinutes())}`);
+      } else if (period === "month") {
+        labels.push([`${pad2(cursor.getHours())}:${pad2(cursor.getMinutes())}`, `${cursor.getMonth() + 1}/${cursor.getDate()}`]);
       } else {
         const dayOfWeek = cursor.toLocaleDateString("en-US", { weekday: "short" });
         labels.push([formatIndicatorTime(cursor), `${dayOfWeek} ${formatIndicatorDate(cursor)}`]);
@@ -1400,13 +1669,21 @@
     const intervalHours = WEATHER_INTERVAL_MINUTES / 60;
 
     const start =
-      period === "month"
-        ? new Date(selectedDate.getFullYear(), selectedDate.getMonth(), 1)
-        : new Date(selectedDate.getFullYear(), 0, 1);
+      period === "day"
+        ? new Date(selectedDate.getFullYear(), selectedDate.getMonth(), selectedDate.getDate())
+        : period === "week"
+          ? getWeekStart(selectedDate)
+          : period === "month"
+            ? new Date(selectedDate.getFullYear(), selectedDate.getMonth(), 1)
+            : new Date(selectedDate.getFullYear(), 0, 1);
     const end =
-      period === "month"
-        ? new Date(selectedDate.getFullYear(), selectedDate.getMonth() + 1, 0)
-        : new Date(selectedDate.getFullYear(), 11, 31);
+      period === "day"
+        ? new Date(selectedDate.getFullYear(), selectedDate.getMonth(), selectedDate.getDate())
+        : period === "week"
+          ? getWeekEnd(getWeekStart(selectedDate))
+          : period === "month"
+            ? new Date(selectedDate.getFullYear(), selectedDate.getMonth() + 1, 0)
+            : new Date(selectedDate.getFullYear(), 11, 31);
 
     for (let cursor = new Date(start); cursor <= end; cursor.setDate(cursor.getDate() + 1)) {
       const dateKey = formatDateKey(cursor);
@@ -1445,15 +1722,48 @@
     return { labels, solar: solarDaily, wind: windDaily, total, unit: "kWh", period };
   };
 
+  const buildHourlyAggregatedSeries = (period, selectedDate) => {
+    const intervalSeries = buildIntervalPeriodSeries(period, selectedDate);
+    const labels = [];
+    const solar = [];
+    const wind = [];
+    const total = [];
+
+    for (let index = 0; index < intervalSeries.labels.length; index += 2) {
+      const firstLabel = intervalSeries.labels[index];
+      const solarValue = (intervalSeries.solar[index] || 0) + (intervalSeries.solar[index + 1] || 0);
+      const windValue = (intervalSeries.wind[index] || 0) + (intervalSeries.wind[index + 1] || 0);
+      labels.push(firstLabel);
+      solar.push(solarValue);
+      wind.push(windValue);
+      total.push(solarValue + windValue);
+    }
+
+    return { labels, solar, wind, total, unit: "kWh", period };
+  };
+
   const buildGenerationSeries = () => {
     const selectedDate = parseDateKey(selectedDateKey) || new Date();
     if (viewState.period === "day" || viewState.period === "week") {
-      return buildIntervalPeriodSeries(viewState.period, selectedDate);
+      if (viewState.interval === "daily") {
+        return buildDailyAggregatedSeries(viewState.period, selectedDate);
+      }
+      if (viewState.interval === "half_hour") {
+        return buildIntervalPeriodSeries(viewState.period, selectedDate);
+      }
+      return buildHourlyAggregatedSeries(viewState.period, selectedDate);
+    }
+    if (viewState.period === "month") {
+      if (viewState.interval === "daily") {
+        return buildDailyAggregatedSeries(viewState.period, selectedDate);
+      }
+      return buildHourlyAggregatedSeries(viewState.period, selectedDate);
     }
     return buildDailyAggregatedSeries(viewState.period, selectedDate);
   };
 
-  const getSeriesUnitLabel = (period) => (period === "month" || period === "year" ? "kWh/day" : "kWh");
+  const getSeriesUnitLabel = (period, interval) =>
+    period === "year" || interval === "daily" ? "kWh/day" : "kWh";
 
   const renderAxis = (labels) => {
     if (!generationAxis) {
@@ -1538,14 +1848,89 @@
     generationDebugOutput.textContent = JSON.stringify(payload, null, 2);
   };
 
-  const renderChart = () => {
-    if (!generationChart) {
+  const ensureGenerationChartBridge = () => {
+    if (generationChartBridge || !generationChartRoot || !window.EnergyTimeSeriesChart?.createBridge) {
       return;
     }
-    if (!assetsChart && window.EnergyCharts) {
-      assetsChart = window.EnergyCharts.createAssetsChart(generationChart);
-    }
-    if (!assetsChart) {
+    generationChartBridge = window.EnergyTimeSeriesChart.createBridge();
+    generationChartBridge.mount(generationChartRoot, {
+      type: "line",
+      className: "generation-chart",
+      ariaLabel: "Typical generation chart",
+      labels: [],
+      datasets: [],
+      yTitle: "Generation (kWh)",
+      minY: 0,
+    });
+  };
+
+  const buildGenerationChartProps = ({ labels = [], solar = [], wind = [], total = [], yTitle = "Generation (kWh)" } = {}) => ({
+    type: "line",
+    className: "generation-chart",
+    ariaLabel: "Typical generation chart",
+    labels,
+    scales: {
+      x: {
+        grid: { color: "rgba(120,120,120,0.15)" },
+        ticks: {
+          color: "#353535",
+          autoSkip: false,
+          maxRotation: 0,
+          callback(value, index) {
+            const nextLabels = this?.chart?.data?.labels || [];
+            const shouldShow =
+              window.EnergyCharts?.shouldShowAxisTick?.(nextLabels, index) ??
+              (index % Math.max(1, Math.ceil((nextLabels?.length || 0) / 12)) === 0);
+            if (!shouldShow) return "";
+            return typeof this?.getLabelForValue === "function" ? this.getLabelForValue(value) : nextLabels[index] || "";
+          },
+        },
+      },
+      y: {
+        type: "linear",
+        stacked: true,
+        min: 0,
+        title: { display: true, text: yTitle, color: "#2d2d2d", font: { weight: "700" } },
+        ticks: { color: "#2d2d2d" },
+        grid: { color: "rgba(120,120,120,0.2)" },
+      },
+    },
+    datasets: [
+      {
+        label: "Wind",
+        data: wind,
+        yAxisID: "y",
+        borderColor: "rgba(31, 119, 180, 0.8)",
+        backgroundColor: "rgba(31, 119, 180, 0.35)",
+        fill: "origin",
+        hidden: !seriesVisibility.wind,
+      },
+      {
+        label: "Solar",
+        data: solar,
+        yAxisID: "y",
+        borderColor: "rgba(249, 168, 37, 0.85)",
+        backgroundColor: "rgba(249, 168, 37, 0.5)",
+        fill: "-1",
+        hidden: !seriesVisibility.solar,
+      },
+      {
+        label: "Total",
+        data: total,
+        yAxisID: "y",
+        borderColor: "#000000",
+        backgroundColor: "transparent",
+        fill: false,
+        hidden: !seriesVisibility.total,
+      },
+    ],
+    yTitle,
+    minY: 0,
+  });
+
+  const renderChart = () => {
+    ensureGenerationChartBridge();
+    if (!generationChartBridge) {
       return;
     }
 
@@ -1554,7 +1939,7 @@
     }
 
     if (weatherDay.loading) {
-      assetsChart.update({ labels: [], solar: [], wind: [], total: [], period: viewState.period });
+      generationChartBridge.update(buildGenerationChartProps({ labels: [], solar: [], wind: [], total: [] }));
       renderDonut(0, 0);
       return;
     }
@@ -1563,7 +1948,7 @@
       if (generationAxis) {
         generationAxis.innerHTML = "";
       }
-      assetsChart.update({ labels: [], solar: [], wind: [], total: [], period: viewState.period });
+      generationChartBridge.update(buildGenerationChartProps({ labels: [], solar: [], wind: [], total: [] }));
       renderDonut(0, 0);
       renderDebugData({});
       return;
@@ -1587,7 +1972,9 @@
       currentProject?.id && sharedCache
         ? sharedCache.buildDerivedKey({
             kind: "generation",
+            schemaVersion: GENERATION_DERIVED_SCHEMA_VERSION,
             period: viewState.period,
+            interval: viewState.interval,
             selectedDateKey,
             weatherRevision,
             assetsRevision,
@@ -1604,18 +1991,18 @@
     const solarValues = series.solar;
     const windValues = series.wind;
     const totalValues = series.total;
-    const yAxisLabel = `Generation (${getSeriesUnitLabel(series.period)})`;
+    const yAxisLabel = `Generation (${getSeriesUnitLabel(series.period, viewState.interval)})`;
     const displayLabels = buildDisplayLabels(series.labels || [], series.period, selectedDateKey);
 
-    assetsChart.update({
-      labels: displayLabels,
-      solar: solarValues,
-      wind: windValues,
-      total: totalValues,
-      yTitle: yAxisLabel,
-      visible: seriesVisibility,
-      period: series.period,
-    });
+    generationChartBridge.update(
+      buildGenerationChartProps({
+        labels: displayLabels,
+        solar: solarValues,
+        wind: windValues,
+        total: totalValues,
+        yTitle: yAxisLabel,
+      })
+    );
 
     chartState.labels = displayLabels;
     chartState.solar = solarValues;
@@ -1653,23 +2040,23 @@
     }, ASSET_EDIT_DEBOUNCE_MS);
   };
 
-  const updateModelFromField = (model, field, prefix) => {
-    const key = field.dataset[`${prefix}Field`];
+  const updateModelFromEditorValue = (model, key, value, inputType) => {
     if (!key) {
       return;
     }
-
-    if (field.type === "number") {
-      model[key] = toNumber(field.value, model[key]);
-    } else if (field.tagName === "SELECT") {
-      if (field.value === "true" || field.value === "false") {
-        model[key] = field.value === "true";
-      } else {
-        model[key] = field.value;
-      }
-    } else {
-      model[key] = field.value;
+    if (inputType === "number") {
+      model[key] = toNumber(value, model[key]);
+      return;
     }
+    if (inputType === "select") {
+      if (value === "true" || value === "false") {
+        model[key] = value === "true";
+      } else {
+        model[key] = value;
+      }
+      return;
+    }
+    model[key] = value;
   };
 
   const persistAsset = async (entry, type) => {
@@ -1684,6 +2071,7 @@
       entry.id = saved.id;
       entry.model = { ...entry.model, ...saved.model };
       entry.syncing = false;
+      syncAssetEditors();
       setSyncMessage("", false);
     } catch (error) {
       entry.syncing = false;
@@ -1691,59 +2079,93 @@
     }
   };
 
-  const wireFieldChanges = (card, entry, prefix, type) => {
-    card.querySelectorAll("input, select").forEach((field) => {
-      const handler = () => {
-        updateModelFromField(entry.model, field, prefix);
-        scheduleRecomputeDebounced();
-        void persistAsset(entry, type);
-      };
-      field.addEventListener("input", handler);
-      field.addEventListener("change", handler);
-    });
-  };
-
-  const populateFields = (container, defaults, prefix) => {
-    const fields = container.querySelectorAll(`[data-${prefix}-field]`);
-    fields.forEach((field) => {
-      const key = field.dataset[`${prefix}Field`];
-      const value = defaults[key];
-      if (value == null) {
-        return;
-      }
-      if (field.tagName === "SELECT") {
-        field.value = String(value);
-      } else {
-        field.value = value;
-      }
-    });
-  };
-
-  const wireSectionToggles = (card) => {
-    card.querySelectorAll(".asset-section").forEach((section) => {
-      const toggle = section.querySelector(".asset-section-toggle");
-      if (!toggle) {
-        return;
-      }
-      toggle.addEventListener("click", () => {
-        const collapsed = section.classList.toggle("is-collapsed");
-        toggle.setAttribute("aria-expanded", String(!collapsed));
-        toggle.textContent = collapsed ? "▸" : "▾";
-        scheduleRecompute();
-      });
-    });
-  };
-
-  const wireDelete = (card, type, id) => {
-    const deleteButton = card.querySelector(".asset-delete");
-    if (!deleteButton || !deleteModal || !confirmDeleteButton) {
+  const handleAssetFieldChange = (type, payload = {}) => {
+    const list = type === "solar" ? solarAssets : windAssets;
+    const entry = list.find((candidate) => candidate.id === payload.assetId);
+    if (!entry || !payload.fieldKey) {
       return;
     }
-    deleteButton.addEventListener("click", () => {
-      pendingDeleteId = id;
-      pendingDeleteType = type;
-      deleteModal.showModal();
-    });
+    updateModelFromEditorValue(entry.model, payload.fieldKey, payload.value, payload.inputType);
+    syncAssetEditors();
+    scheduleRecomputeDebounced();
+    void persistAsset(entry, type);
+  };
+
+  const showEditorFieldHelp = (type, payload = {}) => {
+    if (!payload.fieldKey || !payload.anchor) {
+      return;
+    }
+    const syntheticMouseEvent =
+      Number.isFinite(payload.clientX) && Number.isFinite(payload.clientY)
+        ? { clientX: payload.clientX, clientY: payload.clientY }
+        : null;
+    showAssetFieldTooltip(payload.anchor, payload.labelText || "Variable", type, payload.fieldKey, syntheticMouseEvent);
+  };
+
+  const moveEditorFieldHelp = (payload = {}) => {
+    if (!assetFieldTooltip || assetFieldTooltip.hidden) {
+      return;
+    }
+    if (Number.isFinite(payload.clientX) && Number.isFinite(payload.clientY)) {
+      positionAssetFieldTooltipAt(payload.clientX, payload.clientY);
+    }
+  };
+
+  const syncAssetEditors = () => {
+    if (solarEditorsBridge) {
+      solarEditorsBridge.update({
+        entries: solarAssets.map((entry) => ({ id: entry.id, model: entry.model })),
+      });
+    }
+    if (windEditorsBridge) {
+      windEditorsBridge.update({
+        entries: windAssets.map((entry) => ({ id: entry.id, model: entry.model })),
+      });
+    }
+  };
+
+  const bindAssetEditors = () => {
+    if (solarList && !solarEditorsBridge && window.EnergyChartUI?.createAssetEditorsBridge) {
+      solarEditorsBridge = window.EnergyChartUI.createAssetEditorsBridge();
+      solarEditorsBridge.mount(solarList, {
+        assetType: "solar",
+        dataPrefix: "solar",
+        nameAriaLabel: "Solar asset name",
+        deleteLabel: "Delete asset",
+        sections: SOLAR_EDITOR_SECTIONS,
+        entries: [],
+        onDelete: (assetId) => {
+          pendingDeleteId = assetId;
+          pendingDeleteType = "solar";
+          deleteModal?.showModal();
+        },
+        onFieldChange: (payload) => handleAssetFieldChange("solar", payload),
+        onFieldHelpShow: (payload) => showEditorFieldHelp("solar", payload),
+        onFieldHelpHide: hideAssetFieldTooltip,
+        onFieldHelpMove: moveEditorFieldHelp,
+      });
+    }
+    if (windList && !windEditorsBridge && window.EnergyChartUI?.createAssetEditorsBridge) {
+      windEditorsBridge = window.EnergyChartUI.createAssetEditorsBridge();
+      windEditorsBridge.mount(windList, {
+        assetType: "wind",
+        dataPrefix: "wind",
+        nameAriaLabel: "Wind asset name",
+        deleteLabel: "Delete asset",
+        sections: WIND_EDITOR_SECTIONS,
+        entries: [],
+        onDelete: (assetId) => {
+          pendingDeleteId = assetId;
+          pendingDeleteType = "wind";
+          deleteModal?.showModal();
+        },
+        onFieldChange: (payload) => handleAssetFieldChange("wind", payload),
+        onFieldHelpShow: (payload) => showEditorFieldHelp("wind", payload),
+        onFieldHelpHide: hideAssetFieldTooltip,
+        onFieldHelpMove: moveEditorFieldHelp,
+      });
+    }
+    syncAssetEditors();
   };
 
   const removeAsset = async (type, id) => {
@@ -1753,19 +2175,37 @@
       return;
     }
     const [entry] = list.splice(index, 1);
-    entry.card.remove();
+    syncAssetEditors();
     scheduleRecompute();
     try {
       await withRetry(() => supabaseService.deleteAsset(id));
       setSyncMessage("", false);
     } catch (error) {
       list.splice(index, 0, entry);
-      const listEl = type === "solar" ? solarList : windList;
-      if (listEl) {
-        listEl.insertBefore(entry.card, listEl.children[index] || null);
-      }
+      syncAssetEditors();
       setSyncMessage("Delete failed. Please retry.", true);
       scheduleRecompute();
+    }
+  };
+
+  const addAsset = (type, restoredModel = null, restoredId = null, options = {}) => {
+    const isSolar = type === "solar";
+    const nextIndex = isSolar ? ++solarCount : ++windCount;
+    const assetId = restoredId || `${type}-${nextIndex}-${Date.now()}`;
+    const defaultModel = isSolar
+      ? createSolarAsset(restoredModel || { name: `Solar ${nextIndex}` })
+      : createWindAsset(restoredModel || { name: `Wind ${nextIndex}` });
+
+    const entry = {
+      id: assetId,
+      model: defaultModel,
+      series: new Float64Array(POINTS_PER_DAY),
+    };
+    (isSolar ? solarAssets : windAssets).push(entry);
+    syncAssetEditors();
+    scheduleRecompute();
+    if (currentProject && options.persist !== false) {
+      void persistAsset(entry, type);
     }
   };
 
@@ -1786,54 +2226,6 @@
     });
   }
 
-  const addAsset = (type, restoredModel = null, restoredId = null, options = {}) => {
-    const isSolar = type === "solar";
-    const template = isSolar ? solarTemplate : windTemplate;
-    const listEl = isSolar ? solarList : windList;
-    if (!template || !listEl) {
-      return;
-    }
-
-    const nextIndex = isSolar ? ++solarCount : ++windCount;
-    const assetId = restoredId || `${type}-${nextIndex}-${Date.now()}`;
-    const defaultModel = isSolar
-      ? createSolarAsset(restoredModel || { name: `Solar ${nextIndex}` })
-      : createWindAsset(restoredModel || { name: `Wind ${nextIndex}` });
-
-    const fragment = template.content.cloneNode(true);
-    const card = fragment.querySelector(".asset-card");
-    if (!card) {
-      return;
-    }
-
-    card.dataset.assetId = assetId;
-    populateFields(card, defaultModel, isSolar ? "solar" : "wind");
-    wireFieldHelp(card, isSolar ? "solar" : "wind");
-    const nameInput = card.querySelector(".asset-title-input");
-    if (nameInput) {
-      nameInput.value = defaultModel.name;
-    }
-
-    wireSectionToggles(card);
-    wireDelete(card, type, assetId);
-
-    listEl.appendChild(card);
-
-    const entry = {
-      id: assetId,
-      model: defaultModel,
-      card,
-      series: new Float64Array(POINTS_PER_DAY),
-    };
-    (isSolar ? solarAssets : windAssets).push(entry);
-    wireFieldChanges(card, entry, isSolar ? "solar" : "wind", type);
-
-    scheduleRecompute();
-    if (currentProject && options.persist !== false) {
-      void persistAsset(entry, type);
-    }
-  };
-
   if (addSolarButton) {
     addSolarButton.addEventListener("click", () => addAsset("solar"));
   }
@@ -1844,69 +2236,17 @@
   window.addEventListener("scroll", hideAssetFieldTooltip, true);
   window.addEventListener("resize", hideAssetFieldTooltip);
 
-  if (assetsDatePickerInput) {
-    assetsDatePickerInput.value = selectedDateKey;
-  }
-
-  const applyPeriodToggleState = () => {
-    periodButtons.forEach((button) => {
-      button.classList.toggle("is-active", button.dataset.assetsPeriod === viewState.period);
-    });
+  const bindChartUi = () => {
+    bindAssetEditors();
+    if (generationControlStripRoot && window.EnergyChartUI?.createTimeWindowControlsBridge) {
+      generationControlStripBridge = window.EnergyChartUI.createTimeWindowControlsBridge();
+      generationControlStripBridge.mount(generationControlStripRoot, buildControlStripProps());
+    }
+    if (generationChartLegendRoot && window.EnergyChartUI?.createLegendTogglesBridge) {
+      generationLegendBridge = window.EnergyChartUI.createLegendTogglesBridge();
+      generationLegendBridge.mount(generationChartLegendRoot, buildLegendProps());
+    }
   };
-
-  periodButtons.forEach((button) => {
-    button.addEventListener("click", () => {
-      const period = button.dataset.assetsPeriod;
-      if (!period) {
-        return;
-      }
-      viewState.period = period;
-      persistPeriod(currentProject?.id, viewState.period);
-      applyPeriodToggleState();
-      updateDateRangeReadout();
-      scheduleRecompute();
-    });
-  });
-
-  seriesToggleButtons.forEach((button) => {
-    button.addEventListener("click", () => {
-      const series = button.dataset.assetsSeries;
-      if (!series || !Object.prototype.hasOwnProperty.call(seriesVisibility, series)) {
-        return;
-      }
-      seriesVisibility[series] = !seriesVisibility[series];
-      button.classList.toggle("is-active", seriesVisibility[series]);
-      scheduleRecompute();
-    });
-  });
-
-  if (assetsDatePickerButton && assetsDatePickerInput) {
-    assetsDatePickerButton.addEventListener("click", () => {
-      if (typeof assetsDatePickerInput.showPicker === "function") {
-        assetsDatePickerInput.showPicker();
-      } else {
-        assetsDatePickerInput.click();
-      }
-    });
-  }
-
-  if (assetsDatePickerInput) {
-    assetsDatePickerInput.addEventListener("change", (event) => {
-      const value = event.target.value;
-      if (!value || !currentProject) {
-        return;
-      }
-      selectedDateKey = value;
-      updateDateRangeReadout();
-      void withRetry(() => supabaseService.updateProject(currentProject.id, { selectedDate: value }))
-        .then((project) => {
-          currentProject = project;
-          setSyncMessage("", false);
-        })
-        .catch(() => setSyncMessage("Could not save selected date.", true));
-      void fetchWeatherForDay();
-    });
-  }
 
   const shiftSelectedDate = (direction) => {
     const baseDate = parseDateKey(selectedDateKey) || new Date();
@@ -1921,10 +2261,7 @@
       shifted.setFullYear(shifted.getFullYear() + direction);
     }
     selectedDateKey = formatDateKey(shifted);
-    if (assetsDatePickerInput) {
-      assetsDatePickerInput.value = selectedDateKey;
-    }
-    updateDateRangeReadout();
+    syncControlStrip();
     if (currentProject) {
       void withRetry(() => supabaseService.updateProject(currentProject.id, { selectedDate: selectedDateKey }))
         .then((project) => {
@@ -1935,18 +2272,6 @@
     }
     void fetchWeatherForDay();
   };
-
-  if (assetsShiftBackButton) {
-    assetsShiftBackButton.addEventListener("click", () => {
-      shiftSelectedDate(-1);
-    });
-  }
-
-  if (assetsShiftForwardButton) {
-    assetsShiftForwardButton.addEventListener("click", () => {
-      shiftSelectedDate(1);
-    });
-  }
 
   if (headerProjectNameEditButton && headerProjectNameInput) {
     headerProjectNameEditButton.addEventListener("click", () => {
@@ -2022,15 +2347,15 @@
 
     selectedDateKey = currentProject.selectedDate || DEFAULT_DATE_KEY;
     viewState.period = loadPersistedPeriod(currentProject.id, viewState.period);
-    applyPeriodToggleState();
-    updateDateRangeReadout();
-
-    if (assetsDatePickerInput) {
-      assetsDatePickerInput.value = selectedDateKey;
-    }
+    viewState.interval = loadPersistedInterval(currentProject.id, viewState.interval);
+    normalizeIntervalForPeriod({ persist: true });
 
     setProjectNameDisplay(currentProject.name);
     setProjectNameEditorMode(false);
+
+    bindChartUi();
+    syncControlStrip();
+    syncLegend();
 
     await restoreProjectAssets();
     scheduleRecompute();

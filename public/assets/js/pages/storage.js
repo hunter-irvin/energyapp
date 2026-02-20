@@ -11,6 +11,8 @@
   const STORAGE_DRAFT_SUFFIX = "storageAssetsDraft";
   const PERIOD_STORAGE_SUFFIX = "selectedPeriod";
   const PERIOD_OPTIONS = ["day", "week", "month", "year"];
+  const INTERVAL_STORAGE_SUFFIX = "selectedInterval";
+  const INTERVAL_OPTIONS = ["half_hour", "hourly", "daily"];
   const WEATHER_PROVIDERS = {
     nrel: "NREL",
     open_meteo: "Open-Meteo",
@@ -36,23 +38,17 @@
 
   const addStorageButton = document.getElementById("add-storage");
   const storageAssetsList = document.getElementById("storage-assets");
-  const storageAssetTemplate = document.getElementById("storage-asset-template");
   const deleteStorageModal = document.getElementById("delete-storage-modal");
   const confirmDeleteStorage = document.getElementById("confirm-delete-storage");
 
   const chartFrame = document.getElementById("storage-chart-frame");
-  const chartSvg = document.getElementById("storage-chart");
+  const storageChartRoot = document.getElementById("storage-chart-root");
   const storageChartLoading = document.getElementById("storage-chart-loading");
   const chartAxis = document.getElementById("storage-axis");
   const debugOutput = document.getElementById("storage-debug-output");
 
-  const periodButtons = Array.from(document.querySelectorAll("[data-storage-period]"));
-  const seriesToggleButtons = Array.from(document.querySelectorAll("[data-storage-series]"));
-  const datePickerButton = document.getElementById("storage-date-picker-button");
-  const datePickerInput = document.getElementById("storage-date-picker");
-  const storageDateRangeReadout = document.getElementById("storage-date-range-readout");
-  const storageShiftBackButton = document.getElementById("storage-shift-back");
-  const storageShiftForwardButton = document.getElementById("storage-shift-forward");
+  const storageControlStripRoot = document.getElementById("storage-control-strip-root");
+  const storageChartLegendRoot = document.getElementById("storage-chart-legend-root");
   const fieldTooltip = document.getElementById("storage-field-tooltip");
 
   const queryParams = new URLSearchParams(window.location.search);
@@ -72,9 +68,12 @@
   let recomputeRaf = 0;
   let recomputeDebounceTimer = null;
   let currentSeries = null;
-  let storageChart = null;
+  let storageChartBridge = null;
+  let storageControlStripBridge = null;
+  let storageLegendBridge = null;
+  let storageEditorsBridge = null;
 
-  const viewState = { period: "day" };
+  const viewState = { period: "day", interval: "hourly" };
   const seriesVisibility = {
     solar: true,
     wind: true,
@@ -184,6 +183,49 @@
   const clamp = (value, min, max) => Math.min(max, Math.max(min, value));
   const clamp01 = (value) => clamp(value, 0, 1);
   const SOC_PERCENT_FIELDS = new Set(["soc_init"]);
+  const STORAGE_EDITOR_SECTIONS = [
+    {
+      key: "basic",
+      title: "Basic",
+      collapsed: false,
+      fields: [
+        { key: "capacity_kwh", label: "Capacity (kWh)", type: "number", min: 0, step: 1 },
+        {
+          key: "battery_type",
+          label: "Battery Type",
+          type: "select",
+          options: [
+            { value: "lfp", label: "LFP" },
+            { value: "nmc", label: "NMC" },
+          ],
+        },
+        {
+          key: "soc_init",
+          label: "State of Charge Initial (%)",
+          type: "number",
+          min: 0,
+          max: 100,
+          step: 1,
+          formatValue: (rawValue) => {
+            const pct = clamp(toNumber(rawValue, 0) * 100, 0, 100);
+            return String(Math.round(pct * 100) / 100);
+          },
+        },
+      ],
+    },
+    {
+      key: "advanced",
+      title: "Advanced",
+      muted: true,
+      collapsed: true,
+      fields: [
+        { key: "charge_rate_c", label: "Charge Rate C", type: "number", min: 0, step: 0.01 },
+        { key: "round_trip_efficiency", label: "Round Trip Eff (0-1)", type: "number", min: 0, max: 1, step: 0.01 },
+        { key: "temp_ref_c", label: "Temp Ref (°C)", type: "number", step: 1 },
+        { key: "temp_charge_derate_per_c", label: "Temp Derate (/°C)", type: "number", min: 0, step: 0.001 },
+      ],
+    },
+  ];
   const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
   const isQuotaExceededError = (error) =>
     error && (error.name === "QuotaExceededError" || error.name === "NS_ERROR_DOM_QUOTA_REACHED");
@@ -246,6 +288,38 @@
     localStorage.setItem(key, period);
   };
 
+  const loadPersistedInterval = (fallback = "hourly") => {
+    const key = getScopedStorageKey(INTERVAL_STORAGE_SUFFIX);
+    if (!key) return fallback;
+    const stored = localStorage.getItem(key);
+    return INTERVAL_OPTIONS.includes(stored) ? stored : fallback;
+  };
+
+  const persistInterval = (interval) => {
+    if (!INTERVAL_OPTIONS.includes(interval)) return;
+    const key = getScopedStorageKey(INTERVAL_STORAGE_SUFFIX);
+    if (!key) return;
+    localStorage.setItem(key, interval);
+  };
+
+  const getAllowedIntervalsForPeriod = (period) => {
+    if (period === "day") return ["half_hour", "hourly"];
+    if (period === "year") return ["daily"];
+    if (period === "month") return ["hourly", "daily"];
+    return ["half_hour", "hourly", "daily"];
+  };
+
+  const getIntervalButtonsForPeriod = () => getAllowedIntervalsForPeriod(viewState.period);
+
+  const normalizeIntervalForPeriod = ({ persist = false } = {}) => {
+    const allowed = getIntervalButtonsForPeriod();
+    if (allowed.includes(viewState.interval)) return;
+    viewState.interval = allowed.includes("hourly") ? "hourly" : allowed[0];
+    if (persist) {
+      persistInterval(viewState.interval);
+    }
+  };
+
   const buildAssetsRevision = () => {
     if (!sharedCache) return "";
     return sharedCache.buildAssetsRevision({
@@ -266,6 +340,13 @@
     const provider = currentProject.weatherProvider || "nrel";
     const cached = sharedCache.getParsedWeather(currentProject.id, { provider });
     if (!cached?.raw15?.solar || !cached?.raw15?.wind) return false;
+    const fetchMode = cleanText(cached?.metadata?.fetchMode || "");
+    if (provider === "open_meteo") {
+      const solarRows = Array.isArray(cached.raw15.solar) ? cached.raw15.solar.length : 0;
+      const windRows = Array.isArray(cached.raw15.wind) ? cached.raw15.wind.length : 0;
+      const looksWindowOnly = fetchMode === "window_minutely_15" || solarRows < POINTS_PER_DAY * 60 || windRows < POINTS_PER_DAY * 60;
+      if (looksWindowOnly) return false;
+    }
     weatherState.source.solar = cached.raw15.solar || [];
     weatherState.source.wind = cached.raw15.wind || [];
     weatherState.weatherRevision = cached.weatherRevision || "";
@@ -389,14 +470,165 @@
     return { start, end };
   };
 
-  const updateDateRangeReadout = () => {
-    if (!storageDateRangeReadout) return;
+  const getDateRangeReadout = () => {
     const selectedDate = parseDateKey(selectedDateKey) || new Date();
     const { start, end } = getDateRangeForPeriod(viewState.period, selectedDate);
     const startText = formatShortDate(start);
     const endText = formatShortDate(end);
-    storageDateRangeReadout.textContent = startText === endText ? startText : `${startText}-${endText}`;
+    return startText === endText ? startText : `${startText}-${endText}`;
   };
+
+  const syncControlStrip = () => {
+    if (!storageControlStripBridge) return;
+    storageControlStripBridge.update(buildControlStripProps());
+  };
+
+  const syncLegend = () => {
+    if (!storageLegendBridge) return;
+    storageLegendBridge.update(buildLegendProps());
+  };
+
+  const buildControlStripProps = () => ({
+    className: "toggle-group assets-toggle-group",
+    groups: [
+      {
+        key: "period",
+        buttons: [
+          {
+            key: "day",
+            label: "Day",
+            active: viewState.period === "day",
+            onClick: () => {
+              viewState.period = "day";
+              persistPeriod(viewState.period);
+              normalizeIntervalForPeriod({ persist: true });
+              syncControlStrip();
+              scheduleRecompute();
+            },
+          },
+          {
+            key: "week",
+            label: "Week",
+            active: viewState.period === "week",
+            onClick: () => {
+              viewState.period = "week";
+              persistPeriod(viewState.period);
+              normalizeIntervalForPeriod({ persist: true });
+              syncControlStrip();
+              scheduleRecompute();
+            },
+          },
+          {
+            key: "month",
+            label: "Month",
+            active: viewState.period === "month",
+            onClick: () => {
+              viewState.period = "month";
+              persistPeriod(viewState.period);
+              normalizeIntervalForPeriod({ persist: true });
+              syncControlStrip();
+              scheduleRecompute();
+            },
+          },
+          {
+            key: "year",
+            label: "Year",
+            active: viewState.period === "year",
+            onClick: () => {
+              viewState.period = "year";
+              persistPeriod(viewState.period);
+              normalizeIntervalForPeriod({ persist: true });
+              syncControlStrip();
+              scheduleRecompute();
+            },
+          },
+        ],
+      },
+      {
+        key: "interval",
+        label: "Interval",
+        labelClassName: "assets-label rates-control-label rates-control-label--inline",
+        buttons: getIntervalButtonsForPeriod().map((intervalKey) => ({
+          key: intervalKey,
+          label: intervalKey === "half_hour" ? "30 Min" : intervalKey === "hourly" ? "Hourly" : "Daily",
+          active: viewState.interval === intervalKey,
+          onClick: () => {
+            viewState.interval = intervalKey;
+            persistInterval(viewState.interval);
+            syncControlStrip();
+            scheduleRecompute();
+          },
+        })),
+      },
+    ],
+    rightGroupKeys: ["interval"],
+    selectedDateKey,
+    dateRangeText: getDateRangeReadout(),
+    onDateChange: async (nextDateKey) => {
+      if (!nextDateKey || !currentProject) return;
+      selectedDateKey = nextDateKey;
+      syncControlStrip();
+      try {
+        currentProject = await withRetry(() => supabaseService.updateProject(currentProject.id, { selectedDate: selectedDateKey }));
+      } catch (error) {}
+      if (weatherState.loaded) {
+        hydrateWeatherStore(weatherState.source.solar, weatherState.source.wind, weatherState.timeZone);
+      }
+      scheduleRecompute();
+    },
+    onShift: (direction) => shiftSelectedDate(Number(direction) >= 0 ? 1 : -1),
+  });
+
+  const buildLegendProps = () => ({
+    className: "chart-panel__legend",
+    tagName: "p",
+    items: [
+      {
+        key: "solar",
+        label: "Solar",
+        className: "legend--solar",
+        active: Boolean(seriesVisibility.solar),
+        onToggle: () => {
+          seriesVisibility.solar = !seriesVisibility.solar;
+          syncLegend();
+          scheduleRecompute();
+        },
+      },
+      {
+        key: "wind",
+        label: "Wind",
+        className: "legend--wind",
+        active: Boolean(seriesVisibility.wind),
+        onToggle: () => {
+          seriesVisibility.wind = !seriesVisibility.wind;
+          syncLegend();
+          scheduleRecompute();
+        },
+      },
+      {
+        key: "total",
+        label: "Total",
+        className: "legend--total",
+        active: Boolean(seriesVisibility.total),
+        onToggle: () => {
+          seriesVisibility.total = !seriesVisibility.total;
+          syncLegend();
+          scheduleRecompute();
+        },
+      },
+      {
+        key: "soc",
+        label: "SOC",
+        className: "legend--soc",
+        active: Boolean(seriesVisibility.soc),
+        onToggle: () => {
+          seriesVisibility.soc = !seriesVisibility.soc;
+          syncLegend();
+          scheduleRecompute();
+        },
+      },
+    ],
+  });
 
   const normalizeHeader = (header) => {
     const cleaned = cleanText(header)
@@ -610,8 +842,19 @@
       supabaseService.getWeatherCache(currentProject.id, provider, "solar", NREL_CACHE_DATE_KEY, cacheLookup),
       supabaseService.getWeatherCache(currentProject.id, provider, "wind", NREL_CACHE_DATE_KEY, cacheLookup),
     ]);
+    const openMeteoCacheLooksFull =
+      provider !== "open_meteo" ||
+      ((Array.isArray(cachedSolar?.payload) ? cachedSolar.payload.length : 0) >= POINTS_PER_DAY * 60 &&
+        (Array.isArray(cachedWind?.payload) ? cachedWind.payload.length : 0) >= POINTS_PER_DAY * 60);
 
-    if (!forceRefresh && isFreshCache(cachedSolar) && isFreshCache(cachedWind) && cachedSolar?.payload && cachedWind?.payload) {
+    if (
+      !forceRefresh &&
+      isFreshCache(cachedSolar) &&
+      isFreshCache(cachedWind) &&
+      cachedSolar?.payload &&
+      cachedWind?.payload &&
+      openMeteoCacheLooksFull
+    ) {
       return {
         provider,
         rawSolarRecords: cachedSolar.payload,
@@ -620,6 +863,11 @@
           cachedSolar.timezone ||
           cachedWind.timezone ||
           (await fetchTimeZone({ lat: currentProject.lat, lng: currentProject.lng })),
+        metadata: {
+          fetchMode: "cache",
+          requestStartDate: null,
+          requestEndDate: null,
+        },
       };
     }
 
@@ -671,7 +919,17 @@
       }),
     ]);
 
-    return { provider, rawSolarRecords, rawWindRecords, timeZone };
+    return {
+      provider,
+      rawSolarRecords,
+      rawWindRecords,
+      timeZone,
+      metadata: weatherPayload?.meta || {
+        fetchMode: "load_default",
+        requestStartDate: null,
+        requestEndDate: null,
+      },
+    };
   };
 
   const fetchWeather = async ({ forceRefresh = false } = {}) => {
@@ -686,7 +944,7 @@
     scheduleRecompute();
 
     try {
-      const { provider, rawSolarRecords, rawWindRecords, timeZone } = await withRetry(() =>
+      const { provider, rawSolarRecords, rawWindRecords, timeZone, metadata } = await withRetry(() =>
         loadPersistedOrRemoteWeather({ forceRefresh })
       );
       const [targetYear] = selectedDateKey.split("-");
@@ -703,6 +961,7 @@
           timeZone: timeZone || "UTC",
           raw15: weatherState.raw15,
           windMetric: weatherState.windMetric,
+          metadata: metadata || {},
         });
         weatherState.weatherRevision = weatherRevision;
         sharedCache.setRevision(currentProject.id, "weather", weatherRevision);
@@ -722,6 +981,7 @@
   const buildGenerationForPeriod = () => {
     const selectedDate = parseDateKey(selectedDateKey) || new Date();
     const period = viewState.period;
+    const useDailyAggregation = viewState.interval === "daily" || period === "year";
     const windSpeedMetric = weatherState.windMetric.speed;
     const emptySolar = { ghi: 0, dni: 0, dhi: 0, air_temperature: 25 };
     const emptyWind = { [windSpeedMetric]: 0 };
@@ -776,7 +1036,7 @@
     let dtHours = NREL_INTERVAL_MINUTES / 60;
     const { solarMap, windMap } = buildWeatherMaps();
 
-    if (period === "day") {
+    if (!useDailyAggregation && period === "day") {
       for (let i = 0; i < POINTS_PER_DAY; i += 1) {
         const hour = Math.floor((i * NREL_INTERVAL_MINUTES) / 60);
         const minute = (i * NREL_INTERVAL_MINUTES) % 60;
@@ -790,7 +1050,7 @@
         windSeries.push(windPoint);
         temps.push(pickTemp(solarPoint, windPoint));
       }
-    } else if (period === "week") {
+    } else if (!useDailyAggregation && period === "week") {
       const start = getWeekStart(selectedDate);
       const end = getWeekEnd(start);
       end.setHours(23, 60 - NREL_INTERVAL_MINUTES, 0, 0);
@@ -804,9 +1064,36 @@
         windSeries.push(windPoint);
         temps.push(pickTemp(solarPoint, windPoint));
       }
+    } else if (!useDailyAggregation && period === "month") {
+      const start = new Date(selectedDate.getFullYear(), selectedDate.getMonth(), 1);
+      const end = new Date(selectedDate.getFullYear(), selectedDate.getMonth() + 1, 0);
+      end.setHours(23, 60 - NREL_INTERVAL_MINUTES, 0, 0);
+      for (let cursor = new Date(start); cursor <= end; cursor.setMinutes(cursor.getMinutes() + NREL_INTERVAL_MINUTES)) {
+        const key = `${formatDateKey(cursor)}T${pad2(cursor.getHours())}:${pad2(cursor.getMinutes())}`;
+        const solarPoint = solarMap.get(key) || emptySolar;
+        const windPoint = windMap.get(key) || emptyWind;
+        labels.push([formatIndicatorTime(cursor), `${cursor.getMonth() + 1}/${cursor.getDate()}`]);
+        solarSeries.push(solarPoint);
+        windSeries.push(windPoint);
+        temps.push(pickTemp(solarPoint, windPoint));
+      }
     } else {
-      const start = period === "month" ? new Date(selectedDate.getFullYear(), selectedDate.getMonth(), 1) : new Date(selectedDate.getFullYear(), 0, 1);
-      const end = period === "month" ? new Date(selectedDate.getFullYear(), selectedDate.getMonth() + 1, 0) : new Date(selectedDate.getFullYear(), 11, 31);
+      const start =
+        period === "day"
+          ? new Date(selectedDate.getFullYear(), selectedDate.getMonth(), selectedDate.getDate())
+          : period === "week"
+            ? getWeekStart(selectedDate)
+            : period === "month"
+              ? new Date(selectedDate.getFullYear(), selectedDate.getMonth(), 1)
+              : new Date(selectedDate.getFullYear(), 0, 1);
+      const end =
+        period === "day"
+          ? new Date(selectedDate.getFullYear(), selectedDate.getMonth(), selectedDate.getDate())
+          : period === "week"
+            ? getWeekEnd(getWeekStart(selectedDate))
+            : period === "month"
+              ? new Date(selectedDate.getFullYear(), selectedDate.getMonth() + 1, 0)
+              : new Date(selectedDate.getFullYear(), 11, 31);
       const daySolarKwh = [];
       const dayWindKwh = [];
       const dayTemps = [];
@@ -872,7 +1159,46 @@
       windKwh[i] = Math.max(0, (windKw[i] || 0) * dtHours);
       generationKwh[i] = solarKwh[i] + windKwh[i];
     }
-    return { labels, solarKwh, windKwh, generationKwh, generationKw, temps, dtHours };
+    const intervalSeries = { labels, solarKwh, windKwh, generationKwh, generationKw, temps, dtHours };
+    return viewState.interval === "hourly"
+      ? aggregateGenerationToHourly(intervalSeries)
+      : intervalSeries;
+  };
+
+  const aggregateGenerationToHourly = (series) => {
+    const labels = [];
+    const solarKwh = [];
+    const windKwh = [];
+    const generationKwh = [];
+    const generationKw = [];
+    const temps = [];
+
+    for (let index = 0; index < series.labels.length; index += 2) {
+      const label = series.labels[index];
+      const solarValue = (series.solarKwh[index] || 0) + (series.solarKwh[index + 1] || 0);
+      const windValue = (series.windKwh[index] || 0) + (series.windKwh[index + 1] || 0);
+      const totalValue = solarValue + windValue;
+      const tempA = Number(series.temps[index]);
+      const tempB = Number(series.temps[index + 1]);
+      const tempCount = Number.isFinite(tempA) && Number.isFinite(tempB) ? 2 : Number.isFinite(tempA) || Number.isFinite(tempB) ? 1 : 0;
+      const tempValue = tempCount === 2 ? (tempA + tempB) / 2 : Number.isFinite(tempA) ? tempA : Number.isFinite(tempB) ? tempB : 25;
+      labels.push(label);
+      solarKwh.push(solarValue);
+      windKwh.push(windValue);
+      generationKwh.push(totalValue);
+      generationKw.push(totalValue);
+      temps.push(tempValue);
+    }
+
+    return {
+      labels,
+      solarKwh: Float64Array.from(solarKwh),
+      windKwh: Float64Array.from(windKwh),
+      generationKwh: Float64Array.from(generationKwh),
+      generationKw: Float64Array.from(generationKw),
+      temps: Float64Array.from(temps),
+      dtHours: 1,
+    };
   };
 
   const simulateAggregateSoc = (generationKw, temperatures, dtHours) => {
@@ -1024,26 +1350,121 @@
     debugOutput.textContent = JSON.stringify(payload, null, 2);
   };
 
-  const getSeriesUnitLabel = (period) => (period === "month" || period === "year" ? "kWh/day" : "kWh");
+  const getSeriesUnitLabel = (period, interval) =>
+    period === "year" || interval === "daily" ? "kWh/day" : "kWh";
+
+  const ensureStorageChartBridge = () => {
+    if (storageChartBridge || !storageChartRoot || !window.EnergyTimeSeriesChart?.createBridge) return;
+    storageChartBridge = window.EnergyTimeSeriesChart.createBridge();
+    storageChartBridge.mount(storageChartRoot, {
+      type: "line",
+      className: "generation-chart",
+      ariaLabel: "State of charge chart",
+      labels: [],
+      datasets: [],
+      minY: 0,
+    });
+  };
+
+  const buildStorageChartProps = ({ labels = [], solar = [], wind = [], total = [], soc = [] } = {}) => ({
+    type: "line",
+    className: "generation-chart",
+    ariaLabel: "State of charge chart",
+    labels,
+    scales: {
+      x: {
+        grid: { color: "rgba(120,120,120,0.15)" },
+        ticks: {
+          color: "#353535",
+          autoSkip: false,
+          maxRotation: 0,
+          callback(value, index) {
+            const nextLabels = this?.chart?.data?.labels || [];
+            const shouldShow =
+              window.EnergyCharts?.shouldShowAxisTick?.(nextLabels, index) ??
+              (index % Math.max(1, Math.ceil((nextLabels?.length || 0) / 12)) === 0);
+            if (!shouldShow) return "";
+            return typeof this?.getLabelForValue === "function" ? this.getLabelForValue(value) : nextLabels[index] || "";
+          },
+        },
+      },
+      ySoc: {
+        type: "linear",
+        position: "left",
+        min: 0,
+        max: 110,
+        title: { display: true, text: "State of Charge (%)", color: "#2d2d2d", font: { weight: "700" } },
+        ticks: { color: "#2d2d2d" },
+        grid: { drawOnChartArea: false },
+      },
+      yGen: {
+        type: "linear",
+        position: "right",
+        stacked: true,
+        min: 0,
+        title: { display: true, text: "Generation (kWh)", color: "#2d2d2d", font: { weight: "700" } },
+        ticks: { color: "#2d2d2d" },
+        grid: { color: "rgba(120,120,120,0.35)" },
+      },
+    },
+    datasets: [
+      {
+        label: "Wind",
+        data: wind,
+        yAxisID: "yGen",
+        borderColor: "rgba(31, 119, 180, 0.8)",
+        backgroundColor: "rgba(31, 119, 180, 0.35)",
+        fill: "origin",
+        hidden: !seriesVisibility.wind,
+      },
+      {
+        label: "Solar",
+        data: solar,
+        yAxisID: "yGen",
+        borderColor: "rgba(249, 168, 37, 0.85)",
+        backgroundColor: "rgba(249, 168, 37, 0.5)",
+        fill: "-1",
+        hidden: !seriesVisibility.solar,
+      },
+      {
+        label: "Total",
+        data: total,
+        yAxisID: "yGen",
+        borderColor: "#000000",
+        backgroundColor: "transparent",
+        fill: false,
+        hidden: !seriesVisibility.total,
+      },
+      {
+        label: "SOC",
+        data: soc,
+        yAxisID: "ySoc",
+        borderColor: "#000000",
+        backgroundColor: "transparent",
+        borderDash: [6, 4],
+        fill: false,
+        order: 99,
+        hidden: !seriesVisibility.soc,
+      },
+    ],
+    minY: 0,
+  });
 
   const renderChart = () => {
-    if (!chartSvg) return;
-    if (!storageChart && window.EnergyCharts) {
-      storageChart = window.EnergyCharts.createStorageChart(chartSvg);
-    }
-    if (!storageChart) return;
+    ensureStorageChartBridge();
+    if (!storageChartBridge) return;
     if (storageChartLoading) {
       storageChartLoading.hidden = !weatherState.loading;
     }
 
     if (weatherState.loading) {
-      storageChart.update({ labels: [], solar: [], wind: [], total: [], soc: [], period: viewState.period });
+      storageChartBridge.update(buildStorageChartProps({ labels: [], solar: [], wind: [], total: [], soc: [] }));
       renderAxis([]);
       renderDebug();
       return;
     }
     if (!weatherState.loaded) {
-      storageChart.update({ labels: [], solar: [], wind: [], total: [], soc: [], period: viewState.period });
+      storageChartBridge.update(buildStorageChartProps({ labels: [], solar: [], wind: [], total: [], soc: [] }));
       renderAxis([]);
       renderDebug();
       return;
@@ -1074,6 +1495,7 @@
         ? sharedCache.buildDerivedKey({
             kind: "storage",
             period: viewState.period,
+            interval: viewState.interval,
             selectedDateKey,
             weatherRevision,
             assetsRevision,
@@ -1122,6 +1544,7 @@
       const generationCacheKey = sharedCache.buildDerivedKey({
         kind: "generation",
         period: viewState.period,
+        interval: viewState.interval,
         selectedDateKey,
         weatherRevision,
         assetsRevision,
@@ -1131,7 +1554,7 @@
         solar: Array.from(currentSeries.solarKwh),
         wind: Array.from(currentSeries.windKwh),
         total: Array.from(currentSeries.generationKwh),
-        unit: getSeriesUnitLabel(viewState.period),
+        unit: getSeriesUnitLabel(viewState.period, viewState.interval),
         period: viewState.period,
       });
     }
@@ -1139,15 +1562,15 @@
     const displayLabels = buildDisplayLabels(currentSeries.labels || [], viewState.period, selectedDateKey);
     currentSeries.labels = displayLabels;
 
-    storageChart.update({
-      labels: displayLabels,
-      solar: Array.from(currentSeries.solarKwh),
-      wind: Array.from(currentSeries.windKwh),
-      total: Array.from(currentSeries.generationKwh),
-      soc: Array.from(currentSeries.socPct),
-      visible: seriesVisibility,
-      period: viewState.period,
-    });
+    storageChartBridge.update(
+      buildStorageChartProps({
+        labels: displayLabels,
+        solar: Array.from(currentSeries.solarKwh),
+        wind: Array.from(currentSeries.windKwh),
+        total: Array.from(currentSeries.generationKwh),
+        soc: Array.from(currentSeries.socPct),
+      })
+    );
 
     renderAxis([]);
     renderDebug();
@@ -1192,13 +1615,6 @@
       `<span class="asset-field-tooltip__line">${v("ETA", "&eta;")} = sqrt(${v("RTE")}); ${v("DELTA_E", "&Delta;E")} = ${v("P_CHARGE", "P")}<sub>charge</sub> * ${v("ETA", "&eta;")} * ${v("DELTA_T", "&Delta;t")}</span>`,
       `<span class="asset-field-tooltip__line">${v("SOC_NEXT", "SOC")}<sub>next</sub> = clamp(${v("SOC")} + ${v("DELTA_E", "&Delta;E")} / ${v("E_CAP", "E")}<sub>cap</sub>, 0, 1)</span>`,
     ].join("");
-  };
-
-  const getStorageFieldLabelText = (labelElement) => {
-    if (!labelElement) return "Variable";
-    const clone = labelElement.cloneNode(true);
-    clone.querySelectorAll(".field-help").forEach((node) => node.remove());
-    return clone.textContent?.trim() || "Variable";
   };
 
   const positionFieldTooltipAt = (clientX, clientY) => {
@@ -1265,68 +1681,6 @@
     }
   };
 
-  const wireFieldHelp = (card) => {
-    card.querySelectorAll("[data-storage-field]").forEach((fieldElement) => {
-      const fieldKey = fieldElement.dataset.storageField;
-      if (!fieldKey || !STORAGE_FIELD_HELP[fieldKey]) {
-        return;
-      }
-      const labelElement = fieldElement.previousElementSibling?.classList?.contains("assets-label")
-        ? fieldElement.previousElementSibling
-        : null;
-      const labelText = getStorageFieldLabelText(labelElement);
-      const openTooltip = (target, event = null) => showFieldTooltip(target, labelText, fieldKey, event);
-      const moveTooltip = (event) => {
-        if (!fieldTooltip || fieldTooltip.hidden) return;
-        positionFieldTooltipAt(event.clientX, event.clientY);
-      };
-
-      if (labelElement) {
-        labelElement.addEventListener("mouseenter", (event) => openTooltip(labelElement, event));
-        labelElement.addEventListener("mouseleave", hideFieldTooltip);
-        labelElement.addEventListener("mousemove", moveTooltip);
-        labelElement.addEventListener("focusin", () => openTooltip(labelElement));
-        labelElement.addEventListener("focusout", hideFieldTooltip);
-      }
-
-      fieldElement.addEventListener("mouseenter", (event) => openTooltip(fieldElement, event));
-      fieldElement.addEventListener("mouseleave", hideFieldTooltip);
-      fieldElement.addEventListener("mousemove", moveTooltip);
-      fieldElement.addEventListener("focus", () => openTooltip(fieldElement));
-      fieldElement.addEventListener("blur", hideFieldTooltip);
-    });
-
-    card.querySelectorAll(".field-help").forEach((button) => {
-      const labelElement = button.closest(".assets-label");
-      const input = labelElement?.nextElementSibling;
-      const fieldKey = input?.dataset?.storageField;
-      if (!fieldKey || !STORAGE_FIELD_HELP[fieldKey]) return;
-      const labelText = getStorageFieldLabelText(labelElement);
-      button.addEventListener("mouseenter", (event) => showFieldTooltip(button, labelText, fieldKey, event));
-      button.addEventListener("mouseleave", hideFieldTooltip);
-      button.addEventListener("focus", () => showFieldTooltip(button, labelText, fieldKey));
-      button.addEventListener("blur", hideFieldTooltip);
-      button.addEventListener("click", (event) => {
-        event.preventDefault();
-        if (fieldTooltip?.hidden) showFieldTooltip(button, labelText, fieldKey);
-        else hideFieldTooltip();
-      });
-    });
-  };
-
-  const populateStorageFields = (card, model) => {
-    card.querySelectorAll("[data-storage-field]").forEach((field) => {
-      const key = field.dataset.storageField;
-      if (!key || model[key] == null) return;
-      if (SOC_PERCENT_FIELDS.has(key)) {
-        const pct = clamp(toNumber(model[key], 0) * 100, 0, 100);
-        field.value = String(Math.round(pct * 100) / 100);
-      } else {
-        field.value = String(model[key]);
-      }
-    });
-  };
-
   const persistStorageAsset = async (entry) => {
     if (!currentProject) return;
     try {
@@ -1335,85 +1689,98 @@
       );
       entry.id = saved.id;
       entry.model = saved.model;
+      syncStorageAssetEditors();
       persistStorageDraft();
     } catch (error) {
       persistStorageDraft();
     }
   };
 
-  const applyStorageTypeDefaults = (entry, card) => {
+  const applyStorageTypeDefaults = (entry) => {
     const type = entry.model.battery_type === "nmc" ? "nmc" : "lfp";
     const defaults = storageTypeDefaults[type] || {};
     ["charge_rate_c", "round_trip_efficiency", "temp_ref_c", "temp_charge_derate_per_c"].forEach((fieldName) => {
       if (defaults[fieldName] == null) return;
       entry.model[fieldName] = defaults[fieldName];
-      const input = card.querySelector(`[data-storage-field="${fieldName}"]`);
-      if (input) input.value = String(defaults[fieldName]);
     });
   };
 
+  const syncStorageAssetEditors = () => {
+    if (!storageEditorsBridge) return;
+    storageEditorsBridge.update({
+      entries: storageAssets.map((entry) => ({ id: entry.id, model: entry.model })),
+    });
+  };
+
+  const showStorageEditorFieldHelp = (payload = {}) => {
+    if (!payload.fieldKey || !payload.anchor) return;
+    const syntheticMouseEvent =
+      Number.isFinite(payload.clientX) && Number.isFinite(payload.clientY)
+        ? { clientX: payload.clientX, clientY: payload.clientY }
+        : null;
+    showFieldTooltip(payload.anchor, payload.labelText || "Variable", payload.fieldKey, syntheticMouseEvent);
+  };
+
+  const moveStorageEditorFieldHelp = (payload = {}) => {
+    if (!fieldTooltip || fieldTooltip.hidden) return;
+    if (Number.isFinite(payload.clientX) && Number.isFinite(payload.clientY)) {
+      positionFieldTooltipAt(payload.clientX, payload.clientY);
+    }
+  };
+
+  const handleStorageFieldChange = (payload = {}) => {
+    const entry = storageAssets.find((candidate) => candidate.id === payload.assetId);
+    if (!entry || !payload.fieldKey) return;
+    const key = payload.fieldKey;
+    if (payload.inputType === "number") {
+      if (SOC_PERCENT_FIELDS.has(key)) {
+        const pct = clamp(toNumber(payload.value, toNumber(entry.model[key], 0) * 100), 0, 100);
+        entry.model[key] = pct / 100;
+      } else {
+        entry.model[key] = toNumber(payload.value, entry.model[key]);
+      }
+    } else {
+      entry.model[key] = payload.value;
+    }
+    if (key === "battery_type") applyStorageTypeDefaults(entry);
+    entry.model = createStorageAsset(entry.model);
+    syncStorageAssetEditors();
+    persistStorageDraft();
+    scheduleRecomputeDebounced();
+    void persistStorageAsset(entry);
+  };
+
+  const bindStorageAssetEditors = () => {
+    if (!storageAssetsList || storageEditorsBridge || !window.EnergyChartUI?.createAssetEditorsBridge) return;
+    storageEditorsBridge = window.EnergyChartUI.createAssetEditorsBridge();
+    storageEditorsBridge.mount(storageAssetsList, {
+      assetType: "storage",
+      dataPrefix: "storage",
+      nameAriaLabel: "Storage asset name",
+      deleteLabel: "Delete storage asset",
+      sections: STORAGE_EDITOR_SECTIONS,
+      entries: [],
+      onDelete: (assetId) => {
+        pendingDeleteId = assetId;
+        deleteStorageModal?.showModal();
+      },
+      onFieldChange: handleStorageFieldChange,
+      onFieldHelpShow: showStorageEditorFieldHelp,
+      onFieldHelpHide: hideFieldTooltip,
+      onFieldHelpMove: moveStorageEditorFieldHelp,
+    });
+    syncStorageAssetEditors();
+  };
+
   const addStorageCard = (restoredModel = null, restoredId = null, options = {}) => {
-    if (!storageAssetTemplate || !storageAssetsList) return;
     const index = storageAssets.length + 1;
     const assetId = restoredId || `storage-${index}-${Date.now()}`;
     const model = createStorageAsset(restoredModel || { name: `Storage ${index}` });
 
-    const fragment = storageAssetTemplate.content.cloneNode(true);
-    const card = fragment.querySelector(".asset-card");
-    if (!card) return;
-    card.dataset.assetId = assetId;
-    populateStorageFields(card, model);
-    const nameInput = card.querySelector(".asset-title-input");
-    if (nameInput) nameInput.value = model.name;
-
-    storageAssetsList.appendChild(card);
-    const entry = { id: assetId, model, card };
+    const entry = { id: assetId, model };
     storageAssets.push(entry);
+    syncStorageAssetEditors();
     persistStorageDraft();
-
-    wireFieldHelp(card);
-    card.querySelectorAll(".asset-section").forEach((section) => {
-      const toggle = section.querySelector(".asset-section-toggle");
-      if (!toggle) return;
-      toggle.addEventListener("click", () => {
-        const collapsed = section.classList.toggle("is-collapsed");
-        toggle.setAttribute("aria-expanded", String(!collapsed));
-        toggle.textContent = collapsed ? "▸" : "▾";
-      });
-    });
-
-    const deleteButton = card.querySelector(".asset-delete");
-    if (deleteButton) {
-      deleteButton.addEventListener("click", () => {
-        pendingDeleteId = assetId;
-        deleteStorageModal?.showModal();
-      });
-    }
-
-    card.querySelectorAll("input, select").forEach((field) => {
-      const handler = () => {
-        const key = field.dataset.storageField;
-        if (!key) return;
-        if (field.type === "number") {
-          if (SOC_PERCENT_FIELDS.has(key)) {
-            const pct = clamp(toNumber(field.value, toNumber(entry.model[key], 0) * 100), 0, 100);
-            entry.model[key] = pct / 100;
-          } else {
-            entry.model[key] = toNumber(field.value, entry.model[key]);
-          }
-        } else {
-          entry.model[key] = field.value;
-        }
-        if (key === "battery_type") applyStorageTypeDefaults(entry, card);
-        entry.model = createStorageAsset(entry.model);
-        if (nameInput) nameInput.value = entry.model.name;
-        persistStorageDraft();
-        scheduleRecomputeDebounced();
-        void persistStorageAsset(entry);
-      };
-      field.addEventListener("input", handler);
-      field.addEventListener("change", handler);
-    });
 
     scheduleRecompute();
     if (currentProject && options.persist !== false) void persistStorageAsset(entry);
@@ -1483,12 +1850,12 @@
       const index = storageAssets.findIndex((entry) => entry.id === pendingDeleteId);
       if (index >= 0) {
         const [entry] = storageAssets.splice(index, 1);
-        entry.card.remove();
+        syncStorageAssetEditors();
         persistStorageDraft();
         scheduleRecompute();
         void withRetry(() => supabaseService.deleteAsset(pendingDeleteId)).catch(() => {
           storageAssets.splice(index, 0, entry);
-          storageAssetsList?.insertBefore(entry.card, storageAssetsList.children[index] || null);
+          syncStorageAssetEditors();
           persistStorageDraft();
           scheduleRecompute();
         });
@@ -1497,48 +1864,17 @@
     });
   }
 
-  periodButtons.forEach((button) => {
-    button.addEventListener("click", () => {
-      viewState.period = button.dataset.storagePeriod || "day";
-      persistPeriod(viewState.period);
-      periodButtons.forEach((node) => node.classList.toggle("is-active", node.dataset.storagePeriod === viewState.period));
-      updateDateRangeReadout();
-      scheduleRecompute();
-    });
-  });
-
-  seriesToggleButtons.forEach((button) => {
-    button.addEventListener("click", () => {
-      const series = button.dataset.storageSeries;
-      if (!series || !Object.prototype.hasOwnProperty.call(seriesVisibility, series)) return;
-      seriesVisibility[series] = !seriesVisibility[series];
-      button.classList.toggle("is-active", seriesVisibility[series]);
-      scheduleRecompute();
-    });
-  });
-
-  if (datePickerButton && datePickerInput) {
-    datePickerButton.addEventListener("click", () => {
-      if (typeof datePickerInput.showPicker === "function") datePickerInput.showPicker();
-      else datePickerInput.click();
-    });
-  }
-
-  if (datePickerInput) {
-    datePickerInput.addEventListener("change", async (event) => {
-      const nextDateKey = event.target.value;
-      if (!nextDateKey || !currentProject) return;
-      selectedDateKey = nextDateKey;
-      updateDateRangeReadout();
-      try {
-        currentProject = await withRetry(() => supabaseService.updateProject(currentProject.id, { selectedDate: selectedDateKey }));
-      } catch (error) {}
-      if (weatherState.loaded) {
-        hydrateWeatherStore(weatherState.source.solar, weatherState.source.wind, weatherState.timeZone);
-      }
-      scheduleRecompute();
-    });
-  }
+  const bindChartUi = () => {
+    bindStorageAssetEditors();
+    if (storageControlStripRoot && window.EnergyChartUI?.createTimeWindowControlsBridge) {
+      storageControlStripBridge = window.EnergyChartUI.createTimeWindowControlsBridge();
+      storageControlStripBridge.mount(storageControlStripRoot, buildControlStripProps());
+    }
+    if (storageChartLegendRoot && window.EnergyChartUI?.createLegendTogglesBridge) {
+      storageLegendBridge = window.EnergyChartUI.createLegendTogglesBridge();
+      storageLegendBridge.mount(storageChartLegendRoot, buildLegendProps());
+    }
+  };
 
   const shiftSelectedDate = (direction) => {
     const baseDate = parseDateKey(selectedDateKey) || new Date();
@@ -1549,8 +1885,7 @@
     else shifted.setFullYear(shifted.getFullYear() + direction);
 
     selectedDateKey = formatDateKey(shifted);
-    if (datePickerInput) datePickerInput.value = selectedDateKey;
-    updateDateRangeReadout();
+    syncControlStrip();
 
     if (currentProject) {
       void withRetry(() => supabaseService.updateProject(currentProject.id, { selectedDate: selectedDateKey }))
@@ -1565,14 +1900,6 @@
     }
     scheduleRecompute();
   };
-
-  if (storageShiftBackButton) {
-    storageShiftBackButton.addEventListener("click", () => shiftSelectedDate(-1));
-  }
-
-  if (storageShiftForwardButton) {
-    storageShiftForwardButton.addEventListener("click", () => shiftSelectedDate(1));
-  }
 
   const initProject = async () => {
     await supabaseService.migrateLegacyLocalData();
@@ -1589,9 +1916,8 @@
 
     selectedDateKey = currentProject.selectedDate || DEFAULT_DATE_KEY;
     viewState.period = loadPersistedPeriod(viewState.period);
-    if (datePickerInput) datePickerInput.value = selectedDateKey;
-    periodButtons.forEach((node) => node.classList.toggle("is-active", node.dataset.storagePeriod === viewState.period));
-    updateDateRangeReadout();
+    viewState.interval = loadPersistedInterval(viewState.interval);
+    normalizeIntervalForPeriod({ persist: true });
 
     if (storageSettingsLink) storageSettingsLink.href = `/projects/location.html?projectId=${encodeURIComponent(currentProject.id)}`;
     if (storageAssetsLink) storageAssetsLink.href = `/projects/generation.html?projectId=${encodeURIComponent(currentProject.id)}`;
@@ -1607,6 +1933,10 @@
     if (storageFacilityLocation && currentProject.lat != null && currentProject.lng != null) {
       storageFacilityLocation.textContent = `${currentProject.lat.toFixed(4)}, ${currentProject.lng.toFixed(4)}`;
     }
+
+    bindChartUi();
+    syncControlStrip();
+    syncLegend();
 
     initMiniMap();
     await loadAssetsForProject();

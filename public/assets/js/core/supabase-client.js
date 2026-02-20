@@ -494,6 +494,21 @@
       saveArray(DB_STORAGE_KEYS.rateSeriesCache, rows);
       return rows.find(keyMatch) || row;
     },
+    async clearRateSeriesCache(projectId, { regionId, serviceType, marketMode, windowStart, windowEnd } = {}) {
+      const nextRows = getLocalRateSeriesRows().filter(
+        (entry) =>
+          !(
+            entry.project_id === projectId &&
+            (!regionId || entry.region_id === regionId) &&
+            (!serviceType || entry.service_type === serviceType) &&
+            (!marketMode || entry.market_mode === marketMode) &&
+            (!windowStart || entry.window_start === windowStart) &&
+            (!windowEnd || entry.window_end === windowEnd)
+          )
+      );
+      saveArray(DB_STORAGE_KEYS.rateSeriesCache, nextRows);
+      return true;
+    },
     async listRateRegionHealth(projectId, { windowStart, windowEnd } = {}) {
       return getLocalRateHealthRows()
         .filter(
@@ -800,6 +815,28 @@
       }
       return data;
     },
+    async clearRateSeriesCache(projectId, { regionId, serviceType, marketMode, windowStart, windowEnd } = {}) {
+      let query = client.from("rate_series_cache").delete().eq("project_id", projectId);
+      if (regionId) query = query.eq("region_id", regionId);
+      if (serviceType) query = query.eq("service_type", serviceType);
+      if (marketMode) query = query.eq("market_mode", marketMode);
+      if (windowStart) query = query.eq("window_start", windowStart);
+      if (windowEnd) query = query.eq("window_end", windowEnd);
+      const { error } = await query;
+      if (error) {
+        if (this._isMissingTableError(error)) {
+          return localDb.clearRateSeriesCache(projectId, {
+            regionId,
+            serviceType,
+            marketMode,
+            windowStart,
+            windowEnd,
+          });
+        }
+        throw error;
+      }
+      return true;
+    },
     async listRateRegionHealth(projectId, { windowStart, windowEnd } = {}) {
       let query = client
         .from("rate_region_health")
@@ -915,6 +952,8 @@
   const upsertNrelCache = async (payload) => (await dataService()).upsertNrelCache(payload);
   const getRateSeriesCache = async (projectId, options) => (await dataService()).getRateSeriesCache(projectId, options);
   const upsertRateSeriesCache = async (payload) => (await dataService()).upsertRateSeriesCache(payload);
+  const clearRateSeriesCache = async (projectId, options) =>
+    (await dataService()).clearRateSeriesCache(projectId, options);
   const listRateRegionHealth = async (projectId, options) => (await dataService()).listRateRegionHealth(projectId, options);
   const upsertRateRegionHealth = async (payload) => (await dataService()).upsertRateRegionHealth(payload);
   const insertRateIngestRun = async (payload) => (await dataService()).insertRateIngestRun(payload);
@@ -998,6 +1037,7 @@
     upsertNrelCache,
     getRateSeriesCache,
     upsertRateSeriesCache,
+    clearRateSeriesCache,
     listRateRegionHealth,
     upsertRateRegionHealth,
     insertRateIngestRun,

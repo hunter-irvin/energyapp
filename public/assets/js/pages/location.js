@@ -6,7 +6,7 @@ const loadingText = document.getElementById("loading-text");
 const successStatus = document.getElementById("success-status");
 const errorStatus = document.getElementById("error-status");
 const chartDate = document.getElementById("chart-date");
-const chartSvg = document.getElementById("chart-svg");
+const weatherChartRoot = document.getElementById("weather-chart-root");
 const chartAxis = document.getElementById("chart-axis");
 const chartDisplay = document.getElementById("chart-display");
 const chartTooltip = document.getElementById("chart-tooltip");
@@ -14,16 +14,10 @@ const chartHoverLine = document.getElementById("chart-hover-line");
 const settingsChartLoading = document.getElementById("settings-chart-loading");
 const loadingStepBar = document.getElementById("loading-step-bar");
 const loadingOverallBar = document.getElementById("loading-overall-bar");
-const tablePanel = document.getElementById("table-panel");
-const tableBody = document.getElementById("table-body");
-const tableLoadMore = document.getElementById("table-load-more");
 const debugPanel = document.getElementById("debug-panel");
 const debugOutput = document.getElementById("debug-output");
-const datePickerButton = document.getElementById("date-picker-button");
-const datePickerInput = document.getElementById("date-picker");
-const weatherDateRangeReadout = document.getElementById("weather-date-range-readout");
-const weatherShiftBackButton = document.getElementById("weather-shift-back");
-const weatherShiftForwardButton = document.getElementById("weather-shift-forward");
+const locationControlStripRoot = document.getElementById("location-control-strip-root");
+const locationChartLegendRoot = document.getElementById("location-chart-legend-root");
 const nrelProviderButton = document.getElementById("provider-nrel");
 const openMeteoProviderButton = document.getElementById("provider-open-meteo");
 
@@ -54,6 +48,8 @@ const WEATHER_CACHE_DATE_KEY = "all";
 const WEATHER_INTERVAL_MINUTES = 30;
 const PERIOD_STORAGE_SUFFIX = "selectedPeriod";
 const PERIOD_OPTIONS = ["day", "week", "month", "year"];
+const INTERVAL_STORAGE_SUFFIX = "selectedInterval";
+const INTERVAL_OPTIONS = ["half_hour", "hourly", "daily"];
 const WEATHER_PROVIDERS = {
   nrel: "NREL",
   open_meteo: "Open-Meteo",
@@ -73,19 +69,17 @@ let locationTimeZone = "UTC";
 let activeProvider = "nrel";
 const viewState = {
   period: "week",
-  view: "chart",
+  interval: "hourly",
 };
 const seriesVisibility = {
   solar: true,
   wind: true,
 };
-const tableState = {
-  pageSize: 100,
-  page: 1,
-};
 let currentSeries = null;
-let weatherChart = null;
+let weatherChartBridge = null;
 let isProjectNameEditing = false;
+let locationControlStripBridge = null;
+let locationLegendBridge = null;
 
 let selectionMode = false;
 let marker = null;
@@ -169,9 +163,7 @@ const persistMapState = async () => {
 const setProjectDate = (project) => {
   const parsedStoredDate = project?.selectedDate ? new Date(`${project.selectedDate}T00:00:00`) : null;
   selectedDate = parsedStoredDate && !Number.isNaN(parsedStoredDate.getTime()) ? parsedStoredDate : new Date(DEFAULT_DATE);
-  if (datePickerInput) {
-    datePickerInput.value = formatDateKey(selectedDate);
-  }
+  syncControlStrip();
 };
 
 const setProjectNameDisplay = (name) => {
@@ -549,7 +541,6 @@ const clearLoadedWeatherData = () => {
   dataStore.daily.solar = [];
   dataStore.daily.wind = [];
   currentSeries = null;
-  tableState.page = 1;
   if (currentProject?.id && sharedCache) {
     sharedCache.clearWeather(currentProject.id);
   }
@@ -619,6 +610,44 @@ const persistPeriod = (projectId, period) => {
   localStorage.setItem(key, period);
 };
 
+const loadPersistedInterval = (projectId, fallback = "hourly") => {
+  const key = getScopedUiKey(projectId, INTERVAL_STORAGE_SUFFIX);
+  if (!key) {
+    return fallback;
+  }
+  const stored = localStorage.getItem(key);
+  return INTERVAL_OPTIONS.includes(stored) ? stored : fallback;
+};
+
+const persistInterval = (projectId, interval) => {
+  if (!INTERVAL_OPTIONS.includes(interval)) {
+    return;
+  }
+  const key = getScopedUiKey(projectId, INTERVAL_STORAGE_SUFFIX);
+  if (!key) {
+    return;
+  }
+  localStorage.setItem(key, interval);
+};
+
+const getAllowedIntervalsForPeriod = (period) => {
+  if (period === "day") return ["half_hour", "hourly"];
+  if (period === "year") return ["daily"];
+  if (period === "month") return ["hourly", "daily"];
+  return ["half_hour", "hourly", "daily"];
+};
+
+const getIntervalButtonsForPeriod = () => getAllowedIntervalsForPeriod(viewState.period);
+
+const normalizeIntervalForPeriod = ({ persist = false } = {}) => {
+  const allowed = getIntervalButtonsForPeriod();
+  if (allowed.includes(viewState.interval)) return;
+  viewState.interval = allowed.includes("hourly") ? "hourly" : allowed[0];
+  if (persist) {
+    persistInterval(currentProject?.id, viewState.interval);
+  }
+};
+
 const getDateRangeForPeriod = (period, date) => {
   const start = new Date(date);
   start.setHours(0, 0, 0, 0);
@@ -644,15 +673,152 @@ const getDateRangeForPeriod = (period, date) => {
   return { start, end };
 };
 
-const updateWeatherDateRangeReadout = () => {
-  if (!weatherDateRangeReadout) {
-    return;
-  }
+const getWeatherDateRangeReadout = () => {
   const { start, end } = getDateRangeForPeriod(viewState.period, selectedDate);
   const startText = formatShortDate(start);
   const endText = formatShortDate(end);
-  weatherDateRangeReadout.textContent = startText === endText ? startText : `${startText}-${endText}`;
+  return startText === endText ? startText : `${startText}-${endText}`;
 };
+
+const syncControlStrip = () => {
+  if (!locationControlStripBridge) {
+    return;
+  }
+  locationControlStripBridge.update(buildControlStripProps());
+};
+
+const syncLegend = () => {
+  if (!locationLegendBridge) {
+    return;
+  }
+  locationLegendBridge.update(buildLegendProps());
+};
+
+const buildControlStripProps = () => ({
+  className: "toggle-group",
+  groups: [
+    {
+      key: "period",
+      buttons: [
+        {
+          key: "day",
+          label: "Day",
+          active: viewState.period === "day",
+          onClick: () => {
+            viewState.period = "day";
+            persistPeriod(currentProject?.id, viewState.period);
+            normalizeIntervalForPeriod({ persist: true });
+            syncControlStrip();
+            updateView();
+          },
+        },
+        {
+          key: "week",
+          label: "Week",
+          active: viewState.period === "week",
+          onClick: () => {
+            viewState.period = "week";
+            persistPeriod(currentProject?.id, viewState.period);
+            normalizeIntervalForPeriod({ persist: true });
+            syncControlStrip();
+            updateView();
+          },
+        },
+        {
+          key: "month",
+          label: "Month",
+          active: viewState.period === "month",
+          onClick: () => {
+            viewState.period = "month";
+            persistPeriod(currentProject?.id, viewState.period);
+            normalizeIntervalForPeriod({ persist: true });
+            syncControlStrip();
+            updateView();
+          },
+        },
+        {
+          key: "year",
+          label: "Year",
+          active: viewState.period === "year",
+          onClick: () => {
+            viewState.period = "year";
+            persistPeriod(currentProject?.id, viewState.period);
+            normalizeIntervalForPeriod({ persist: true });
+            syncControlStrip();
+            updateView();
+          },
+        },
+      ],
+    },
+    {
+      key: "interval",
+      label: "Interval",
+      labelClassName: "assets-label rates-control-label rates-control-label--inline",
+      buttons: getIntervalButtonsForPeriod().map((intervalKey) => ({
+        key: intervalKey,
+        label: intervalKey === "half_hour" ? "30 Min" : intervalKey === "hourly" ? "Hourly" : "Daily",
+        active: viewState.interval === intervalKey,
+        onClick: () => {
+          viewState.interval = intervalKey;
+          persistInterval(currentProject?.id, viewState.interval);
+          syncControlStrip();
+          updateView();
+        },
+      })),
+    },
+  ],
+  rightGroupKeys: ["interval"],
+  selectedDateKey: formatDateKey(selectedDate),
+  dateRangeText: getWeatherDateRangeReadout(),
+  onDateChange: async (nextDateKey) => {
+    const nextDate = new Date(nextDateKey);
+    if (Number.isNaN(nextDate.getTime())) {
+      return;
+    }
+    selectedDate = nextDate;
+    syncControlStrip();
+    if (currentProject) {
+      try {
+        currentProject = await withRetry(() =>
+          supabaseService.updateProject(currentProject.id, { selectedDate: formatDateKey(selectedDate) })
+        );
+      } catch (error) {
+        setStatus({ loading: false, error: "Unable to save date selection. Please retry." });
+      }
+    }
+    updateView();
+  },
+  onShift: (direction) => shiftSelectedDate(Number(direction) >= 0 ? 1 : -1),
+});
+
+const buildLegendProps = () => ({
+  className: "chart-panel__legend",
+  tagName: "p",
+  items: [
+    {
+      key: "solar",
+      label: "Solar",
+      className: "legend--solar",
+      active: Boolean(seriesVisibility.solar),
+      onToggle: () => {
+        seriesVisibility.solar = !seriesVisibility.solar;
+        syncLegend();
+        updateView();
+      },
+    },
+    {
+      key: "wind",
+      label: "Wind",
+      className: "legend--wind",
+      active: Boolean(seriesVisibility.wind),
+      onToggle: () => {
+        seriesVisibility.wind = !seriesVisibility.wind;
+        syncLegend();
+        updateView();
+      },
+    },
+  ],
+});
 
 const normalizeHeader = (header) => {
   const cleaned = cleanText(header)
@@ -898,15 +1064,16 @@ const toDailyAggregation = (records, metrics) => {
   });
 };
 
-const buildSeries = (solarRecords, windRecords, period, date) => {
+const buildSeries = (solarRecords, windRecords, period, date, interval = "hourly") => {
   if (!solarRecords.length && !windRecords.length) {
     return { labels: [], solar: [], wind: [], windDirection: [] };
   }
 
   const windSpeedMetric = windMetricState.speed;
   const windDirMetric = windMetricState.direction;
+  const useDailyAggregation = interval === "daily" || period === "year";
 
-  if (period === "day") {
+  if (!useDailyAggregation && period === "day" && interval === "half_hour") {
     const start = new Date(date);
     start.setHours(0, 0, 0, 0);
     const end = new Date(date);
@@ -930,23 +1097,66 @@ const buildSeries = (solarRecords, windRecords, period, date) => {
       wind.push(windRecord ? Number(windRecord[windSpeedMetric]) || 0 : 0);
       windDirection.push(windRecord ? Number(windRecord[windDirMetric]) || 0 : 0);
     }
-    return {
-      labels,
-      solar,
-      wind,
-      windDirection,
-    };
+    return { labels, solar, wind, windDirection };
   }
 
-  if (period === "week") {
+  if (!useDailyAggregation && period === "day") {
+    const start = new Date(date);
+    start.setHours(0, 0, 0, 0);
+    const end = new Date(date);
+    end.setHours(23, 0, 0, 0);
+    const solarMap = new Map(dataStore.hourly.solar.map((record) => [record.timestamp, record]));
+    const windMap = new Map(dataStore.hourly.wind.map((record) => [record.timestamp, record]));
+    const labels = [];
+    const solar = [];
+    const wind = [];
+    const windDirection = [];
+    for (let cursor = new Date(start); cursor <= end; cursor.setHours(cursor.getHours() + 1)) {
+      const key = buildHourlyKeyFromDate(cursor);
+      const solarRecord = solarMap.get(key);
+      const windRecord = windMap.get(key);
+      labels.push(`${pad2(cursor.getHours())}:00`);
+      solar.push(solarRecord ? Number(solarRecord.ghi) || 0 : 0);
+      wind.push(windRecord ? Number(windRecord[windSpeedMetric]) || 0 : 0);
+      windDirection.push(windRecord ? Number(windRecord[windDirMetric]) || 0 : 0);
+    }
+    return { labels, solar, wind, windDirection };
+  }
+
+  if (!useDailyAggregation && period === "week" && interval === "half_hour") {
     const weekStart = getWeekStart(date);
     const weekEnd = getWeekEnd(weekStart);
-    const solarMap = new Map(
-      dataStore.hourly.solar.map((record) => [record.timestamp, record])
-    );
-    const windMap = new Map(
-      dataStore.hourly.wind.map((record) => [record.timestamp, record])
-    );
+    weekEnd.setHours(23, 60 - WEATHER_INTERVAL_MINUTES, 0, 0);
+    const solarMap = new Map(solarRecords.map((record) => [buildRecordKey(record), record]));
+    const windMap = new Map(windRecords.map((record) => [buildRecordKey(record), record]));
+    const labels = [];
+    const solar = [];
+    const wind = [];
+    const windDirection = [];
+    for (
+      let cursor = new Date(weekStart);
+      cursor <= weekEnd;
+      cursor.setMinutes(cursor.getMinutes() + WEATHER_INTERVAL_MINUTES)
+    ) {
+      const key = buildRecordKeyFromDate(cursor);
+      const solarRecord = solarMap.get(key);
+      const windRecord = windMap.get(key);
+      const dayOfWeek = cursor.toLocaleDateString("en-US", { weekday: "short" });
+      labels.push([formatIndicatorTime(cursor), `${dayOfWeek} ${formatIndicatorDate(cursor)}`]);
+      solar.push(solarRecord ? Number(solarRecord.ghi) || 0 : 0);
+      const windSpeed = windRecord ? Number(windRecord[windSpeedMetric]) || 0 : 0;
+      const windDir = windRecord ? Number(windRecord[windDirMetric]) || 0 : 0;
+      wind.push(windSpeed);
+      windDirection.push(windDir);
+    }
+    return { labels, solar, wind, windDirection };
+  }
+
+  if (!useDailyAggregation && period === "week") {
+    const weekStart = getWeekStart(date);
+    const weekEnd = getWeekEnd(weekStart);
+    const solarMap = new Map(dataStore.hourly.solar.map((record) => [record.timestamp, record]));
+    const windMap = new Map(dataStore.hourly.wind.map((record) => [record.timestamp, record]));
     const labels = [];
     const solar = [];
     const wind = [];
@@ -968,32 +1178,59 @@ const buildSeries = (solarRecords, windRecords, period, date) => {
       wind.push(Math.round(windSpeed));
       windDirection.push(Math.round(windDir));
     }
-    return {
-      labels,
-      solar,
-      wind,
-      windDirection,
-    };
+    return { labels, solar, wind, windDirection };
   }
 
-  const solarMap = new Map(dataStore.daily.solar.map((record) => [record.date, record]));
-  const windMap = new Map(dataStore.daily.wind.map((record) => [record.date, record]));
+  if (!useDailyAggregation && period === "month") {
+    const start = new Date(date.getFullYear(), date.getMonth(), 1);
+    const end = new Date(date.getFullYear(), date.getMonth() + 1, 0);
+    end.setHours(23, 0, 0, 0);
+    const solarMap = new Map(dataStore.hourly.solar.map((record) => [record.timestamp, record]));
+    const windMap = new Map(dataStore.hourly.wind.map((record) => [record.timestamp, record]));
+    const labels = [];
+    const solar = [];
+    const wind = [];
+    const windDirection = [];
+    for (let cursor = new Date(start); cursor <= end; cursor.setHours(cursor.getHours() + 1)) {
+      const key = buildHourlyKeyFromDate(cursor);
+      const solarRecord = solarMap.get(key);
+      const windRecord = windMap.get(key);
+      labels.push([`${pad2(cursor.getHours())}:00`, `${cursor.getMonth() + 1}/${cursor.getDate()}`]);
+      solar.push(solarRecord ? Number(solarRecord.ghi) || 0 : 0);
+      const windSpeed = windRecord ? Number(windRecord[windSpeedMetric]) || 0 : 0;
+      const windDir = windRecord ? Number(windRecord[windDirMetric]) || 0 : 0;
+      wind.push(Math.round(windSpeed));
+      windDirection.push(Math.round(windDir));
+    }
+    return { labels, solar, wind, windDirection };
+  }
+
+  const dailySolarMap = new Map(dataStore.daily.solar.map((record) => [record.date, record]));
+  const dailyWindMap = new Map(dataStore.daily.wind.map((record) => [record.date, record]));
   const start =
-    period === "month"
-      ? new Date(date.getFullYear(), date.getMonth(), 1)
-      : new Date(date.getFullYear(), 0, 1);
+    period === "day"
+      ? new Date(date.getFullYear(), date.getMonth(), date.getDate())
+      : period === "week"
+        ? getWeekStart(date)
+        : period === "month"
+          ? new Date(date.getFullYear(), date.getMonth(), 1)
+          : new Date(date.getFullYear(), 0, 1);
   const end =
-    period === "month"
-      ? new Date(date.getFullYear(), date.getMonth() + 1, 0)
-      : new Date(date.getFullYear(), 11, 31);
+    period === "day"
+      ? new Date(date.getFullYear(), date.getMonth(), date.getDate())
+      : period === "week"
+        ? getWeekEnd(getWeekStart(date))
+        : period === "month"
+          ? new Date(date.getFullYear(), date.getMonth() + 1, 0)
+          : new Date(date.getFullYear(), 11, 31);
   const labels = [];
   const solar = [];
   const wind = [];
   const windDirection = [];
   for (let cursor = new Date(start); cursor <= end; cursor.setDate(cursor.getDate() + 1)) {
     const key = formatDateKey(cursor);
-    const solarRecord = solarMap.get(key);
-    const windRecord = windMap.get(key);
+    const solarRecord = dailySolarMap.get(key);
+    const windRecord = dailyWindMap.get(key);
     labels.push(key);
     solar.push(solarRecord ? Number(solarRecord.ghi) || 0 : 0);
     const windSpeed = windRecord ? Number(windRecord[windSpeedMetric]) || 0 : 0;
@@ -1001,12 +1238,7 @@ const buildSeries = (solarRecords, windRecords, period, date) => {
     wind.push(Math.round(windSpeed));
     windDirection.push(Math.round(windDir));
   }
-  return {
-    labels,
-    solar,
-    wind,
-    windDirection,
-  };
+  return { labels, solar, wind, windDirection };
 };
 
 const renderAxis = (labels) => {
@@ -1060,51 +1292,79 @@ const getAnnualMaxValue = (records, metric) =>
     return Math.max(max, value);
   }, 0);
 
-const ensureWeatherChart = () => {
-  if (weatherChart || !chartSvg || !window.EnergyCharts) {
+const ensureWeatherChartBridge = () => {
+  if (weatherChartBridge || !weatherChartRoot || !window.EnergyTimeSeriesChart?.createBridge) {
     return;
   }
-  weatherChart = window.EnergyCharts.createSettingsChart(chartSvg);
+  weatherChartBridge = window.EnergyTimeSeriesChart.createBridge();
+  weatherChartBridge.mount(weatherChartRoot, {
+    type: "line",
+    className: "chart-svg",
+    ariaLabel: "Weather chart",
+    labels: [],
+    datasets: [],
+    minY: 0,
+  });
 };
 
+const buildWeatherChartProps = ({ labels = [], solar = [], wind = [] } = {}) => ({
+  type: "line",
+  className: "chart-svg",
+  ariaLabel: "Weather chart",
+  labels,
+  scales: {
+    x: {
+      grid: { color: "rgba(120,120,120,0.15)" },
+      ticks: { display: false },
+    },
+    yWind: {
+      type: "linear",
+      position: "left",
+      min: 0,
+      title: { display: true, text: "Wind (m/s)", color: "#2d2d2d", font: { weight: "700" } },
+      ticks: { color: "#2d2d2d" },
+      grid: { color: "rgba(120,120,120,0.15)" },
+    },
+    ySolar: {
+      type: "linear",
+      position: "right",
+      min: 0,
+      title: { display: true, text: "Solar (W/m²)", color: "#2d2d2d", font: { weight: "700" } },
+      ticks: { color: "#2d2d2d" },
+      grid: { drawOnChartArea: false },
+    },
+  },
+  datasets: [
+    {
+      label: "Solar",
+      data: solar,
+      yAxisID: "ySolar",
+      borderColor: "rgba(249, 168, 37, 0.95)",
+      backgroundColor: "rgba(249, 168, 37, 0.35)",
+      fill: true,
+      hidden: !seriesVisibility.solar,
+    },
+    {
+      label: "Wind",
+      data: wind,
+      yAxisID: "yWind",
+      borderColor: "rgba(31, 119, 180, 0.95)",
+      backgroundColor: "rgba(31, 119, 180, 0.28)",
+      fill: true,
+      hidden: !seriesVisibility.wind,
+    },
+  ],
+});
+
 const renderChart = (series, maxValues = {}) => {
-  ensureWeatherChart();
-  if (!weatherChart) return;
-  weatherChart.update({
+  ensureWeatherChartBridge();
+  if (!weatherChartBridge) return;
+  weatherChartBridge.update(buildWeatherChartProps({
     labels: series.labels,
     solar: series.solar,
     wind: series.wind,
-    showSolar: seriesVisibility.solar,
-    showWind: seriesVisibility.wind,
-    period: viewState.period,
-  });
+  }));
   renderAxis(series.labels);
-};
-
-const renderTable = (series) => {
-  tableBody.innerHTML = "";
-  const maxRows = tableState.pageSize * tableState.page;
-  series.labels.slice(0, maxRows).forEach((label, index) => {
-    const windDigits = viewState.period === "day" ? 2 : 0;
-    const row = document.createElement("tr");
-    const direction = Number(series.windDirection[index]) || 0;
-    const directionLabel = Number.isFinite(direction) ? `${Math.round(direction)}°` : "-";
-    row.innerHTML = `
-      <td>${label}</td>
-      <td>${formatNumber(series.solar[index])}</td>
-      <td>${formatNumber(series.wind[index], windDigits)}</td>
-      <td>
-        <span class="wind-direction" style="transform: rotate(${direction}deg)" title="${directionLabel}"
-          aria-label="Wind direction ${directionLabel}">
-          ➤
-        </span>
-      </td>
-    `;
-    tableBody.appendChild(row);
-  });
-  if (tableLoadMore) {
-    tableLoadMore.hidden = series.labels.length <= maxRows;
-  }
 };
 
 const updateChartTooltip = (event) => {
@@ -1172,21 +1432,18 @@ const hideChartTooltip = () => {
 
 const updateView = () => {
   chartDate.textContent = formatDateLabel(selectedDate);
-  updateWeatherDateRangeReadout();
+  syncControlStrip();
   const series = buildSeries(
     dataStore.raw15.solar,
     dataStore.raw15.wind,
     viewState.period,
-    selectedDate
+    selectedDate,
+    viewState.interval
   );
   currentSeries = series;
-  tableState.page = 1;
   const solarMax = getAnnualMaxValue(dataStore.raw15.solar, "ghi");
   const windMax = getAnnualMaxValue(dataStore.raw15.wind, windMetricState.speed);
   renderChart(series, { solar: solarMax, wind: windMax });
-  renderTable(series);
-  chartDisplay.hidden = viewState.view !== "chart";
-  tablePanel.hidden = viewState.view !== "table";
 };
 
 const buildUrl = (base, params) => {
@@ -1213,6 +1470,16 @@ const parseResponseError = async (response) => {
   return text || "Unable to fetch datasets.";
 };
 
+const parseJsonResponse = async (response, label = "response") => {
+  const text = await response.text();
+  try {
+    return JSON.parse(text);
+  } catch (error) {
+    const preview = cleanText(text).slice(0, 180) || "(empty body)";
+    throw new Error(`${label} did not return JSON. ${preview}`);
+  }
+};
+
 const hasUsableCache = (cacheRow, wkt) => Boolean(cacheRow?.payload && cacheRow?.wkt === wkt);
 
 const getProviderLabel = (provider) => WEATHER_PROVIDERS[provider] || provider;
@@ -1236,7 +1503,7 @@ const setActionButtonsDisabled = (disabled) => {
   }
 };
 
-const hydrateDataStore = (solarPayload, windPayload, provider) => {
+const hydrateDataStore = (solarPayload, windPayload, provider, metadata = {}) => {
   const normalizedSolarRecords =
     provider === "nrel" ? normalizeRecordYears(solarPayload, SOLAR_YEAR) : solarPayload;
   const nextSolarRecords = shiftRecordsToTimeZone(normalizedSolarRecords, locationTimeZone);
@@ -1258,6 +1525,7 @@ const hydrateDataStore = (solarPayload, windPayload, provider) => {
       hourly: dataStore.hourly,
       daily: dataStore.daily,
       windMetric: windMetricState,
+      metadata,
     });
     sharedCache.setRevision(currentProject.id, "weather", weatherRevision);
   }
@@ -1299,85 +1567,178 @@ const fetchDataset = async ({ provider, lat, lng }) => {
         supabaseService.getWeatherCache(currentProject.id, provider, "wind", WEATHER_CACHE_DATE_KEY, cacheLookup),
       ])
     : [null, null];
+  const minimumRowsForFullOpenMeteo = Math.floor((24 * 60) / WEATHER_INTERVAL_MINUTES) * 60;
+  const openMeteoCacheLooksFull =
+    provider !== "open_meteo" ||
+    ((Array.isArray(cachedSolar?.payload) ? cachedSolar.payload.length : 0) >= minimumRowsForFullOpenMeteo &&
+      (Array.isArray(cachedWind?.payload) ? cachedWind.payload.length : 0) >= minimumRowsForFullOpenMeteo);
 
-  if (hasUsableCache(cachedSolar, wkt) && hasUsableCache(cachedWind, wkt)) {
-    return hydrateDataStore(cachedSolar.payload, cachedWind.payload, provider);
+  if (hasUsableCache(cachedSolar, wkt) && hasUsableCache(cachedWind, wkt) && openMeteoCacheLooksFull) {
+    return hydrateDataStore(cachedSolar.payload, cachedWind.payload, provider, {
+      fetchMode: "cache",
+      requestStartDate: null,
+      requestEndDate: null,
+    });
   }
 
-  const weatherUrl = buildUrl(WEATHER_PROXY_ENDPOINT, {
-    provider,
-    lat: String(lat),
-    lng: String(lng),
-    mode: "load_default",
-  });
+  const persistFullDataset = async (weatherPayload, parsedSolarRecords, parsedWindRecords) => {
+    if (!currentProject) return;
+    const fetchedAt = new Date().toISOString();
+    await Promise.all([
+      supabaseService.upsertWeatherCache({
+        projectId: currentProject.id,
+        provider,
+        dataset: "solar",
+        dateKey: WEATHER_CACHE_DATE_KEY,
+        sourceYear,
+        intervalMinutes: WEATHER_INTERVAL_MINUTES,
+        wkt,
+        timezone: locationTimeZone,
+        source: weatherPayload?.meta?.provider || provider,
+        fetchedAt,
+        payload: parsedSolarRecords,
+      }),
+      supabaseService.upsertWeatherCache({
+        projectId: currentProject.id,
+        provider,
+        dataset: "wind",
+        dateKey: WEATHER_CACHE_DATE_KEY,
+        sourceYear,
+        intervalMinutes: WEATHER_INTERVAL_MINUTES,
+        wkt,
+        timezone: locationTimeZone,
+        source: weatherPayload?.meta?.provider || provider,
+        fetchedAt,
+        payload: parsedWindRecords,
+      }),
+    ]);
+  };
+
+  const fetchWeatherPayload = async ({ mode = "load_default", startDate = "", endDate = "" } = {}) => {
+    const weatherUrl = buildUrl(WEATHER_PROXY_ENDPOINT, {
+      provider,
+      lat: String(lat),
+      lng: String(lng),
+      mode,
+      ...(startDate ? { startDate } : {}),
+      ...(endDate ? { endDate } : {}),
+    });
+    const response = await fetch(weatherUrl);
+    const responseError = await parseResponseError(response);
+    if (responseError) {
+      throw new Error(responseError);
+    }
+    return parseJsonResponse(response, `${providerName} weather API`);
+  };
+
+  if (provider === "open_meteo") {
+    const { start, end } = getDateRangeForPeriod(viewState.period, selectedDate);
+    const startDate = formatDateKey(start);
+    const endDate = formatDateKey(end);
+    const totalSteps = 3;
+    const weatherPayload = await runLoadingStep(
+      1,
+      totalSteps,
+      "Fetching Open-Meteo data for selected chart window",
+      () => fetchWeatherPayload({ mode: "load_window", startDate, endDate })
+    );
+
+    const { solar: parsedSolarRecords, wind: parsedWindRecords } = await runLoadingStep(
+      2,
+      totalSteps,
+      "Preparing selected window data",
+      () => Promise.resolve({ solar: weatherPayload.solar || [], wind: weatherPayload.wind || [] })
+    );
+
+    const windowResult = await runLoadingStep(
+      3,
+      totalSteps,
+      "Rendering selected window",
+      () => Promise.resolve(hydrateDataStore(parsedSolarRecords, parsedWindRecords, provider, weatherPayload?.meta || {}))
+    );
+
+    setStatus({
+      loading: false,
+      success: "Showing selected window. Syncing full Open-Meteo dataset in background...",
+    });
+
+    const projectIdAtStart = currentProject?.id;
+    const selectedProviderAtStart = provider;
+    void fetchWeatherPayload({ mode: "load_default" })
+      .then(async (fullPayload) => {
+        if (!currentProject || currentProject.id !== projectIdAtStart || activeProvider !== selectedProviderAtStart) {
+          return;
+        }
+        const fullSolarRecords = fullPayload.solar || [];
+        const fullWindRecords = fullPayload.wind || [];
+        await persistFullDataset(fullPayload, fullSolarRecords, fullWindRecords);
+        hydrateDataStore(fullSolarRecords, fullWindRecords, provider, fullPayload?.meta || {});
+        setStatus({
+          loading: false,
+          success: `Open-Meteo full dataset synced (${fullSolarRecords.length} solar / ${fullWindRecords.length} wind rows).`,
+        });
+        updateView();
+      })
+      .catch((error) => {
+        setStatus({
+          loading: false,
+          error: `Open-Meteo background sync failed: ${error.message || "Unknown error"}`,
+        });
+        renderDebugOutput({
+          provider,
+          warning: `Background full-dataset sync failed: ${error.message || "Unknown error"}`,
+        });
+      });
+
+    renderDebugOutput({
+      provider,
+      phase: "window-first",
+      window: { startDate, endDate },
+      solarRows: parsedSolarRecords.length,
+      windRows: parsedWindRecords.length,
+    });
+    return windowResult;
+  }
 
   const totalSteps = 4;
   const weatherResponsePromise = await runLoadingStep(
     1,
     totalSteps,
-    provider === "open_meteo"
-      ? "Fetching Open-Meteo historical and forecast weather"
-      : "Fetching NREL solar and wind weather",
-    () => fetch(weatherUrl)
-  );
-
-  const weatherResponse = await runLoadingStep(
-    2,
-    totalSteps,
-    `Waiting for ${providerName} server response`,
-    () => weatherResponsePromise
-  );
-
-  const responseError = await parseResponseError(weatherResponse);
-  if (responseError) {
-    throw new Error(responseError);
-  }
-
-  const weatherPayload = await runLoadingStep(
-    3,
-    totalSteps,
-    provider === "open_meteo" ? "Downloading normalized weather payload" : "Downloading NREL weather payload",
-    () => weatherResponse.json()
+    "Fetching NREL solar and wind weather",
+    () => fetch(buildUrl(WEATHER_PROXY_ENDPOINT, { provider, lat: String(lat), lng: String(lng), mode: "load_default" }))
   );
 
   const { solar: parsedSolarRecords, wind: parsedWindRecords } = await runLoadingStep(
     4,
     totalSteps,
     `Performing ${providerName} aggregations`,
-    () => Promise.resolve({ solar: weatherPayload.solar || [], wind: weatherPayload.wind || [] })
+    async () => {
+      const weatherResponse = await runLoadingStep(
+        2,
+        totalSteps,
+        `Waiting for ${providerName} server response`,
+        () => weatherResponsePromise
+      );
+      const responseError = await parseResponseError(weatherResponse);
+      if (responseError) {
+        throw new Error(responseError);
+      }
+      const weatherPayload = await runLoadingStep(
+        3,
+        totalSteps,
+        "Downloading NREL weather payload",
+        () => parseJsonResponse(weatherResponse, `${providerName} weather API`)
+      );
+      await persistFullDataset(weatherPayload, weatherPayload.solar || [], weatherPayload.wind || []);
+      return { solar: weatherPayload.solar || [], wind: weatherPayload.wind || [] };
+    }
   );
 
-  if (currentProject) {
-    const fetchedAt = new Date().toISOString();
-    void supabaseService.upsertWeatherCache({
-      projectId: currentProject.id,
-      provider,
-      dataset: "solar",
-      dateKey: WEATHER_CACHE_DATE_KEY,
-      sourceYear,
-      intervalMinutes: WEATHER_INTERVAL_MINUTES,
-      wkt,
-      timezone: locationTimeZone,
-      source: weatherPayload?.meta?.provider || provider,
-      fetchedAt,
-      payload: parsedSolarRecords,
-    });
-    void supabaseService.upsertWeatherCache({
-      projectId: currentProject.id,
-      provider,
-      dataset: "wind",
-      dateKey: WEATHER_CACHE_DATE_KEY,
-      sourceYear,
-      intervalMinutes: WEATHER_INTERVAL_MINUTES,
-      wkt,
-      timezone: locationTimeZone,
-      source: weatherPayload?.meta?.provider || provider,
-      fetchedAt,
-      payload: parsedWindRecords,
-    });
-  }
-
-  const result = hydrateDataStore(parsedSolarRecords, parsedWindRecords, provider);
+  const result = hydrateDataStore(parsedSolarRecords, parsedWindRecords, provider, {
+    fetchMode: "load_default",
+    requestStartDate: null,
+    requestEndDate: null,
+  });
 
   renderDebugOutput({
     provider,
@@ -1401,76 +1762,16 @@ const fetchDataset = async ({ provider, lat, lng }) => {
 
 
 
-const applyToggleState = (buttons, value, attribute) => {
-  buttons.forEach((button) => {
-    button.classList.toggle("is-active", button.dataset[attribute] === value);
-  });
+const bindChartUi = () => {
+  if (locationControlStripRoot && window.EnergyChartUI?.createTimeWindowControlsBridge) {
+    locationControlStripBridge = window.EnergyChartUI.createTimeWindowControlsBridge();
+    locationControlStripBridge.mount(locationControlStripRoot, buildControlStripProps());
+  }
+  if (locationChartLegendRoot && window.EnergyChartUI?.createLegendTogglesBridge) {
+    locationLegendBridge = window.EnergyChartUI.createLegendTogglesBridge();
+    locationLegendBridge.mount(locationChartLegendRoot, buildLegendProps());
+  }
 };
-
-document.querySelectorAll("[data-period]").forEach((button) => {
-  button.addEventListener("click", () => {
-    viewState.period = button.dataset.period;
-    applyToggleState(document.querySelectorAll("[data-period]"), viewState.period, "period");
-    persistPeriod(currentProject?.id, viewState.period);
-    updateWeatherDateRangeReadout();
-    updateView();
-  });
-});
-
-document.querySelectorAll("[data-view]").forEach((button) => {
-  button.addEventListener("click", () => {
-    viewState.view = button.dataset.view;
-    applyToggleState(document.querySelectorAll("[data-view]"), viewState.view, "view");
-    updateView();
-  });
-});
-
-document.querySelectorAll("[data-series]").forEach((button) => {
-  button.addEventListener("click", () => {
-    const series = button.dataset.series;
-    if (!series) {
-      return;
-    }
-    seriesVisibility[series] = !seriesVisibility[series];
-    button.classList.toggle("is-active", seriesVisibility[series]);
-    updateView();
-  });
-});
-
-if (datePickerInput) {
-  datePickerInput.value = formatDateKey(selectedDate);
-}
-
-if (datePickerButton && datePickerInput) {
-  datePickerButton.addEventListener("click", () => {
-    if (typeof datePickerInput.showPicker === "function") {
-      datePickerInput.showPicker();
-    } else {
-      datePickerInput.click();
-    }
-  });
-}
-
-if (datePickerInput) {
-  datePickerInput.addEventListener("change", async (event) => {
-    const nextDate = new Date(event.target.value);
-    if (Number.isNaN(nextDate.getTime())) {
-      return;
-    }
-    selectedDate = nextDate;
-    updateWeatherDateRangeReadout();
-    if (currentProject) {
-      try {
-        currentProject = await withRetry(() =>
-          supabaseService.updateProject(currentProject.id, { selectedDate: formatDateKey(selectedDate) })
-        );
-      } catch (error) {
-        setStatus({ loading: false, error: "Unable to save date selection. Please retry." });
-      }
-    }
-    updateView();
-  });
-}
 
 const shiftSelectedDate = (direction) => {
   const shifted = new Date(selectedDate);
@@ -1484,10 +1785,7 @@ const shiftSelectedDate = (direction) => {
     shifted.setFullYear(shifted.getFullYear() + direction);
   }
   selectedDate = shifted;
-  if (datePickerInput) {
-    datePickerInput.value = formatDateKey(selectedDate);
-  }
-  updateWeatherDateRangeReadout();
+  syncControlStrip();
   if (currentProject) {
     void withRetry(() =>
       supabaseService.updateProject(currentProject.id, { selectedDate: formatDateKey(selectedDate) })
@@ -1501,28 +1799,6 @@ const shiftSelectedDate = (direction) => {
   }
   updateView();
 };
-
-if (weatherShiftBackButton) {
-  weatherShiftBackButton.addEventListener("click", () => {
-    shiftSelectedDate(-1);
-  });
-}
-
-if (weatherShiftForwardButton) {
-  weatherShiftForwardButton.addEventListener("click", () => {
-    shiftSelectedDate(1);
-  });
-}
-
-if (tableLoadMore) {
-  tableLoadMore.addEventListener("click", () => {
-    if (!currentSeries) {
-      return;
-    }
-    tableState.page += 1;
-    renderTable(currentSeries);
-  });
-}
 
 if (chartDisplay) {
   chartDisplay.addEventListener("mousemove", updateChartTooltip);
@@ -1603,9 +1879,7 @@ const loadWithProvider = async (provider, { auto = false } = {}) => {
   try {
     const nextSelectedDate = chooseDateForProvider(provider, selectedDate);
     selectedDate = nextSelectedDate;
-    if (datePickerInput) {
-      datePickerInput.value = formatDateKey(selectedDate);
-    }
+    syncControlStrip();
 
     currentProject = await withRetry(() =>
       supabaseService.updateProject(currentProject.id, {
@@ -1737,7 +2011,11 @@ const init = async () => {
 
   applyProjectToUi(project);
   viewState.period = loadPersistedPeriod(project.id, viewState.period);
-  applyToggleState(document.querySelectorAll("[data-period]"), viewState.period, "period");
+  viewState.interval = loadPersistedInterval(project.id, viewState.interval);
+  normalizeIntervalForPeriod({ persist: true });
+  bindChartUi();
+  syncControlStrip();
+  syncLegend();
 
   if (headerAssetsLink) {
     headerAssetsLink.href = `/projects/generation.html?projectId=${encodeURIComponent(project.id)}`;
