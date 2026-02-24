@@ -30,12 +30,15 @@ loadEnvFile(path.resolve(__dirname, ".env"));
 loadEnvFile(path.resolve(__dirname, ".env.local"));
 
 const { handleWeatherProxy, handleNrelCsvProxy } = require("./api/weather-proxy");
+const { handleLocationReverse } = require("./api/location-proxy");
 const {
   handleRatesProvider,
   handleRatesTimeseries,
   handleRatesTimeseriesV2,
   handleRatesHealth,
   handleRatesRefresh,
+  handleRatesBackfillStart,
+  handleRatesBackfillStatus,
 } = require("./api/rates-proxy");
 
 const SUPABASE_URL = process.env.ENERGYAPP_SUPABASE_URL || process.env.SUPABASE_URL || "";
@@ -109,6 +112,10 @@ const server = http.createServer((req, res) => {
     handleNrelCsvProxy(req, res);
     return;
   }
+  if (req.url.startsWith("/api/location/reverse")) {
+    handleLocationReverse(req, res);
+    return;
+  }
   if (req.url.startsWith("/api/rates/provider")) {
     handleRatesProvider(req, res);
     return;
@@ -127,6 +134,14 @@ const server = http.createServer((req, res) => {
   }
   if (req.url.startsWith("/api/rates/refresh")) {
     handleRatesRefresh(req, res);
+    return;
+  }
+  if (req.url.startsWith("/api/rates/backfill/start")) {
+    handleRatesBackfillStart(req, res);
+    return;
+  }
+  if (req.url.startsWith("/api/rates/backfill/status")) {
+    handleRatesBackfillStatus(req, res);
     return;
   }
 

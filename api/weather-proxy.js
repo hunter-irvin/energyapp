@@ -21,6 +21,10 @@ const ALLOW_INSECURE_NREL_TLS = process.env.ENERGYAPP_ALLOW_INSECURE_NREL_TLS !=
 
 const nrelCsvCache = new Map();
 const weatherJsonCache = new Map();
+const WEATHER_JSON_CACHE_TTL_MS = {
+  nrel: 24 * 60 * 60 * 1000,
+  open_meteo: 15 * 60 * 1000,
+};
 
 const sendJsonError = (res, status, message) => {
   res.writeHead(status, {
@@ -510,6 +514,7 @@ const handleWeatherProxy = async (req, res) => {
   const url = new URL(req.url, `http://${req.headers.host}`);
   const provider = url.searchParams.get("provider") || "nrel";
   const mode = url.searchParams.get("mode") || "load_default";
+  const requestSinceDate = cleanText(url.searchParams.get("sinceDate") || "");
   const requestStartDate = cleanText(url.searchParams.get("startDate") || "");
   const requestEndDate = cleanText(url.searchParams.get("endDate") || "");
   const lat = Number(url.searchParams.get("lat"));
@@ -525,27 +530,71 @@ const handleWeatherProxy = async (req, res) => {
   }
 
   const cacheSuffix =
-    provider === "open_meteo" && mode === "load_window" && requestStartDate && requestEndDate
-      ? `-${mode}-${requestStartDate}-${requestEndDate}`
+    provider === "open_meteo" &&
+    ((mode === "load_window" && requestStartDate && requestEndDate) ||
+      (mode === "load_delta" && (requestSinceDate || requestEndDate)))
+      ? `-${mode}-${requestSinceDate || requestStartDate || ""}-${requestEndDate || ""}`
       : "";
   const cacheKey = `${provider}-${lat.toFixed(4)}-${lng.toFixed(4)}${cacheSuffix}`;
-  if (weatherJsonCache.has(cacheKey)) {
-    sendJson(res, 200, weatherJsonCache.get(cacheKey), { "X-Cache": "HIT" });
-    return;
+  const cachedEntry = weatherJsonCache.get(cacheKey);
+  if (cachedEntry) {
+    const ttlMs = WEATHER_JSON_CACHE_TTL_MS[provider] || WEATHER_JSON_CACHE_TTL_MS.nrel;
+    const ageMs = Date.now() - Number(cachedEntry.savedAt || 0);
+    if (Number.isFinite(ageMs) && ageMs >= 0 && ageMs <= ttlMs) {
+      sendJson(res, 200, cachedEntry.payload, { "X-Cache": "HIT" });
+      return;
+    }
+    weatherJsonCache.delete(cacheKey);
   }
 
   try {
     const payload =
       provider === "open_meteo"
-        ? await fetchAndNormalizeOpenMeteo({
-            lat,
-            lng,
-            startDate: mode === "load_window" ? requestStartDate : null,
-            endDate: mode === "load_window" ? requestEndDate : null,
-          })
+        ? await (() => {
+            if (mode === "load_window") {
+              return fetchAndNormalizeOpenMeteo({
+                lat,
+                lng,
+                startDate: requestStartDate || null,
+                endDate: requestEndDate || null,
+              });
+            }
+            if (mode === "load_delta") {
+              const today = new Date();
+              today.setUTCHours(0, 0, 0, 0);
+              const fallbackSince = new Date(today);
+              fallbackSince.setUTCDate(fallbackSince.getUTCDate() - 45);
+              const deltaStart = requestSinceDate || formatDate(fallbackSince);
+              const deltaEndDate = parseDateInput(requestEndDate);
+              const defaultDeltaEnd = new Date(today);
+              defaultDeltaEnd.setUTCDate(defaultDeltaEnd.getUTCDate() + OPEN_METEO_FORECAST_DAYS);
+              const deltaEnd = deltaEndDate ? formatDate(deltaEndDate) : formatDate(defaultDeltaEnd);
+              return fetchAndNormalizeOpenMeteo({
+                lat,
+                lng,
+                startDate: deltaStart,
+                endDate: deltaEnd,
+              }).then((result) => ({
+                ...result,
+                meta: {
+                  ...(result?.meta || {}),
+                  fetchMode: "delta_minutely_15",
+                  requestSinceDate: deltaStart,
+                  requestStartDate: deltaStart,
+                  requestEndDate: deltaEnd,
+                },
+              }));
+            }
+            return fetchAndNormalizeOpenMeteo({
+              lat,
+              lng,
+              startDate: null,
+              endDate: null,
+            });
+          })()
         : await fetchAndNormalizeNrel({ lat, lng });
 
-    weatherJsonCache.set(cacheKey, payload);
+    weatherJsonCache.set(cacheKey, { payload, savedAt: Date.now() });
     sendJson(res, 200, payload, { "X-Cache": "MISS" });
   } catch (error) {
     sendJsonError(res, 502, error.message || "Weather proxy error.");

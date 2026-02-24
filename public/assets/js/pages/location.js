@@ -44,12 +44,14 @@ const isValidProjectId = (value) => typeof value === "string" && /^[a-zA-Z0-9-]+
 const SOLAR_YEAR = "2014";
 const WIND_YEAR = "2014";
 const WEATHER_PROXY_ENDPOINT = "/api/weather-proxy";
+const LOCATION_REVERSE_ENDPOINT = "/api/location/reverse";
 const WEATHER_CACHE_DATE_KEY = "all";
 const WEATHER_INTERVAL_MINUTES = 30;
 const PERIOD_STORAGE_SUFFIX = "selectedPeriod";
 const PERIOD_OPTIONS = ["day", "week", "month", "year"];
 const INTERVAL_STORAGE_SUFFIX = "selectedInterval";
 const INTERVAL_OPTIONS = ["half_hour", "hourly", "daily"];
+const OPEN_METEO_FULL_SYNC_SUFFIX = "openMeteoFullSync";
 const WEATHER_PROVIDERS = {
   nrel: "NREL",
   open_meteo: "Open-Meteo",
@@ -251,7 +253,7 @@ const formatLocationText = (project) => {
 };
 
 const fetchCityLabel = async ({ lat, lng }) => {
-  const url = new URL("https://nominatim.openstreetmap.org/reverse");
+  const url = new URL(LOCATION_REVERSE_ENDPOINT, window.location.origin);
   url.searchParams.set("format", "jsonv2");
   url.searchParams.set("lat", String(lat));
   url.searchParams.set("lon", String(lng));
@@ -264,6 +266,9 @@ const fetchCityLabel = async ({ lat, lng }) => {
     throw new Error("City lookup failed.");
   }
   const payload = await response.json();
+  if (payload?.label) {
+    return String(payload.label);
+  }
   const address = payload?.address || {};
   const city =
     address.city ||
@@ -275,6 +280,18 @@ const fetchCityLabel = async ({ lat, lng }) => {
   const state = address.state || address.region || "";
   const country = address.country_code ? String(address.country_code).toUpperCase() : "";
   return [city, state || country].filter(Boolean).join(", ").trim();
+};
+
+const startRatesBackfill = async ({ projectId, lat, lng }) => {
+  if (!projectId || lat == null || lng == null) return;
+  try {
+    const startUrl = buildUrl("/api/rates/backfill/start", {
+      projectId,
+      lat: String(lat),
+      lng: String(lng),
+    });
+    await fetch(startUrl, { cache: "no-store" });
+  } catch (error) {}
 };
 
 const refreshCityLabel = async ({ lat, lng }, { persist = true } = {}) => {
@@ -331,6 +348,7 @@ const updateLocation = async (latlng) => {
     const changed = prevLat == null || prevLng == null || prevLat !== lat || prevLng !== lng;
     if (changed) {
       clearLoadedWeatherData();
+      void startRatesBackfill({ projectId: currentProject.id, lat, lng });
       setStatus({
         loading: false,
         success: "Location updated. Choose 2014 NREL Data or Last Year + 7 Day Forecast to load weather.",
@@ -375,6 +393,11 @@ const setStatus = ({ loading = false, loadingMessage = "", success = "", error =
   loadingStatus.hidden = !loading;
   successStatus.hidden = !success;
   errorStatus.hidden = !error;
+  if (chartDisplay) {
+    const nextState = loading ? "loading" : error ? "error" : success ? "ready" : "idle";
+    chartDisplay.setAttribute("data-state", nextState);
+    chartDisplay.setAttribute("aria-busy", String(Boolean(loading)));
+  }
   if (settingsChartLoading) {
     settingsChartLoading.hidden = !loading;
   }
@@ -473,6 +496,15 @@ const formatShortDate = (date) => {
 const formatIndicatorDate = (date) => `${date.getMonth() + 1}/${date.getDate()}`;
 const formatIndicatorTime = (date) => `${pad2(date.getHours())}:${pad2(date.getMinutes())}`;
 const formatTooltipLabelHtml = (text) => String(text || "").replace(/\n/g, "<br />");
+const readChartTheme = () => {
+  const styles = window.getComputedStyle(document.documentElement);
+  return {
+    tick: styles.getPropertyValue("--color-text-muted").trim() || "#6d7982",
+    title: styles.getPropertyValue("--color-text-secondary").trim() || "#d0d7dc",
+    gridPrimary: styles.getPropertyValue("--chart-grid-primary").trim() || "rgba(120,120,120,0.2)",
+    gridSecondary: styles.getPropertyValue("--chart-grid-secondary").trim() || "rgba(120,120,120,0.15)",
+  };
+};
 
 const formatChartIndicator = (period, date, index) => {
   if (!(date instanceof Date) || Number.isNaN(date.getTime())) {
@@ -556,6 +588,53 @@ const buildRecordKey = (record) =>
   `${record.year}-${pad2(record.month)}-${pad2(record.day)}` +
   `-${pad2(record.hour ?? "00")}-${pad2(record.minute ?? "00")}`;
 
+const mergeRecordsByTimestamp = (baseRecords = [], deltaRecords = []) => {
+  const merged = new Map();
+  baseRecords.forEach((record) => {
+    merged.set(buildRecordKey(record), record);
+  });
+  deltaRecords.forEach((record) => {
+    merged.set(buildRecordKey(record), record);
+  });
+  return Array.from(merged.entries())
+    .sort((a, b) => a[0].localeCompare(b[0]))
+    .map(([, record]) => record);
+};
+
+const resolveLatestRecordDate = (records = []) => {
+  const latest = records.reduce((max, record) => {
+    const year = Number(record?.year);
+    const month = Number(record?.month);
+    const day = Number(record?.day);
+    if (!Number.isFinite(year) || !Number.isFinite(month) || !Number.isFinite(day)) {
+      return max;
+    }
+    const next = new Date(Date.UTC(year, month - 1, day));
+    if (Number.isNaN(next.getTime())) {
+      return max;
+    }
+    return !max || next > max ? next : max;
+  }, null);
+  return latest;
+};
+
+const resolveDeltaSinceDate = (solarRecords = [], windRecords = []) => {
+  const solarLatest = resolveLatestRecordDate(solarRecords);
+  const windLatest = resolveLatestRecordDate(windRecords);
+  const latest = !solarLatest
+    ? windLatest
+    : !windLatest
+      ? solarLatest
+      : solarLatest > windLatest
+        ? solarLatest
+        : windLatest;
+  if (!latest) return null;
+  const since = new Date(latest);
+  // Keep a small overlap window to handle upstream revisions without gaps.
+  since.setUTCDate(since.getUTCDate() - 2);
+  return formatDateKey(new Date(since.getUTCFullYear(), since.getUTCMonth(), since.getUTCDate()));
+};
+
 const buildRecordKeyFromDate = (date) =>
   `${formatDateKey(date)}-${pad2(date.getHours())}-${pad2(date.getMinutes())}`;
 
@@ -588,6 +667,28 @@ const getScopedUiKey = (projectId, suffix) => {
     return supabaseService.buildScopedUiStorageKey(projectId, suffix);
   }
   return `energyapp.project.${projectId}.${suffix}`;
+};
+
+const setOpenMeteoFullSyncMarker = (projectId, provider) => {
+  const key = getScopedUiKey(projectId, OPEN_METEO_FULL_SYNC_SUFFIX);
+  if (!key) return;
+  try {
+    localStorage.setItem(
+      key,
+      JSON.stringify({
+        provider: String(provider || ""),
+        startedAt: Date.now(),
+      })
+    );
+  } catch (error) {}
+};
+
+const clearOpenMeteoFullSyncMarker = (projectId) => {
+  const key = getScopedUiKey(projectId, OPEN_METEO_FULL_SYNC_SUFFIX);
+  if (!key) return;
+  try {
+    localStorage.removeItem(key);
+  } catch (error) {}
 };
 
 const loadPersistedPeriod = (projectId, fallback = "week") => {
@@ -671,6 +772,31 @@ const getDateRangeForPeriod = (period, date) => {
     };
   }
   return { start, end };
+};
+
+const resolveNowIndicator = (pointCount) => {
+  if (!Number.isFinite(pointCount) || pointCount < 2) {
+    return null;
+  }
+  const range = getDateRangeForPeriod(viewState.period, selectedDate);
+  if (!range?.start || !range?.end) {
+    return null;
+  }
+  const startMs = new Date(range.start).getTime();
+  let endMs = new Date(range.end).getTime();
+  if (viewState.period === "day") {
+    endMs = startMs + 24 * 60 * 60 * 1000;
+  } else {
+    endMs += 24 * 60 * 60 * 1000;
+  }
+  if (!Number.isFinite(startMs) || !Number.isFinite(endMs) || endMs <= startMs) {
+    return null;
+  }
+  const nowMs = Date.now();
+  if (nowMs < startMs || nowMs > endMs) {
+    return null;
+  }
+  return { ratio: (nowMs - startMs) / (endMs - startMs), width: 1 };
 };
 
 const getWeatherDateRangeReadout = () => {
@@ -1307,30 +1433,33 @@ const ensureWeatherChartBridge = () => {
   });
 };
 
-const buildWeatherChartProps = ({ labels = [], solar = [], wind = [] } = {}) => ({
+const buildWeatherChartProps = ({ labels = [], solar = [], wind = [] } = {}) => {
+  const palette = readChartTheme();
+  return {
   type: "line",
   className: "chart-svg",
   ariaLabel: "Weather chart",
   labels,
+  nowIndicator: resolveNowIndicator(labels.length),
   scales: {
     x: {
-      grid: { color: "rgba(120,120,120,0.15)" },
+      grid: { color: palette.gridSecondary },
       ticks: { display: false },
     },
     yWind: {
       type: "linear",
       position: "left",
       min: 0,
-      title: { display: true, text: "Wind (m/s)", color: "#2d2d2d", font: { weight: "700" } },
-      ticks: { color: "#2d2d2d" },
-      grid: { color: "rgba(120,120,120,0.15)" },
+      title: { display: true, text: "Wind (m/s)", color: palette.title, font: { weight: "700" } },
+      ticks: { color: palette.tick },
+      grid: { color: palette.gridSecondary },
     },
     ySolar: {
       type: "linear",
       position: "right",
       min: 0,
-      title: { display: true, text: "Solar (W/m²)", color: "#2d2d2d", font: { weight: "700" } },
-      ticks: { color: "#2d2d2d" },
+      title: { display: true, text: "Solar (W/m²)", color: palette.title, font: { weight: "700" } },
+      ticks: { color: palette.tick },
       grid: { drawOnChartArea: false },
     },
   },
@@ -1354,7 +1483,8 @@ const buildWeatherChartProps = ({ labels = [], solar = [], wind = [] } = {}) => 
       hidden: !seriesVisibility.wind,
     },
   ],
-});
+  };
+};
 
 const renderChart = (series, maxValues = {}) => {
   ensureWeatherChartBridge();
@@ -1555,7 +1685,7 @@ const restoreWeatherFromSharedCache = (provider) => {
   return true;
 };
 
-const fetchDataset = async ({ provider, lat, lng }) => {
+const fetchDataset = async ({ provider, lat, lng, forceRefresh = false, silent = false }) => {
   const providerName = getProviderLabel(provider);
   const wkt = `POINT(${lng} ${lat})`;
   locationTimeZone = await fetchTimeZone({ lat, lng });
@@ -1573,7 +1703,7 @@ const fetchDataset = async ({ provider, lat, lng }) => {
     ((Array.isArray(cachedSolar?.payload) ? cachedSolar.payload.length : 0) >= minimumRowsForFullOpenMeteo &&
       (Array.isArray(cachedWind?.payload) ? cachedWind.payload.length : 0) >= minimumRowsForFullOpenMeteo);
 
-  if (hasUsableCache(cachedSolar, wkt) && hasUsableCache(cachedWind, wkt) && openMeteoCacheLooksFull) {
+  if (!forceRefresh && hasUsableCache(cachedSolar, wkt) && hasUsableCache(cachedWind, wkt) && openMeteoCacheLooksFull) {
     return hydrateDataStore(cachedSolar.payload, cachedWind.payload, provider, {
       fetchMode: "cache",
       requestStartDate: null,
@@ -1584,46 +1714,51 @@ const fetchDataset = async ({ provider, lat, lng }) => {
   const persistFullDataset = async (weatherPayload, parsedSolarRecords, parsedWindRecords) => {
     if (!currentProject) return;
     const fetchedAt = new Date().toISOString();
-    await Promise.all([
-      supabaseService.upsertWeatherCache({
-        projectId: currentProject.id,
-        provider,
-        dataset: "solar",
-        dateKey: WEATHER_CACHE_DATE_KEY,
-        sourceYear,
-        intervalMinutes: WEATHER_INTERVAL_MINUTES,
-        wkt,
-        timezone: locationTimeZone,
-        source: weatherPayload?.meta?.provider || provider,
-        fetchedAt,
-        payload: parsedSolarRecords,
-      }),
-      supabaseService.upsertWeatherCache({
-        projectId: currentProject.id,
-        provider,
-        dataset: "wind",
-        dateKey: WEATHER_CACHE_DATE_KEY,
-        sourceYear,
-        intervalMinutes: WEATHER_INTERVAL_MINUTES,
-        wkt,
-        timezone: locationTimeZone,
-        source: weatherPayload?.meta?.provider || provider,
-        fetchedAt,
-        payload: parsedWindRecords,
-      }),
-    ]);
+    try {
+      await Promise.all([
+        supabaseService.upsertWeatherCache({
+          projectId: currentProject.id,
+          provider,
+          dataset: "solar",
+          dateKey: WEATHER_CACHE_DATE_KEY,
+          sourceYear,
+          intervalMinutes: WEATHER_INTERVAL_MINUTES,
+          wkt,
+          timezone: locationTimeZone,
+          source: weatherPayload?.meta?.provider || provider,
+          fetchedAt,
+          payload: parsedSolarRecords,
+        }),
+        supabaseService.upsertWeatherCache({
+          projectId: currentProject.id,
+          provider,
+          dataset: "wind",
+          dateKey: WEATHER_CACHE_DATE_KEY,
+          sourceYear,
+          intervalMinutes: WEATHER_INTERVAL_MINUTES,
+          wkt,
+          timezone: locationTimeZone,
+          source: weatherPayload?.meta?.provider || provider,
+          fetchedAt,
+          payload: parsedWindRecords,
+        }),
+      ]);
+    } catch (cacheError) {
+      console.warn("[Location] Weather cache write failed; continuing with in-memory data.", cacheError);
+    }
   };
 
-  const fetchWeatherPayload = async ({ mode = "load_default", startDate = "", endDate = "" } = {}) => {
+  const fetchWeatherPayload = async ({ mode = "load_default", sinceDate = "", startDate = "", endDate = "" } = {}) => {
     const weatherUrl = buildUrl(WEATHER_PROXY_ENDPOINT, {
       provider,
       lat: String(lat),
       lng: String(lng),
       mode,
+      ...(sinceDate ? { sinceDate } : {}),
       ...(startDate ? { startDate } : {}),
       ...(endDate ? { endDate } : {}),
     });
-    const response = await fetch(weatherUrl);
+    const response = await fetch(weatherUrl, { cache: forceRefresh ? "no-store" : "default" });
     const responseError = await parseResponseError(response);
     if (responseError) {
       throw new Error(responseError);
@@ -1657,37 +1792,80 @@ const fetchDataset = async ({ provider, lat, lng }) => {
       () => Promise.resolve(hydrateDataStore(parsedSolarRecords, parsedWindRecords, provider, weatherPayload?.meta || {}))
     );
 
-    setStatus({
-      loading: false,
-      success: "Showing selected window. Syncing full Open-Meteo dataset in background...",
-    });
+    if (!silent) {
+      setStatus({
+        loading: false,
+        success: "Showing selected window. Syncing full Open-Meteo dataset in background...",
+      });
+    }
 
     const projectIdAtStart = currentProject?.id;
     const selectedProviderAtStart = provider;
-    void fetchWeatherPayload({ mode: "load_default" })
+    const cachedFullSolar = Array.isArray(cachedSolar?.payload) ? cachedSolar.payload : [];
+    const cachedFullWind = Array.isArray(cachedWind?.payload) ? cachedWind.payload : [];
+    const hasBaselineFullCache =
+      cachedFullSolar.length >= minimumRowsForFullOpenMeteo && cachedFullWind.length >= minimumRowsForFullOpenMeteo;
+    const deltaSinceDate = resolveDeltaSinceDate(cachedFullSolar, cachedFullWind);
+    const defaultDeltaEnd = new Date();
+    defaultDeltaEnd.setDate(defaultDeltaEnd.getDate() + 7);
+    const deltaEndDate = formatDateKey(defaultDeltaEnd);
+    setOpenMeteoFullSyncMarker(projectIdAtStart, provider);
+    void fetchWeatherPayload(
+      hasBaselineFullCache
+        ? { mode: "load_delta", sinceDate: deltaSinceDate || "", endDate: deltaEndDate }
+        : { mode: "load_default" }
+    )
       .then(async (fullPayload) => {
         if (!currentProject || currentProject.id !== projectIdAtStart || activeProvider !== selectedProviderAtStart) {
           return;
         }
-        const fullSolarRecords = fullPayload.solar || [];
-        const fullWindRecords = fullPayload.wind || [];
-        await persistFullDataset(fullPayload, fullSolarRecords, fullWindRecords);
-        hydrateDataStore(fullSolarRecords, fullWindRecords, provider, fullPayload?.meta || {});
-        setStatus({
-          loading: false,
-          success: `Open-Meteo full dataset synced (${fullSolarRecords.length} solar / ${fullWindRecords.length} wind rows).`,
-        });
+        const deltaSolarRecords = fullPayload.solar || [];
+        const deltaWindRecords = fullPayload.wind || [];
+        const mergedSolarRecords = hasBaselineFullCache
+          ? mergeRecordsByTimestamp(cachedFullSolar, deltaSolarRecords)
+          : deltaSolarRecords;
+        const mergedWindRecords = hasBaselineFullCache
+          ? mergeRecordsByTimestamp(cachedFullWind, deltaWindRecords)
+          : deltaWindRecords;
+        await persistFullDataset(fullPayload, mergedSolarRecords, mergedWindRecords);
+        hydrateDataStore(mergedSolarRecords, mergedWindRecords, provider, fullPayload?.meta || {});
+        if (!silent) {
+          setStatus({
+            loading: false,
+            success: hasBaselineFullCache
+              ? `Open-Meteo delta synced (+${deltaSolarRecords.length} solar / +${deltaWindRecords.length} wind rows).`
+              : `Open-Meteo full dataset synced (${deltaSolarRecords.length} solar / ${deltaWindRecords.length} wind rows).`,
+          });
+        }
         updateView();
       })
-      .catch((error) => {
-        setStatus({
-          loading: false,
-          error: `Open-Meteo background sync failed: ${error.message || "Unknown error"}`,
-        });
+      .catch(async (error) => {
+        // Fallback: if delta fails, retry the previous full sync path.
+        try {
+          const fullPayload = await fetchWeatherPayload({ mode: "load_default" });
+          if (!currentProject || currentProject.id !== projectIdAtStart || activeProvider !== selectedProviderAtStart) {
+            return;
+          }
+          const fullSolarRecords = fullPayload.solar || [];
+          const fullWindRecords = fullPayload.wind || [];
+          await persistFullDataset(fullPayload, fullSolarRecords, fullWindRecords);
+          hydrateDataStore(fullSolarRecords, fullWindRecords, provider, fullPayload?.meta || {});
+          updateView();
+          return;
+        } catch (fallbackError) {}
+        if (!silent) {
+          setStatus({
+            loading: false,
+            error: `Open-Meteo background sync failed: ${error.message || "Unknown error"}`,
+          });
+        }
         renderDebugOutput({
           provider,
           warning: `Background full-dataset sync failed: ${error.message || "Unknown error"}`,
         });
+      })
+      .finally(() => {
+        clearOpenMeteoFullSyncMarker(projectIdAtStart);
       });
 
     renderDebugOutput({
@@ -1860,21 +2038,23 @@ if (headerProjectNameInput) {
   });
 }
 
-const loadWithProvider = async (provider, { auto = false } = {}) => {
+const loadWithProvider = async (provider, { auto = false, forceRefresh = false, silent = false } = {}) => {
   if (!currentProject || currentProject.lat == null || currentProject.lng == null) {
     setStatus({ loading: false, error: "Select a location before loading weather data." });
     return;
   }
 
   const providerName = getProviderLabel(provider);
-  setStatus({
-    loading: true,
-    loadingMessage: auto
-      ? `Restoring weather data from ${providerName}…`
-      : `Loading weather data from ${providerName}…`,
-  });
-  setLoadingProgress(0, 0);
-  setActionButtonsDisabled(true);
+  if (!silent) {
+    setStatus({
+      loading: true,
+      loadingMessage: auto
+        ? `Restoring weather data from ${providerName}…`
+        : `Loading weather data from ${providerName}…`,
+    });
+    setLoadingProgress(0, 0);
+    setActionButtonsDisabled(true);
+  }
 
   try {
     const nextSelectedDate = chooseDateForProvider(provider, selectedDate);
@@ -1890,18 +2070,30 @@ const loadWithProvider = async (provider, { auto = false } = {}) => {
     activeProvider = provider;
     setProviderButtons(activeProvider);
 
-    const { solarCount, windCount } = await fetchDataset({ provider, lat: currentProject.lat, lng: currentProject.lng });
-    setStatus({
-      loading: false,
-      success: auto
-        ? `${providerName}: restored ${solarCount} solar points and ${windCount} wind points.`
-        : `${providerName}: loaded ${solarCount} solar points and ${windCount} wind points.`,
+    const { solarCount, windCount } = await fetchDataset({
+      provider,
+      lat: currentProject.lat,
+      lng: currentProject.lng,
+      forceRefresh,
+      silent,
     });
+    if (!silent) {
+      setStatus({
+        loading: false,
+        success: auto
+          ? `${providerName}: restored ${solarCount} solar points and ${windCount} wind points.`
+          : `${providerName}: loaded ${solarCount} solar points and ${windCount} wind points.`,
+      });
+    }
     updateView();
   } catch (error) {
-    setStatus({ loading: false, error: error.message || `Unable to load ${providerName} weather data.` });
+    if (!silent) {
+      setStatus({ loading: false, error: error.message || `Unable to load ${providerName} weather data.` });
+    }
   } finally {
-    setActionButtonsDisabled(false);
+    if (!silent) {
+      setActionButtonsDisabled(false);
+    }
   }
 };
 
@@ -1990,9 +2182,10 @@ const loadProjectWeather = async () => {
   }
   if (restoreWeatherFromSharedCache(activeProvider)) {
     updateView();
+    void loadWithProvider(activeProvider, { auto: true, forceRefresh: true, silent: true });
     return;
   }
-  await loadWithProvider(activeProvider, { auto: true });
+  await loadWithProvider(activeProvider, { auto: true, forceRefresh: true });
 };
 
 const init = async () => {
@@ -2028,8 +2221,9 @@ const init = async () => {
   }
 
   updateView();
-  if (project.lat != null && project.lng != null && !project.utilityName) {
+  if (project.lat != null && project.lng != null) {
     void refreshUtilityMetadata({ lat: project.lat, lng: project.lng });
+    void startRatesBackfill({ projectId: project.id, lat: project.lat, lng: project.lng });
   }
   await loadProjectWeather();
 };

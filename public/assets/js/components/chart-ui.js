@@ -12,6 +12,8 @@
         className: `btn btn--toggle${button?.active ? " is-active" : ""}`,
         type: "button",
         onClick: button?.onClick,
+        disabled: Boolean(button?.disabled),
+        "aria-pressed": String(Boolean(button?.active)),
         ...(button?.dataAttr || {}),
       },
       button?.label || ""

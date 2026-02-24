@@ -74,6 +74,8 @@ Supabase tables used by rates flow:
 - `rate_series_cache`
 - `rate_region_health`
 - `rate_ingest_runs`
+- `rate_project_series` (project-consolidated historical/hot store)
+- `rate_backfill_jobs` (server-side backfill progress/status)
 
 ## API Endpoints
 
@@ -84,5 +86,7 @@ Supabase tables used by rates flow:
 - `/api/v2/rates/timeseries`
 - `/api/rates/health`
 - `/api/rates/refresh`
+- `/api/rates/backfill/start`
+- `/api/rates/backfill/status`
 - `/api/runtime-config`
 - `/api/diagnostics`

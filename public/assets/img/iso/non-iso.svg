@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 593">
+  <image href="https://upload.wikimedia.org/wikipedia/commons/thumb/1/1a/Blank_US_Map_%28states_only%29.svg/960px-Blank_US_Map_%28states_only%29.svg.png" width="960" height="593"/>
+  <rect width="960" height="593" fill="rgba(4, 10, 32, 0.42)"/>
+  <path d="M112 90 L860 90 L860 520 L112 520 Z" fill="none" stroke="#8ea0c9" stroke-width="3" stroke-dasharray="10 8"/>
+</svg>

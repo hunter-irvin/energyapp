@@ -5,6 +5,10 @@
   const WEATHER_INTERVAL_MINUTES = 30;
   const POINTS_PER_DAY = (24 * 60) / WEATHER_INTERVAL_MINUTES;
   const WEATHER_CACHE_TTL_MS = 1000 * 60 * 60 * 24;
+  const OPEN_METEO_FULL_SYNC_SUFFIX = "openMeteoFullSync";
+  const OPEN_METEO_FULL_SYNC_STALE_MS = 1000 * 60 * 5;
+  const OPEN_METEO_FULL_SYNC_WAIT_MS = 6000;
+  const OPEN_METEO_FULL_SYNC_WAIT_STEP_MS = 500;
   const ASSET_EDIT_DEBOUNCE_MS = 200;
   const GENERATION_DERIVED_SCHEMA_VERSION = "gen_month_interval_v2";
   const PERIOD_STORAGE_SUFFIX = "selectedPeriod";
@@ -206,6 +210,27 @@
       return supabaseService.buildScopedUiStorageKey(projectId, suffix);
     }
     return `energyapp.project.${projectId}.${suffix}`;
+  };
+
+  const readOpenMeteoFullSyncMarker = (projectId) => {
+    const key = getScopedUiKey(projectId, OPEN_METEO_FULL_SYNC_SUFFIX);
+    if (!key) return null;
+    try {
+      const raw = localStorage.getItem(key);
+      if (!raw) return null;
+      const parsed = JSON.parse(raw);
+      const startedAt = Number(parsed?.startedAt || 0);
+      if (!Number.isFinite(startedAt) || Date.now() - startedAt > OPEN_METEO_FULL_SYNC_STALE_MS) {
+        localStorage.removeItem(key);
+        return null;
+      }
+      return {
+        provider: String(parsed?.provider || ""),
+        startedAt,
+      };
+    } catch (error) {
+      return null;
+    }
   };
 
   const loadPersistedPeriod = (projectId, fallback = "week") => {
@@ -696,6 +721,15 @@
 
   const formatIndicatorDate = (date) => `${date.getMonth() + 1}/${date.getDate()}`;
   const formatIndicatorTime = (date) => `${pad2(date.getHours())}:${pad2(date.getMinutes())}`;
+  const readChartTheme = () => {
+    const styles = window.getComputedStyle(document.documentElement);
+    return {
+      tick: styles.getPropertyValue("--color-text-muted").trim() || "#6d7982",
+      title: styles.getPropertyValue("--color-text-secondary").trim() || "#d0d7dc",
+      gridPrimary: styles.getPropertyValue("--chart-grid-primary").trim() || "rgba(120,120,120,0.2)",
+      gridSecondary: styles.getPropertyValue("--chart-grid-secondary").trim() || "rgba(120,120,120,0.15)",
+    };
+  };
   const formatChartIndicator = (period, dateKey, index) => {
     const selectedDate = parseDateKey(dateKey);
     if (!(selectedDate instanceof Date) || Number.isNaN(selectedDate.getTime())) {
@@ -765,6 +799,29 @@
       return { start: yearStart, end: yearEnd };
     }
     return { start, end };
+  };
+
+  const resolveNowIndicator = (pointCount) => {
+    if (!Number.isFinite(pointCount) || pointCount < 2) {
+      return null;
+    }
+    const selectedDate = parseDateKey(selectedDateKey) || new Date();
+    const { start, end } = getDateRangeForPeriod(viewState.period, selectedDate);
+    const startMs = new Date(start).getTime();
+    let endMs = new Date(end).getTime();
+    if (viewState.period === "day") {
+      endMs = startMs + 24 * 60 * 60 * 1000;
+    } else {
+      endMs += 24 * 60 * 60 * 1000;
+    }
+    if (!Number.isFinite(startMs) || !Number.isFinite(endMs) || endMs <= startMs) {
+      return null;
+    }
+    const nowMs = Date.now();
+    if (nowMs < startMs || nowMs > endMs) {
+      return null;
+    }
+    return { ratio: (nowMs - startMs) / (endMs - startMs), width: 1 };
   };
 
   const getDateRangeReadout = () => {
@@ -945,6 +1002,7 @@
   };
 
   const buildGridLines = (maxValue, width, height, tickCount = 4) => {
+    const palette = readChartTheme();
     const ticks = [];
     for (let i = 0; i <= tickCount; i += 1) {
       const value = (maxValue * i) / tickCount;
@@ -954,13 +1012,13 @@
     const lines = ticks
       .map(
         ({ y }) =>
-          `<line x1="0" y1="${y.toFixed(2)}" x2="${width}" y2="${y.toFixed(2)}" stroke="rgba(110, 110, 110, 0.55)" stroke-width="1.2" />`
+          `<line x1="0" y1="${y.toFixed(2)}" x2="${width}" y2="${y.toFixed(2)}" stroke="${palette.gridPrimary}" stroke-width="1.2" />`
       )
       .join("");
     const labels = ticks
       .map(({ value, y }) => {
         const rounded = value >= 100 ? Math.round(value) : Number(value.toFixed(1));
-        return `<text x="8" y="${Math.max(12, y - 4).toFixed(2)}" fill="#2d2d2d" font-size="12" font-weight="600">${rounded}</text>`;
+        return `<text x="8" y="${Math.max(12, y - 4).toFixed(2)}" fill="${palette.title}" font-size="12" font-weight="600">${rounded}</text>`;
       })
       .join("");
     return { lines, labels };
@@ -978,6 +1036,12 @@
     }
     const formatted = `${formatEnergyKwh(value)} kWh`;
     generationTotalEnergy.textContent = prefix ? `${prefix}: ${formatted}` : formatted;
+    if (generationDonut) {
+      const valueNode = generationDonut.querySelector(".generation-donut__center-value");
+      if (valueNode) {
+        valueNode.textContent = formatted;
+      }
+    }
   };
 
   const renderDonut = (solarEnergyKwh = 0, windEnergyKwh = 0) => {
@@ -999,7 +1063,7 @@
     const windLen = Math.max(circumference - solarLen, 0);
 
     generationDonut.innerHTML = `
-      <circle cx="${cx}" cy="${cy}" r="${r}" fill="none" stroke="#ececec" stroke-width="${strokeWidth}" />
+      <circle cx="${cx}" cy="${cy}" r="${r}" fill="none" stroke="var(--color-border-default)" stroke-width="${strokeWidth}" />
       <circle
         class="generation-donut__segment"
         data-segment="wind"
@@ -1026,7 +1090,7 @@
         stroke-dashoffset="${-windLen}"
         transform="rotate(-90 ${cx} ${cy})"
       />
-      <circle cx="${cx}" cy="${cy}" r="${r - strokeWidth / 2}" fill="#ffffff" />
+      <text class="generation-donut__center-value" x="${cx}" y="${cy + 6}" text-anchor="middle">${formatEnergyKwh(total)} kWh</text>
     `;
 
     const attachSegmentHover = (segment, value, label) => {
@@ -1424,6 +1488,44 @@
       };
     }
 
+    const marker = !forceRefresh && provider === "open_meteo" ? readOpenMeteoFullSyncMarker(currentProject.id) : null;
+    if (marker?.provider === "open_meteo") {
+      const waitUntil = Date.now() + OPEN_METEO_FULL_SYNC_WAIT_MS;
+      while (Date.now() < waitUntil) {
+        await sleep(OPEN_METEO_FULL_SYNC_WAIT_STEP_MS);
+        const [queuedSolar, queuedWind] = await Promise.all([
+          supabaseService.getWeatherCache(currentProject.id, provider, "solar", WEATHER_CACHE_DATE_KEY, cacheLookup),
+          supabaseService.getWeatherCache(currentProject.id, provider, "wind", WEATHER_CACHE_DATE_KEY, cacheLookup),
+        ]);
+        const queuedOpenMeteoCacheLooksFull =
+          provider !== "open_meteo" ||
+          ((Array.isArray(queuedSolar?.payload) ? queuedSolar.payload.length : 0) >= POINTS_PER_DAY * 60 &&
+            (Array.isArray(queuedWind?.payload) ? queuedWind.payload.length : 0) >= POINTS_PER_DAY * 60);
+        if (
+          isFreshCache(queuedSolar) &&
+          isFreshCache(queuedWind) &&
+          queuedSolar?.payload &&
+          queuedWind?.payload &&
+          queuedOpenMeteoCacheLooksFull
+        ) {
+          return {
+            provider,
+            rawSolarRecords: queuedSolar.payload,
+            rawWindRecords: queuedWind.payload,
+            timeZone:
+              queuedSolar.timezone ||
+              queuedWind.timezone ||
+              (await fetchTimeZone({ lat: currentProject.lat, lng: currentProject.lng })),
+            metadata: {
+              fetchMode: "cache_after_background_sync",
+              requestStartDate: null,
+              requestEndDate: null,
+            },
+          };
+        }
+      }
+    }
+
     const weatherResponse = await fetch(
       buildUrl(WEATHER_PROXY_ENDPOINT, {
         provider,
@@ -1443,34 +1545,38 @@
     const timeZone = await fetchTimeZone({ lat: currentProject.lat, lng: currentProject.lng });
     const fetchedAt = new Date().toISOString();
 
-    await Promise.all([
-      supabaseService.upsertWeatherCache({
-        projectId: currentProject.id,
-        provider,
-        dataset: "solar",
-        dateKey: WEATHER_CACHE_DATE_KEY,
-        sourceYear,
-        intervalMinutes: WEATHER_INTERVAL_MINUTES,
-        wkt,
-        timezone: timeZone,
-        source: weatherPayload?.meta?.provider || provider,
-        fetchedAt,
-        payload: rawSolarRecords,
-      }),
-      supabaseService.upsertWeatherCache({
-        projectId: currentProject.id,
-        provider,
-        dataset: "wind",
-        dateKey: WEATHER_CACHE_DATE_KEY,
-        sourceYear,
-        intervalMinutes: WEATHER_INTERVAL_MINUTES,
-        wkt,
-        timezone: timeZone,
-        source: weatherPayload?.meta?.provider || provider,
-        fetchedAt,
-        payload: rawWindRecords,
-      }),
-    ]);
+    try {
+      await Promise.all([
+        supabaseService.upsertWeatherCache({
+          projectId: currentProject.id,
+          provider,
+          dataset: "solar",
+          dateKey: WEATHER_CACHE_DATE_KEY,
+          sourceYear,
+          intervalMinutes: WEATHER_INTERVAL_MINUTES,
+          wkt,
+          timezone: timeZone,
+          source: weatherPayload?.meta?.provider || provider,
+          fetchedAt,
+          payload: rawSolarRecords,
+        }),
+        supabaseService.upsertWeatherCache({
+          projectId: currentProject.id,
+          provider,
+          dataset: "wind",
+          dateKey: WEATHER_CACHE_DATE_KEY,
+          sourceYear,
+          intervalMinutes: WEATHER_INTERVAL_MINUTES,
+          wkt,
+          timezone: timeZone,
+          source: weatherPayload?.meta?.provider || provider,
+          fetchedAt,
+          payload: rawWindRecords,
+        }),
+      ]);
+    } catch (cacheError) {
+      console.warn("[Generation] Weather cache write failed; continuing with fetched payload.", cacheError);
+    }
 
     return {
       provider,
@@ -1864,16 +1970,19 @@
     });
   };
 
-  const buildGenerationChartProps = ({ labels = [], solar = [], wind = [], total = [], yTitle = "Generation (kWh)" } = {}) => ({
+  const buildGenerationChartProps = ({ labels = [], solar = [], wind = [], total = [], yTitle = "Generation (kWh)" } = {}) => {
+    const palette = readChartTheme();
+    return {
     type: "line",
     className: "generation-chart",
     ariaLabel: "Typical generation chart",
     labels,
+    nowIndicator: resolveNowIndicator(labels.length),
     scales: {
       x: {
-        grid: { color: "rgba(120,120,120,0.15)" },
+        grid: { color: palette.gridSecondary },
         ticks: {
-          color: "#353535",
+          color: palette.tick,
           autoSkip: false,
           maxRotation: 0,
           callback(value, index) {
@@ -1890,9 +1999,9 @@
         type: "linear",
         stacked: true,
         min: 0,
-        title: { display: true, text: yTitle, color: "#2d2d2d", font: { weight: "700" } },
-        ticks: { color: "#2d2d2d" },
-        grid: { color: "rgba(120,120,120,0.2)" },
+        title: { display: true, text: yTitle, color: palette.title, font: { weight: "700" } },
+        ticks: { color: palette.tick },
+        grid: { color: palette.gridPrimary },
       },
     },
     datasets: [
@@ -1918,7 +2027,7 @@
         label: "Total",
         data: total,
         yAxisID: "y",
-        borderColor: "#000000",
+        borderColor: palette.title,
         backgroundColor: "transparent",
         fill: false,
         hidden: !seriesVisibility.total,
@@ -1926,12 +2035,19 @@
     ],
     yTitle,
     minY: 0,
-  });
+    };
+  };
 
   const renderChart = () => {
     ensureGenerationChartBridge();
     if (!generationChartBridge) {
       return;
+    }
+
+    if (generationChartFrame) {
+      const nextState = weatherDay.loading ? "loading" : weatherDay.error ? "error" : weatherDay.loaded ? "ready" : "idle";
+      generationChartFrame.setAttribute("data-state", nextState);
+      generationChartFrame.setAttribute("aria-busy", String(Boolean(weatherDay.loading)));
     }
 
     if (assetsChartLoading) {

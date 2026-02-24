@@ -44,7 +44,11 @@
     },
   };
 
-  const MODE_ORDER = ["real_time", "day_ahead", "tariff"];
+  const HEALTH_FEEDS = Object.freeze([
+    { key: "tariff", serviceType: "tariff", marketMode: "tariff", label: "Tariff" },
+    { key: "lmp_rt", serviceType: "lmp", marketMode: "real_time", label: "LMP-RT" },
+    { key: "lmp_da", serviceType: "lmp", marketMode: "day_ahead", label: "LMP-DA" },
+  ]);
   const RATE_FEED_PLAN = [
     { serviceType: "lmp", marketMode: "real_time" },
     { serviceType: "lmp", marketMode: "day_ahead" },
@@ -55,7 +59,16 @@
     day_ahead: "Day-Ahead",
     tariff: "Tariff",
   };
-  const STATUS_SCORE = { missing: 0, partial: 1, good: 2 };
+  const REGION_MAP_ASSETS = {
+    CAISO: "/assets/img/iso/caiso.png",
+    ERCOT: "/assets/img/iso/ercot.png",
+    PJM: "/assets/img/iso/pjm.png",
+    MISO: "/assets/img/iso/miso.png",
+    NYISO: "/assets/img/iso/nyiso.png",
+    "ISO-NE": "/assets/img/iso/iso-ne.png",
+    SPP: "/assets/img/iso/spp.png",
+    "NON-ISO": "/assets/img/iso/non-iso.png",
+  };
 
   const supabaseService = window.EnergySupabaseService;
   const queryParams = new URLSearchParams(window.location.search);
@@ -74,6 +87,8 @@
 
   const ratesProviderLabel = document.getElementById("rates-provider-label");
   const ratesRegionLabel = document.getElementById("rates-region-label");
+  const ratesBackfillStatus = document.getElementById("rates-backfill-status");
+  const ratesRegionMapImage = document.getElementById("rates-region-map-image");
   const ratesRefreshButton = document.getElementById("rates-refresh-button");
   const ratesMarketModeGroup = document.getElementById("rates-market-mode-group");
   const ratesMarketLabel = document.getElementById("rates-market-label");
@@ -81,6 +96,7 @@
   const ratesMarketButtons = Array.from(document.querySelectorAll("[data-rates-market]"));
   const ratesControlStripRoot = document.getElementById("rates-control-strip-root");
   const ratesChartLegendRoot = document.getElementById("rates-chart-legend-root");
+  const ratesChartFrame = document.getElementById("rates-chart-frame");
   const ratesChartRoot = document.getElementById("rates-chart-root");
   const ratesAxis = document.getElementById("rates-axis");
   const ratesChartLoading = document.getElementById("rates-chart-loading");
@@ -103,6 +119,22 @@
     const parsed = new Date(timestamp);
     if (Number.isNaN(parsed.getTime())) return "--";
     return parsed.toLocaleString();
+  };
+  const escapeHtml = (value) =>
+    String(value ?? "")
+      .replaceAll("&", "&amp;")
+      .replaceAll("<", "&lt;")
+      .replaceAll(">", "&gt;")
+      .replaceAll('"', "&quot;")
+      .replaceAll("'", "&#39;");
+  const readChartTheme = () => {
+    const styles = window.getComputedStyle(document.documentElement);
+    return {
+      tick: styles.getPropertyValue("--color-text-muted").trim() || "#6d7982",
+      title: styles.getPropertyValue("--color-text-secondary").trim() || "#d0d7dc",
+      gridPrimary: styles.getPropertyValue("--chart-grid-primary").trim() || "rgba(120,120,120,0.2)",
+      gridTransparent: "rgba(120,120,120,0)",
+    };
   };
 
   const detectLikelyMwhScale = (points = []) => {
@@ -236,6 +268,29 @@
     return { start, end };
   };
 
+  const resolveNowIndicator = (pointCount) => {
+    if (!Number.isFinite(pointCount) || pointCount < 2) {
+      return null;
+    }
+    const selectedDate = parseDateKey(viewState.selectedDateKey) || new Date();
+    const { start, end } = getDateRangeForPeriod(viewState.period, selectedDate);
+    const startMs = new Date(start).getTime();
+    let endMs = new Date(end).getTime();
+    if (viewState.period === "day") {
+      endMs = startMs + 24 * 60 * 60 * 1000;
+    } else {
+      endMs += 1;
+    }
+    if (!Number.isFinite(startMs) || !Number.isFinite(endMs) || endMs <= startMs) {
+      return null;
+    }
+    const nowMs = Date.now();
+    if (nowMs < startMs || nowMs > endMs) {
+      return null;
+    }
+    return { ratio: (nowMs - startMs) / (endMs - startMs), width: 1 };
+  };
+
   const buildActiveWindow = () => {
     const now = new Date();
     const start = new Date(now);
@@ -261,6 +316,8 @@
     apiVersion: "v2",
     qualityStatus: "unknown",
     lastSource: "",
+    lastSourceUrl: "",
+    lastSourceNode: "",
     lastReason: "",
     lastFetchedAt: null,
     rawPoints: [],
@@ -277,6 +334,7 @@
   let ratesChartBridge = null;
   let ratesControlStripBridge = null;
   let ratesLegendBridge = null;
+  let backfillStatusTimer = null;
 
   const getScopedUiKey = (projectIdValue, suffix) => {
     if (!projectIdValue) return "";
@@ -328,6 +386,23 @@
   const setLoading = (loading) => {
     if (ratesChartLoading) ratesChartLoading.hidden = !loading;
     if (ratesRefreshButton) ratesRefreshButton.disabled = loading;
+    if (ratesChartFrame) {
+      ratesChartFrame.setAttribute("data-state", loading ? "loading" : "idle");
+      ratesChartFrame.setAttribute("aria-busy", String(Boolean(loading)));
+    }
+  };
+
+  const applyChartFeedbackState = () => {
+    if (!ratesChartFrame) return;
+    if (ratesChartLoading && !ratesChartLoading.hidden) {
+      ratesChartFrame.setAttribute("data-state", "loading");
+      return;
+    }
+    if ((ratesSourceWarning && !ratesSourceWarning.hidden) || (ratesEmptyWindow && !ratesEmptyWindow.hidden)) {
+      ratesChartFrame.setAttribute("data-state", "warning");
+      return;
+    }
+    ratesChartFrame.setAttribute("data-state", viewState.displaySeries.length ? "ready" : "idle");
   };
 
   const applyToggleState = (buttons, activeValue, attribute) => {
@@ -553,6 +628,50 @@
   const updateProviderLabels = () => {
     if (ratesProviderLabel) ratesProviderLabel.textContent = `Utility: ${viewState.utilityName || "--"}`;
     if (ratesRegionLabel) ratesRegionLabel.textContent = `Market Region: ${viewState.regionId || "--"}`;
+    if (ratesRegionMapImage) {
+      ratesRegionMapImage.src = REGION_MAP_ASSETS[viewState.regionId] || REGION_MAP_ASSETS["NON-ISO"];
+    }
+  };
+
+  const renderBackfillStatus = (job) => {
+    if (!ratesBackfillStatus) return;
+    if (!job || job.status === "idle") {
+      ratesBackfillStatus.textContent = "Rates Backfill: Not started";
+      return;
+    }
+    const pct = Number(job.progressPct || 0);
+    const completed = Number(job.completedTasks || 0);
+    const total = Number(job.totalTasks || 0);
+    if (job.status === "completed") {
+      ratesBackfillStatus.textContent = "Rates Backfill: Completed";
+      return;
+    }
+    if (job.status === "failed") {
+      const err = String(job.error || "failed");
+      ratesBackfillStatus.textContent = `Rates Backfill: Failed (${err})`;
+      return;
+    }
+    ratesBackfillStatus.textContent = `Rates Backfill: ${job.status} (${pct}% - ${completed}/${total})`;
+  };
+
+  const fetchBackfillStatus = async () => {
+    if (!currentProject?.id || !ratesBackfillStatus) return;
+    try {
+      const statusUrl = buildUrl(`${RATES_PROXY_ENDPOINT}/backfill/status`, { projectId: currentProject.id });
+      const response = await fetch(statusUrl, { cache: "no-store" });
+      if (!response.ok) return;
+      const payload = await response.json();
+      renderBackfillStatus(payload?.job || null);
+    } catch (error) {}
+  };
+
+  const startBackfillStatusPolling = () => {
+    if (!ratesBackfillStatus) return;
+    if (backfillStatusTimer) clearInterval(backfillStatusTimer);
+    void fetchBackfillStatus();
+    backfillStatusTimer = window.setInterval(() => {
+      void fetchBackfillStatus();
+    }, 5000);
   };
 
   const updateMarketModeVisibility = () => {
@@ -674,18 +793,24 @@
     const hasValues = hasRows && series.some((point) => point?.value != null);
     ratesEmptyWindow.hidden = !hasRows || hasValues;
     if (!ratesEmptyWindow.hidden) {
-      const sourceText = viewState.lastSource ? ` Source: ${viewState.lastSource}.` : "";
+      const sourceValue = viewState.lastSourceUrl || viewState.lastSource;
+      const sourceText = sourceValue ? ` Source: ${sourceValue}.` : "";
       ratesEmptyWindow.textContent = `No published rates in the selected window for this mode.${sourceText}`;
     }
+    applyChartFeedbackState();
   };
 
-  const sourceLooksFallback = ({ source = "", reason = "" }) => {
+  const sourceLooksFallback = ({ source = "", reason = "", code = "" }) => {
     const sourceText = String(source || "").toLowerCase();
     const reasonText = String(reason || "").toLowerCase();
+    const codeText = String(code || "").toLowerCase();
     return (
       sourceText.includes("fallback") ||
       reasonText.includes("source_unavailable") ||
-      reasonText.includes("region_not_supported")
+      reasonText.includes("region_not_supported") ||
+      reasonText.includes("request_failed") ||
+      codeText.includes("error") ||
+      codeText.startsWith("http_")
     );
   };
 
@@ -694,8 +819,9 @@
     const show = sourceLooksFallback({ source: viewState.lastSource, reason: viewState.lastReason });
     ratesSourceWarning.hidden = !show;
     if (!show) return;
-    const sourceText = viewState.lastSource || "fallback_modeled_source";
+    const sourceText = viewState.lastSourceUrl || viewState.lastSource || "fallback_modeled_source";
     ratesSourceWarning.textContent = `❌ Live market source unavailable. Showing fallback modeled rates. Source: ${sourceText}`;
+    applyChartFeedbackState();
   };
 
   const ensureChartBridge = () => {
@@ -713,10 +839,14 @@
   };
 
   const buildChartProps = ({ labels = [], values = [] } = {}) => ({
+    ...(() => {
+      const palette = readChartTheme();
+      return {
     type: "line",
     className: "generation-chart",
     ariaLabel: "Rates time series chart",
     labels,
+    nowIndicator: resolveNowIndicator(labels.length),
     scales: {
       x: {
         grid: {
@@ -726,11 +856,11 @@
             const shouldShow =
               window.EnergyCharts?.shouldShowAxisTick?.(labelsList, index) ??
               (index % Math.max(1, Math.ceil((labelsList?.length || 0) / 12)) === 0);
-            return shouldShow ? "rgba(120,120,120,0.2)" : "rgba(120,120,120,0)";
+            return shouldShow ? palette.gridPrimary : palette.gridTransparent;
           },
         },
         ticks: {
-          color: "#353535",
+          color: palette.tick,
           autoSkip: false,
           maxRotation: 0,
           callback(value, index) {
@@ -746,12 +876,12 @@
       },
       y: {
         min: 0,
-        grid: { color: "rgba(120,120,120,0.2)" },
-        ticks: { color: "#353535" },
+        grid: { color: palette.gridPrimary },
+        ticks: { color: palette.tick },
         title: {
           display: true,
           text: `Rate (${getDisplayUnitLabel()})`,
-          color: "#2d2d2d",
+          color: palette.title,
           font: { weight: "700" },
         },
       },
@@ -760,7 +890,7 @@
       {
         label: "Rate",
         data: values,
-        borderColor: "#000000",
+        borderColor: palette.title,
         backgroundColor: "transparent",
         tension: 0.22,
         borderWidth: 2,
@@ -775,6 +905,8 @@
       const decimals = viewState.displayUnit === "mwh" ? 2 : 4;
       return `Rate: ${Number(value).toFixed(decimals)} ${getDisplayUnitLabel()}`;
     },
+      };
+    })(),
   });
 
   const renderChart = () => {
@@ -802,32 +934,62 @@
     renderMissingBands(series);
     updateEmptyWindowBanner(series);
     updateSourceWarning();
+    applyChartFeedbackState();
   };
 
-  const summarizeRegionRows = (rows) => {
-    const status = rows.reduce((acc, row) =>
-      STATUS_SCORE[row.status] < STATUS_SCORE[acc] ? row.status : acc,
-    "good");
-    const expectedHours = rows.reduce((sum, row) => sum + Number(row.expectedHours || 0), 0);
-    const missingHours = rows.reduce((sum, row) => sum + Number(row.missingHours || 0), 0);
-    const latest = rows.reduce((max, row) => {
-      const ts = new Date(row.lastUpdatedAt || 0).getTime();
-      return ts > max ? ts : max;
-    }, 0);
-    return {
-      status,
-      expectedHours,
-      missingHours,
-      lastUpdatedAt: latest ? new Date(latest).toISOString() : null,
-    };
+  const getFeedKey = (serviceType, marketMode) => {
+    if (serviceType === "tariff") return "tariff";
+    if (marketMode === "real_time") return "lmp_rt";
+    if (marketMode === "day_ahead") return "lmp_da";
+    return "";
   };
+
+  const getActiveFeedKey = () => getFeedKey(viewState.serviceType, viewState.serviceType === "tariff" ? "tariff" : viewState.marketMode);
+
+  const resolveDisplaySource = (row) =>
+    String(
+      row?.details?.sourceUrl ||
+      row?.details?.latestFailureSourceUrl ||
+      row?.source ||
+      ""
+    ).trim();
 
   const formatSourceCell = (row) => {
-    const source = row?.source || "--";
+    const source = resolveDisplaySource(row);
     const reason = row?.details?.reason || "";
-    const isFallback = sourceLooksFallback({ source, reason });
-    if (!isFallback) return source;
-    return `<span class="rates-source--fallback">❌ ${source}</span>`;
+    const code = row?.details?.latestFailureCode || row?.details?.upstreamErrorCode || "";
+    if (!source) return '<span class="rates-source--fallback">❌ Not connected</span>';
+    const isFallback = sourceLooksFallback({ source: row?.source || "", reason, code });
+    const escaped = escapeHtml(source);
+    if (!isFallback) return `<span class="rates-source-value" title="${escaped}">${escaped}</span>`;
+    const codeBadge = code ? `${escapeHtml(code)} ` : "";
+    return `<span class="rates-source--fallback" title="${escaped}">❌ ${codeBadge}${escaped}</span>`;
+  };
+
+  const buildFeedDebugContent = (feed, row) => {
+    const details = row?.details || {};
+    const lastSuccessAt = row?.lastUpdatedAt || "";
+    const latestFailedAt = details.latestFailureAt || "";
+    const latestFailedSourceUrl = details.latestFailureSourceUrl || "--";
+    const latestFailedSource = details.latestFailureSource || "--";
+    const latestFailedCode = details.latestFailureCode || "--";
+    const sourceNode = details.sourceNode || "--";
+    const latestFailedMessage = details.latestFailureMessage || details.latestFailureReason || "No failure recorded.";
+    const latestFailedReason = details.latestFailureReason || "--";
+    return `
+      <div class="rates-health-detail__column">
+        <span class="rates-health-detail__label">${escapeHtml(feed.label)}</span>
+        <span><strong>Source:</strong> ${formatSourceCell(row)}</span>
+        <span><strong>Last success:</strong> ${escapeHtml(formatTimestamp(lastSuccessAt))}</span>
+        <span><strong>Last failure:</strong> ${escapeHtml(formatTimestamp(latestFailedAt))}</span>
+        <span><strong>Failure URL:</strong> ${escapeHtml(latestFailedSourceUrl)}</span>
+        <span><strong>Failure source:</strong> ${escapeHtml(latestFailedSource)}</span>
+        <span><strong>Failure code:</strong> ${escapeHtml(latestFailedCode)}</span>
+        <span><strong>Failure reason:</strong> ${escapeHtml(latestFailedReason)}</span>
+        <span><strong>Failure message:</strong> ${escapeHtml(latestFailedMessage)}</span>
+        <span><strong>Source node / settlement point:</strong> ${escapeHtml(sourceNode)}</span>
+      </div>
+    `;
   };
 
   const renderHealthTable = () => {
@@ -838,64 +1000,79 @@
       return;
     }
 
-    const grouped = rows.reduce((acc, row) => {
-      const key = row.regionId || "UNKNOWN";
-      if (!acc[key]) acc[key] = [];
-      acc[key].push(row);
-      return acc;
-    }, {});
+    const grouped = rows
+      .filter((row) => row.regionId && row.regionId !== "NON-ISO")
+      .reduce((acc, row) => {
+        const regionId = row.regionId;
+        if (!acc[regionId]) {
+          acc[regionId] = {
+            regionId,
+            regionLabel: row.regionLabel || regionId,
+            feeds: {},
+          };
+        }
+        const feedKey = getFeedKey(row.serviceType, row.marketMode);
+        if (!feedKey) return acc;
+        acc[regionId].feeds[feedKey] = row;
+        return acc;
+      }, {});
 
-    ratesHealthBody.innerHTML = Object.entries(grouped)
-      .map(([regionId, regionRows]) => {
-        const regionLabel = regionRows[0]?.regionLabel || regionId;
-        const summary = summarizeRegionRows(regionRows);
-        const coverage = `${Math.max(0, summary.expectedHours - summary.missingHours)}/${summary.expectedHours}`;
+    const sortedRegions = Object.values(grouped).sort((a, b) => String(a.regionId).localeCompare(String(b.regionId)));
+    if (!sortedRegions.length) {
+      ratesHealthBody.innerHTML = '<tr><td colspan="7">No ISO status data yet.</td></tr>';
+      return;
+    }
+
+    const activeFeedKey = getActiveFeedKey();
+    ratesHealthBody.innerHTML = sortedRegions
+      .map((region) => {
+        const regionId = region.regionId;
+        const regionLabel = region.regionLabel;
         const isExpanded = viewState.expandedRegions.has(regionId);
-        const summaryFallback = regionRows.find((row) =>
-          sourceLooksFallback({ source: row?.source, reason: row?.details?.reason })
-        );
-        const summarySource = summaryFallback?.source || regionRows.find((row) => row.source)?.source || "--";
-        const summaryReason = summaryFallback?.details?.reason || "";
-        const summarySourceUnit = regionRows.find((row) => row.sourceUnit)?.sourceUnit || "--";
-        const sortedRows = MODE_ORDER.map((mode) => regionRows.find((row) => row.marketMode === mode)).filter(Boolean);
+        const rowCells = HEALTH_FEEDS.map((feed) => {
+          const row = region.feeds[feed.key] || {};
+          const isActive = regionId === viewState.regionId && activeFeedKey === feed.key;
+          const activeClass = isActive ? " rates-health-cell--active" : "";
+          return `
+            <td class="rates-health-cell${activeClass}">${escapeHtml(formatTimestamp(row.lastUpdatedAt))}</td>
+            <td class="rates-health-cell${activeClass}">${formatSourceCell(row)}</td>
+          `;
+        }).join("");
+
         const parent = `
-          <tr class="rates-health-parent" data-region-id="${regionId}">
+          <tr class="rates-health-parent" data-region-id="${escapeHtml(regionId)}">
             <td>
               <span class="rates-health-parent__region">
                 <span class="rates-health-parent__caret">${isExpanded ? "v" : ">"}</span>
-                ${regionLabel}
+                ${escapeHtml(regionLabel)}
               </span>
             </td>
-            <td>All</td>
-            <td><span class="rates-status rates-status--${summary.status}">${summary.status}</span></td>
-            <td>${formatTimestamp(summary.lastUpdatedAt)}</td>
-            <td>${formatSourceCell({ source: summarySource, details: { reason: summaryReason } })}</td>
-            <td>${summarySourceUnit}</td>
-            <td>${coverage}</td>
+            ${rowCells}
           </tr>
         `;
-
         if (!isExpanded) return parent;
 
-        const subRows = sortedRows
-          .map((row) => {
-            const subCoverage = `${Math.max(0, row.expectedHours - row.missingHours)}/${row.expectedHours}`;
-            const reason = row?.details?.reason ? `Reason: ${row.details.reason}` : "";
-            return `
-              <tr class="rates-health-subrow" data-region-id="${regionId}">
-                <td>${MODE_LABEL[row.marketMode] || row.marketMode}</td>
-                <td>${row.serviceType.toUpperCase()}</td>
-                <td><span class="rates-status rates-status--${row.status}" title="${reason}">${row.status}</span></td>
-                <td>${formatTimestamp(row.lastUpdatedAt)}</td>
-                <td>${formatSourceCell(row)}</td>
-                <td>${row.sourceUnit || "--"}</td>
-                <td>${subCoverage}</td>
-              </tr>
-            `;
-          })
-          .join("");
-
-        return parent + subRows;
+        const detailCells = HEALTH_FEEDS.map((feed) => `
+          <td colspan="2" class="rates-health-detail-cell">
+            ${buildFeedDebugContent(feed, region.feeds[feed.key] || {})}
+          </td>
+        `).join("");
+        const detailsRow = `
+          <tr class="rates-health-subrow" data-region-id="${escapeHtml(regionId)}">
+            <td class="rates-health-detail-title">Diagnostics</td>
+            ${detailCells}
+          </tr>
+        `;
+        const detailsMetaRow = `
+          <tr class="rates-health-subrow rates-health-subrow--meta" data-region-id="${escapeHtml(regionId)}">
+            <td colspan="7">
+              <div class="rates-health-detail">
+                <p class="rates-health-detail__title">Failure diagnostics for ${escapeHtml(regionLabel)}</p>
+              </div>
+            </td>
+          </tr>
+        `;
+        return parent + detailsMetaRow + detailsRow;
       })
       .join("");
   };
@@ -976,9 +1153,13 @@
       const cachedAt = new Date(cached?.fetched_at || 0).getTime();
       const ttl = RATE_CACHE_TTL_MS[marketMode] || RATE_CACHE_TTL_MS.day_ahead;
       const cacheSchema = cached?.payload?.metadata?.cacheSchemaVersion || "";
+      const cachedSource = cached?.payload?.metadata?.source || "";
+      const cachedReason = cached?.payload?.metadata?.details?.reason || "";
+      const isFallbackCache = sourceLooksFallback({ source: cachedSource, reason: cachedReason });
       if (
         cached?.payload?.points &&
         cacheSchema === RATES_CACHE_SCHEMA_VERSION &&
+        !isFallbackCache &&
         Number.isFinite(cachedAt) &&
         Date.now() - cachedAt <= ttl
       ) {
@@ -988,6 +1169,8 @@
         viewState.apiVersion = cached?.payload?.metadata?.apiVersion || "v2";
         viewState.qualityStatus = cached?.payload?.metadata?.qualityStatus || "unknown";
         viewState.lastSource = cached?.payload?.metadata?.source || "";
+        viewState.lastSourceUrl = cached?.payload?.metadata?.details?.sourceUrl || cached?.source || "";
+        viewState.lastSourceNode = cached?.payload?.metadata?.details?.sourceNode || "";
         viewState.lastReason = cached?.payload?.metadata?.details?.reason || "";
         viewState.lastFetchedAt = cached?.payload?.metadata?.fetchedAt || cached?.fetched_at || null;
         const resolvedSourceUnit = resolveSourceUnit({
@@ -1020,17 +1203,9 @@
       }
     }
 
-    const ratesUrl = buildUrl(RATES_TIMESERIES_V2_ENDPOINT, {
-      lat: currentProject.lat,
-      lng: currentProject.lng,
-      serviceType: viewState.serviceType,
-      marketMode,
-      start: windowStart,
-      end: windowEnd,
-    });
-    let response = await fetch(ratesUrl, { cache: "no-store" });
-    if (!response.ok && response.status === 404) {
-      const legacyUrl = buildUrl(`${RATES_PROXY_ENDPOINT}/timeseries`, {
+    try {
+      const ratesUrl = buildUrl(RATES_TIMESERIES_V2_ENDPOINT, {
+        projectId: currentProject.id,
         lat: currentProject.lat,
         lng: currentProject.lng,
         serviceType: viewState.serviceType,
@@ -1038,95 +1213,154 @@
         start: windowStart,
         end: windowEnd,
       });
-      response = await fetch(legacyUrl, { cache: "no-store" });
-    }
-    if (!response.ok) throw new Error("Failed to retrieve rate timeseries.");
-    const payload = await response.json();
-    const metadata = payload?.metadata || {};
-    viewState.apiVersion = metadata.apiVersion || "v2";
-    const payloadPoints = sanitizePoints(payload?.points);
-    const resolvedSourceUnit = resolveSourceUnit({
-      sourceUnit: payload?.metadata?.sourceUnit || "",
-      unit: payload?.metadata?.unit || "",
-      serviceType: viewState.serviceType,
-      points: payloadPoints,
-    });
-    const repairedPayload = repairLikelyLegacyLmpScale({
-      points: payloadPoints,
-      serviceType: viewState.serviceType,
-      sourceUnit: resolvedSourceUnit,
-    });
-    const repairedMwhLabel = repairLikelyMislabeledLmpMwh({
-      points: repairedPayload.points,
-      serviceType: viewState.serviceType,
-      sourceUnit: repairedPayload.sourceUnit,
-    });
-    viewState.sourceUnit = repairedMwhLabel.sourceUnit;
-    viewState.qualityStatus = metadata.qualityStatus || "unknown";
-    viewState.lastSource = metadata.source || "";
-    viewState.lastReason = metadata?.details?.reason || "";
-    viewState.lastFetchedAt = metadata.fetchedAt || new Date().toISOString();
-    viewState.rawPoints = repairedMwhLabel.points;
-    refreshAvailableIntervals();
-    if (shouldPersistRateCache(metadata)) {
-      await supabaseService.upsertRateSeriesCache({
-        projectId: currentProject.id,
-        regionId: payload?.metadata?.regionId || viewState.regionId || "NON-ISO",
+      let response = await fetch(ratesUrl, { cache: "no-store" });
+      if (!response.ok && response.status === 404) {
+        const legacyUrl = buildUrl(`${RATES_PROXY_ENDPOINT}/timeseries`, {
+          projectId: currentProject.id,
+          lat: currentProject.lat,
+          lng: currentProject.lng,
+          serviceType: viewState.serviceType,
+          marketMode,
+          start: windowStart,
+          end: windowEnd,
+        });
+        response = await fetch(legacyUrl, { cache: "no-store" });
+      }
+      if (!response.ok) {
+        const responseText = await response.text().catch(() => "");
+        throw new Error(`Failed to retrieve rate timeseries. HTTP ${response.status}. ${responseText}`.trim());
+      }
+      const payload = await response.json();
+      const metadata = payload?.metadata || {};
+      viewState.apiVersion = metadata.apiVersion || "v2";
+      const payloadPoints = sanitizePoints(payload?.points);
+      const resolvedSourceUnit = resolveSourceUnit({
+        sourceUnit: payload?.metadata?.sourceUnit || "",
+        unit: payload?.metadata?.unit || "",
         serviceType: viewState.serviceType,
-        marketMode,
-        windowStart,
-        windowEnd,
-        timezone: payload?.metadata?.timezone || viewState.timezone || "UTC",
-        source: payload?.metadata?.source || "rates_proxy_phase2",
-        sourceUnit: repairedMwhLabel.sourceUnit,
-        qualityStatus: metadata.qualityStatus || "unknown",
-        apiVersion: metadata.apiVersion || "v2",
-        ingestNotes: {
-          reason: metadata?.details?.reason || null,
-          fetchedFrom: "timeseries",
-        },
-        fetchedAt: payload?.metadata?.fetchedAt || new Date().toISOString(),
-        payload: {
-          points: repairedPayload.points,
-          missingIntervals: payload?.missingIntervals || [],
-          metadata: {
-            ...(payload?.metadata || {}),
-            cacheSchemaVersion: RATES_CACHE_SCHEMA_VERSION,
-            apiVersion: metadata.apiVersion || "v2",
-            qualityStatus: metadata.qualityStatus || "unknown",
-            unit: payload?.metadata?.unit || repairedMwhLabel.sourceUnit,
-            sourceUnit:
-              payload?.metadata?.sourceUnit || payload?.metadata?.unit || repairedMwhLabel.sourceUnit,
-          },
-        },
+        points: payloadPoints,
       });
-    } else {
-      console.warn("Skipping rate cache write for fallback/unavailable source response.");
-    }
-    const missingHours = repairedMwhLabel.points.reduce((sum, point) => (point?.value == null ? sum + 1 : sum), 0);
-    void supabaseService
-      .insertRateIngestRun({
-        projectId: currentProject.id,
-        regionId: payload?.metadata?.regionId || viewState.regionId || "NON-ISO",
+      const repairedPayload = repairLikelyLegacyLmpScale({
+        points: payloadPoints,
         serviceType: viewState.serviceType,
-        marketMode,
-        source: payload?.metadata?.source || "rates_proxy_phase2",
-        sourceUnit: repairedMwhLabel.sourceUnit,
-        apiVersion: metadata.apiVersion || "v2",
-        status: missingHours > 0 ? "partial" : "success",
-        rowCount: repairedMwhLabel.points.length,
-        missingHours,
-        message: metadata?.details?.reason || null,
-        details: {
-          qualityStatus: metadata?.qualityStatus || null,
-        },
-        windowStart,
-        windowEnd,
-        runStartedAt: metadata?.fetchedAt || new Date().toISOString(),
-        runFinishedAt: new Date().toISOString(),
-      })
-      .catch(() => {});
-    if (!suppressRender) renderChart();
+        sourceUnit: resolvedSourceUnit,
+      });
+      const repairedMwhLabel = repairLikelyMislabeledLmpMwh({
+        points: repairedPayload.points,
+        serviceType: viewState.serviceType,
+        sourceUnit: repairedPayload.sourceUnit,
+      });
+      viewState.sourceUnit = repairedMwhLabel.sourceUnit;
+      viewState.qualityStatus = metadata.qualityStatus || "unknown";
+      viewState.lastSource = metadata.source || "";
+      viewState.lastSourceUrl = metadata?.details?.sourceUrl || "";
+      viewState.lastSourceNode = metadata?.details?.sourceNode || "";
+      viewState.lastReason = metadata?.details?.reason || "";
+      viewState.lastFetchedAt = metadata.fetchedAt || new Date().toISOString();
+      viewState.rawPoints = repairedMwhLabel.points;
+      refreshAvailableIntervals();
+      if (shouldPersistRateCache(metadata)) {
+        await supabaseService.upsertRateSeriesCache({
+          projectId: currentProject.id,
+          regionId: payload?.metadata?.regionId || viewState.regionId || "NON-ISO",
+          serviceType: viewState.serviceType,
+          marketMode,
+          windowStart,
+          windowEnd,
+          timezone: payload?.metadata?.timezone || viewState.timezone || "UTC",
+          source: metadata?.details?.sourceUrl || payload?.metadata?.source || "rates_proxy_phase2",
+          sourceUnit: repairedMwhLabel.sourceUnit,
+          qualityStatus: metadata.qualityStatus || "unknown",
+          apiVersion: metadata.apiVersion || "v2",
+          ingestNotes: {
+            reason: metadata?.details?.reason || null,
+            fetchedFrom: "timeseries",
+          },
+          fetchedAt: payload?.metadata?.fetchedAt || new Date().toISOString(),
+          payload: {
+            points: repairedPayload.points,
+            missingIntervals: payload?.missingIntervals || [],
+            metadata: {
+              ...(payload?.metadata || {}),
+              cacheSchemaVersion: RATES_CACHE_SCHEMA_VERSION,
+              apiVersion: metadata.apiVersion || "v2",
+              qualityStatus: metadata.qualityStatus || "unknown",
+              unit: payload?.metadata?.unit || repairedMwhLabel.sourceUnit,
+              sourceUnit:
+                payload?.metadata?.sourceUnit || payload?.metadata?.unit || repairedMwhLabel.sourceUnit,
+            },
+          },
+        });
+      } else {
+        console.warn("Skipping rate cache write for fallback/unavailable source response.");
+      }
+      const missingHours = repairedMwhLabel.points.reduce((sum, point) => (point?.value == null ? sum + 1 : sum), 0);
+      const ingestStatus =
+        String(metadata?.details?.reason || "").toLowerCase() === "source_unavailable"
+          ? "failed"
+          : missingHours > 0
+            ? "partial"
+            : "success";
+      void supabaseService
+        .insertRateIngestRun({
+          projectId: currentProject.id,
+          regionId: payload?.metadata?.regionId || viewState.regionId || "NON-ISO",
+          serviceType: viewState.serviceType,
+          marketMode,
+          source: metadata?.details?.sourceUrl || payload?.metadata?.source || "rates_proxy_phase2",
+          sourceUnit: repairedMwhLabel.sourceUnit,
+          apiVersion: metadata.apiVersion || "v2",
+          status: ingestStatus,
+          rowCount: repairedMwhLabel.points.length,
+          missingHours,
+          message: metadata?.details?.reason || null,
+          details: {
+            qualityStatus: metadata?.qualityStatus || null,
+            reason: metadata?.details?.reason || null,
+            sourceUrl: metadata?.details?.sourceUrl || null,
+            sourceNode: metadata?.details?.sourceNode || null,
+            upstreamErrorCode: metadata?.details?.upstreamErrorCode || null,
+            upstreamHttpStatus: metadata?.details?.upstreamHttpStatus ?? null,
+          },
+          windowStart,
+          windowEnd,
+          runStartedAt: metadata?.fetchedAt || new Date().toISOString(),
+          runFinishedAt: new Date().toISOString(),
+        })
+        .catch(() => {});
+      if (!suppressRender) renderChart();
+    } catch (error) {
+      const errorMessage = String(error?.message || "Failed to retrieve rate timeseries.");
+      const regionId = viewState.regionId || currentProject?.isoRegion || "NON-ISO";
+      viewState.lastSourceUrl = String(error?.sourceUrl || viewState.lastSourceUrl || "");
+      viewState.lastReason = errorMessage;
+      void supabaseService
+        .insertRateIngestRun({
+          projectId: currentProject.id,
+          regionId,
+          serviceType: viewState.serviceType,
+          marketMode,
+          source: viewState.lastSourceUrl || viewState.lastSource || "rates_proxy_phase2_request_failed",
+          sourceUnit: viewState.sourceUnit || null,
+          apiVersion: viewState.apiVersion || "v2",
+          status: "failed",
+          rowCount: 0,
+          missingHours: 0,
+          message: errorMessage,
+          details: {
+            reason: "request_failed",
+            errorMessage,
+            sourceUrl: viewState.lastSourceUrl || null,
+            errorCode: String(error?.code || "REQUEST_FAILED"),
+          },
+          windowStart,
+          windowEnd,
+          runStartedAt: new Date().toISOString(),
+          runFinishedAt: new Date().toISOString(),
+        })
+        .catch(() => {});
+      throw error;
+    }
   };
 
   const fetchHealth = async () => {
@@ -1136,6 +1370,7 @@
     const windowEnd = end.toISOString();
     const fetchHealthRows = async (serviceType) => {
       const healthUrl = buildUrl(`${RATES_PROXY_ENDPOINT}/health`, {
+        projectId: currentProject.id,
         lat: currentProject.lat,
         lng: currentProject.lng,
         serviceType,
@@ -1164,15 +1399,81 @@
       if (!isActiveRow) return row;
       const details = { ...(row.details || {}) };
       if (viewState.lastReason) details.reason = viewState.lastReason;
+      if (viewState.lastSourceUrl) details.sourceUrl = viewState.lastSourceUrl;
+      if (viewState.lastSourceNode) details.sourceNode = viewState.lastSourceNode;
       return {
         ...row,
-        source: viewState.lastSource || row.source,
+        source: viewState.lastSourceUrl || viewState.lastSource || row.source,
         sourceUnit: viewState.sourceUnit || row.sourceUnit,
         lastUpdatedAt: viewState.lastFetchedAt || row.lastUpdatedAt,
         details,
       };
     });
-    viewState.healthRows = mergedRows;
+
+    const ingestRuns = typeof supabaseService.listRateIngestRuns === "function"
+      ? await supabaseService.listRateIngestRuns(currentProject.id, { limit: 1000 }).catch(() => [])
+      : [];
+    const runsByFeed = (Array.isArray(ingestRuns) ? ingestRuns : []).reduce((acc, run) => {
+      const regionId = run?.region_id || "NON-ISO";
+      const serviceType = run?.service_type || "lmp";
+      const marketMode = run?.market_mode || (serviceType === "tariff" ? "tariff" : "day_ahead");
+      const key = `${regionId}|${serviceType}|${marketMode}`;
+      if (!acc[key]) {
+        acc[key] = {
+          latestAny: null,
+          latestSuccess: null,
+          latestFailed: null,
+        };
+      }
+      const bucket = acc[key];
+      if (!bucket.latestAny) bucket.latestAny = run;
+      if (!bucket.latestSuccess && (run?.status === "success" || run?.status === "partial")) {
+        bucket.latestSuccess = run;
+      }
+      if (!bucket.latestFailed && run?.status === "failed") {
+        bucket.latestFailed = run;
+      }
+      return acc;
+    }, {});
+
+    viewState.healthRows = mergedRows.map((row) => {
+      const key = `${row.regionId}|${row.serviceType}|${row.marketMode}`;
+      const runInfo = runsByFeed[key] || {};
+      const latestSuccess = runInfo.latestSuccess || null;
+      const latestFailed = runInfo.latestFailed || null;
+      const details = { ...(row.details || {}) };
+      if (latestFailed) {
+        details.latestFailureAt = latestFailed.run_finished_at || latestFailed.run_started_at || latestFailed.created_at || null;
+        details.latestFailureSource = latestFailed.source || null;
+        details.latestFailureSourceUrl = latestFailed?.details?.sourceUrl || latestFailed.source || null;
+        details.sourceNode = latestFailed?.details?.sourceNode || details.sourceNode || null;
+        details.latestFailureReason = latestFailed?.details?.reason || latestFailed.message || null;
+        details.latestFailureMessage = latestFailed?.details?.errorMessage || latestFailed.message || null;
+        details.latestFailureCode = latestFailed?.details?.errorCode || latestFailed?.details?.upstreamErrorCode || null;
+        if (latestFailed?.details?.reason) details.reason = latestFailed.details.reason;
+      }
+      const isActiveRow =
+        row.regionId === viewState.regionId &&
+        row.serviceType === viewState.serviceType &&
+        row.marketMode === (viewState.serviceType === "tariff" ? "tariff" : viewState.marketMode);
+      const successTimestamp =
+        latestSuccess?.run_finished_at || latestSuccess?.run_started_at || latestSuccess?.created_at || null;
+      const successSource = latestSuccess?.details?.sourceUrl || latestSuccess?.source || "";
+      if (latestSuccess?.details?.sourceNode) details.sourceNode = latestSuccess.details.sourceNode;
+      const failedSource = latestFailed?.details?.sourceUrl || latestFailed?.source || "";
+      const displaySource = successSource || failedSource || row.source || "";
+      if (!details.sourceUrl && displaySource) details.sourceUrl = displaySource;
+      return {
+        ...row,
+        source: isActiveRow
+          ? viewState.lastSourceUrl || viewState.lastSource || displaySource
+          : displaySource,
+        sourceUnit: latestSuccess?.source_unit || row.sourceUnit || null,
+        lastUpdatedAt: isActiveRow ? viewState.lastFetchedAt || successTimestamp : successTimestamp,
+        details,
+      };
+    });
+
     void supabaseService
       .upsertRateRegionHealth({
         projectId: currentProject.id,
@@ -1189,7 +1490,11 @@
     setLoading(true);
     try {
       await resolveProvider();
-      await fetchRatesSeries({ forceRefresh });
+      try {
+        await fetchRatesSeries({ forceRefresh });
+      } catch (error) {
+        console.error("Failed to load rates series.", error);
+      }
       await fetchHealth();
       try {
         currentProject = await withRetry(() =>
@@ -1256,12 +1561,17 @@
 
       await fetch(`${RATES_PROXY_ENDPOINT}/refresh`, { cache: "no-store" }).catch(() => {});
 
+      const refreshErrors = [];
       for (const feed of RATE_FEED_PLAN) {
         viewState.serviceType = feed.serviceType;
         viewState.marketMode = feed.marketMode;
         // Force API fetch for every feed; skip intermediate re-renders.
-        // eslint-disable-next-line no-await-in-loop
-        await fetchRatesSeries({ forceRefresh: true, suppressRender: true });
+        try {
+          // eslint-disable-next-line no-await-in-loop
+          await fetchRatesSeries({ forceRefresh: true, suppressRender: true });
+        } catch (error) {
+          refreshErrors.push(`${feed.serviceType}:${feed.marketMode}`);
+        }
       }
 
       viewState.serviceType = originalServiceType;
@@ -1272,6 +1582,9 @@
 
       await fetchRatesSeries({ forceRefresh: false });
       await fetchHealth();
+      if (refreshErrors.length) {
+        console.warn(`One or more feed refreshes failed: ${refreshErrors.join(", ")}`);
+      }
 
       try {
         currentProject = await withRetry(() =>
@@ -1465,6 +1778,7 @@
     updateMarketModeVisibility();
     setProjectNameDisplay(currentProject.name);
     setProjectNameEditorMode(false);
+    startBackfillStatusPolling();
 
     if (ratesLocationLink) ratesLocationLink.href = `/projects/location.html?projectId=${encodeURIComponent(currentProject.id)}`;
     if (ratesGenerationLink) ratesGenerationLink.href = `/projects/generation.html?projectId=${encodeURIComponent(currentProject.id)}`;
