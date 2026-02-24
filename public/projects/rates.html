@@ -15,19 +15,25 @@
           <h1>Electricity Rates</h1>
         </header>
 
-        <section class="rates-summary">
-          <p class="location" id="rates-provider-label">Utility: --</p>
-          <p class="location" id="rates-region-label">Market Region: --</p>
-          <label class="assets-label rates-control-label">Service Type</label>
-          <div class="toggle-group">
-            <button class="btn btn--toggle is-active" data-rates-service="lmp" data-rates-help="lmp" type="button">LMP</button>
-            <button class="btn btn--toggle" data-rates-service="tariff" data-rates-help="tariff" type="button">Tariff</button>
+        <section class="rates-summary-layout">
+          <div class="rates-summary">
+            <h2 class="rates-market-subheading" id="rates-region-label">Market Region: --</h2>
+            <p class="location" id="rates-provider-label">Utility: --</p>
+            <p class="location rates-backfill-status" id="rates-backfill-status">Rates Backfill: --</p>
+            <label class="assets-label rates-control-label">Service Type</label>
+            <div class="toggle-group">
+              <button class="btn btn--toggle is-active" data-rates-service="lmp" data-rates-help="lmp" type="button">LMP</button>
+              <button class="btn btn--toggle" data-rates-service="tariff" data-rates-help="tariff" type="button">Tariff</button>
+            </div>
+            <label class="assets-label rates-control-label" id="rates-market-label">Market Mode</label>
+            <div class="toggle-group" id="rates-market-mode-group">
+              <button class="btn btn--toggle" data-rates-market="real_time" data-rates-help="real_time" type="button">Real-Time</button>
+              <button class="btn btn--toggle is-active" data-rates-market="day_ahead" data-rates-help="day_ahead" type="button">Day-Ahead</button>
+            </div>
           </div>
-          <label class="assets-label rates-control-label" id="rates-market-label">Market Mode</label>
-          <div class="toggle-group" id="rates-market-mode-group">
-            <button class="btn btn--toggle" data-rates-market="real_time" data-rates-help="real_time" type="button">Real-Time</button>
-            <button class="btn btn--toggle is-active" data-rates-market="day_ahead" data-rates-help="day_ahead" type="button">Day-Ahead</button>
-          </div>
+          <aside class="rates-region-map-card" aria-hidden="true">
+            <img id="rates-region-map-image" class="rates-region-map-image" src="/assets/img/iso/non-iso.svg" alt="" />
+          </aside>
         </section>
 
         <div class="assets-divider"></div>
@@ -56,9 +62,12 @@
           <table class="data-table">
             <thead>
               <tr>
-                <th>Region</th>
-                <th>Service</th>
-                <th>Status</th>
+                <th rowspan="2">ISO</th>
+                <th colspan="2">Tariff</th>
+                <th colspan="2">LMP-RT</th>
+                <th colspan="2">LMP-DA</th>
+              </tr>
+              <tr>
                 <th>
                   <span class="rates-last-updated-header">
                     <span>Last Updated</span>
@@ -66,8 +75,10 @@
                   </span>
                 </th>
                 <th>Source</th>
-                <th>Source Unit</th>
-                <th>Coverage (hours)</th>
+                <th>Last Updated</th>
+                <th>Source</th>
+                <th>Last Updated</th>
+                <th>Source</th>
               </tr>
             </thead>
             <tbody id="rates-health-body">

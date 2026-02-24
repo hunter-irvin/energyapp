@@ -589,6 +589,20 @@
       saveArray(DB_STORAGE_KEYS.rateIngestRuns, rows.slice(-500));
       return row;
     },
+    async listRateIngestRuns(projectId, { regionId, serviceType, marketMode, status, limit = 500 } = {}) {
+      const normalizedLimit = Math.max(1, Math.min(1000, Number(limit) || 500));
+      return getLocalRateIngestRows()
+        .filter(
+          (entry) =>
+            entry.project_id === projectId &&
+            (!regionId || entry.region_id === regionId) &&
+            (!serviceType || entry.service_type === serviceType) &&
+            (!marketMode || entry.market_mode === marketMode) &&
+            (!status || entry.status === status)
+        )
+        .sort((a, b) => new Date(b.run_finished_at || b.created_at || 0).getTime() - new Date(a.run_finished_at || a.created_at || 0).getTime())
+        .slice(0, normalizedLimit);
+    },
   };
 
   const supabaseDb = (client) => ({
@@ -599,6 +613,16 @@
     _isMissingTableError(error) {
       const message = String(error?.message || "").toLowerCase();
       return error?.code === "42P01" || error?.code === "PGRST205" || message.includes("does not exist");
+    },
+    _isTransientBackendError(error) {
+      const message = String(error?.message || "").toLowerCase();
+      return (
+        error?.code === "57014" ||
+        message.includes("statement timeout") ||
+        message.includes("canceling statement due to statement timeout") ||
+        message.includes("timeout") ||
+        message.includes("internal server error")
+      );
     },
     async listProjects() {
       const { data, error } = await client.from("projects").select("*").order("created_at", { ascending: true });
@@ -663,8 +687,15 @@
       const { error: assetsError } = await client.from("assets").delete().eq("project_id", projectId);
       if (assetsError) throw assetsError;
 
-      const { error: cacheError } = await client.from("nrel_cache").delete().eq("project_id", projectId);
-      if (cacheError) throw cacheError;
+      const { error: weatherCacheError } = await client.from("weather_cache").delete().eq("project_id", projectId);
+      if (weatherCacheError && !this._isMissingTableError(weatherCacheError)) throw weatherCacheError;
+      if (weatherCacheError && this._isMissingTableError(weatherCacheError)) {
+        const { error: legacyCacheError } = await client.from("nrel_cache").delete().eq("project_id", projectId);
+        if (legacyCacheError) throw legacyCacheError;
+      } else {
+        const { error: legacyCacheCleanupError } = await client.from("nrel_cache").delete().eq("project_id", projectId);
+        if (legacyCacheCleanupError && !this._isMissingTableError(legacyCacheCleanupError)) throw legacyCacheCleanupError;
+      }
 
       const { error: rateSeriesError } = await client.from("rate_series_cache").delete().eq("project_id", projectId);
       if (rateSeriesError && rateSeriesError.code !== "42P01") throw rateSeriesError;
@@ -709,31 +740,43 @@
     },
     async getWeatherCache(projectId, provider, dataset, dateKey, options = {}) {
       const { sourceYear = null, intervalMinutes = null } = options;
-      let query = client
-        .from("nrel_cache")
-        .select("*")
-        .eq("project_id", projectId)
-        .eq("dataset", dataset)
-        .eq("date_key", dateKey);
+      const runLookup = async (tableName) => {
+        let query = client
+          .from(tableName)
+          .select("*")
+          .eq("project_id", projectId)
+          .eq("dataset", dataset)
+          .eq("date_key", dateKey);
 
-      if (provider === "nrel") {
-        query = query.or("provider.eq.nrel,provider.is.null");
-      } else {
-        query = query.eq("provider", provider);
-      }
+        if (provider === "nrel") {
+          query = query.or("provider.eq.nrel,provider.is.null");
+        } else {
+          query = query.eq("provider", provider);
+        }
 
-      if (sourceYear != null) {
-        query = query.eq("source_year", sourceYear);
-      } else {
-        query = query.is("source_year", null);
-      }
+        if (sourceYear != null) {
+          query = query.eq("source_year", sourceYear);
+        } else {
+          query = query.is("source_year", null);
+        }
 
-      if (intervalMinutes != null) {
-        query = query.eq("interval_minutes", intervalMinutes);
+        if (intervalMinutes != null) {
+          query = query.eq("interval_minutes", intervalMinutes);
+        }
+        return query.order("fetched_at", { ascending: false }).limit(1).maybeSingle();
+      };
+
+      let response = await runLookup("weather_cache");
+      if (response.error && this._isMissingTableError(response.error)) {
+        response = await runLookup("nrel_cache");
       }
-      const { data, error } = await query.order("fetched_at", { ascending: false }).limit(1).maybeSingle();
-      if (error) throw error;
-      return data || null;
+      if (response.error) {
+        if (this._isTransientBackendError(response.error)) {
+          return localDb.getWeatherCache(projectId, provider, dataset, dateKey, options);
+        }
+        throw response.error;
+      }
+      return response.data || null;
     },
     async upsertWeatherCache(payload) {
       const row = {
@@ -750,13 +793,25 @@
         payload: payload.payload,
         updated_at: new Date().toISOString(),
       };
-      const { data, error } = await client
-        .from("nrel_cache")
+      let response = await client
+        .from("weather_cache")
         .upsert(row, { onConflict: "project_id,provider,dataset,date_key,interval_minutes,source_year" })
         .select()
         .single();
-      if (error) throw error;
-      return data;
+      if (response.error && this._isMissingTableError(response.error)) {
+        response = await client
+          .from("nrel_cache")
+          .upsert(row, { onConflict: "project_id,provider,dataset,date_key,interval_minutes,source_year" })
+          .select()
+          .single();
+      }
+      if (response.error) {
+        if (this._isTransientBackendError(response.error)) {
+          return localDb.upsertWeatherCache(payload);
+        }
+        throw response.error;
+      }
+      return response.data;
     },
     async getNrelCache(projectId, dataset, dateKey, options = {}) {
       return this.getWeatherCache(projectId, "nrel", dataset, dateKey, options);
@@ -920,6 +975,26 @@
       }
       return data;
     },
+    async listRateIngestRuns(projectId, { regionId, serviceType, marketMode, status, limit = 500 } = {}) {
+      let query = client
+        .from("rate_ingest_runs")
+        .select("*")
+        .eq("project_id", projectId)
+        .order("run_finished_at", { ascending: false })
+        .limit(Math.max(1, Math.min(1000, Number(limit) || 500)));
+      if (regionId) query = query.eq("region_id", regionId);
+      if (serviceType) query = query.eq("service_type", serviceType);
+      if (marketMode) query = query.eq("market_mode", marketMode);
+      if (status) query = query.eq("status", status);
+      const { data, error } = await query;
+      if (error) {
+        if (this._isMissingTableError(error)) {
+          return localDb.listRateIngestRuns(projectId, { regionId, serviceType, marketMode, status, limit });
+        }
+        throw error;
+      }
+      return data || [];
+    },
   });
 
   const dataService = async () => {
@@ -957,6 +1032,7 @@
   const listRateRegionHealth = async (projectId, options) => (await dataService()).listRateRegionHealth(projectId, options);
   const upsertRateRegionHealth = async (payload) => (await dataService()).upsertRateRegionHealth(payload);
   const insertRateIngestRun = async (payload) => (await dataService()).insertRateIngestRun(payload);
+  const listRateIngestRuns = async (projectId, options) => (await dataService()).listRateIngestRuns(projectId, options);
 
   const setLastOpenedProjectId = (projectId) => {
     if (projectId) {
@@ -1041,6 +1117,7 @@
     listRateRegionHealth,
     upsertRateRegionHealth,
     insertRateIngestRun,
+    listRateIngestRuns,
     getLastOpenedProjectId,
     setLastOpenedProjectId,
     migrateLegacyLocalData,

@@ -235,7 +235,13 @@
       return;
     }
 
-    projectsGrid.innerHTML = projects
+    const sortedProjects = [...projects].sort((a, b) => {
+      const aTime = new Date(a?.updatedAt || a?.createdAt || 0).getTime();
+      const bTime = new Date(b?.updatedAt || b?.createdAt || 0).getTime();
+      return bTime - aTime;
+    });
+
+    projectsGrid.innerHTML = sortedProjects
       .map((project) => {
         const summary = summarizeAssets(project.assets || []);
         const escapedName = escapeHtml(project.name || "Untitled Project");
@@ -250,12 +256,14 @@
             <a class="project-card__open" href="/projects/location.html?projectId=${encodeURIComponent(project.id)}">
               <h2 class="project-card__name">${escapedName}</h2>
               ${buildSatelliteThumbnail(project)}
-              <p class="project-card__location">${escapeHtml(formatLocation(project))}</p>
-              <p class="project-card__summary">${escapeHtml(summary.generationLine)}</p>
-              <p class="project-card__summary">${escapeHtml(summary.storageLine)}</p>
-              <p class="project-card__updated project-card__updated--footer">Updated: ${escapeHtml(
-                formatTimestamp(project.updatedAt)
-              )}</p>
+              <div class="project-card__meta">
+                <p class="project-card__location">${escapeHtml(formatLocation(project))}</p>
+                <p class="project-card__summary">${escapeHtml(summary.generationLine)}</p>
+                <p class="project-card__summary">${escapeHtml(summary.storageLine)}</p>
+                <p class="project-card__updated project-card__updated--footer">Updated: ${escapeHtml(
+                  formatTimestamp(project.updatedAt)
+                )}</p>
+              </div>
             </a>
           </article>
         `;

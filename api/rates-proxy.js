@@ -4,6 +4,8 @@ const { resolveProviderMetadata } = require("../lib/rates/provider-resolver");
 const { getLmpSeries } = require("../lib/rates/lmp-adapters");
 const { getTariffSeries } = require("../lib/rates/tariff-adapters");
 const { buildHealthRows } = require("../lib/rates/health-utils");
+const rateStore = require("../lib/rates/project-rate-store");
+const { startBackfillJob, getBackfillJobStatus } = require("../lib/rates/backfill-manager");
 
 const sendJsonError = (res, status, message) => {
   res.writeHead(status, {
@@ -80,6 +82,7 @@ const handleRatesProvider = async (req, res) => {
 
 const parseTimeseriesRequest = (req) => {
   const url = new URL(req.url, `http://${req.headers.host}`);
+  const projectId = String(url.searchParams.get("projectId") || "").trim();
   const lat = Number(url.searchParams.get("lat"));
   const lng = Number(url.searchParams.get("lng"));
   const serviceType = url.searchParams.get("serviceType") || "lmp";
@@ -91,12 +94,108 @@ const parseTimeseriesRequest = (req) => {
   if (!["lmp", "tariff"].includes(serviceType)) throw new Error("Invalid serviceType.");
   const marketMode = serviceType === "tariff" ? "tariff" : marketModeRaw;
   if (!["real_time", "day_ahead", "tariff"].includes(marketMode)) throw new Error("Invalid marketMode.");
-  return { lat, lng, serviceType, marketMode, start, end };
+  return { projectId, lat, lng, serviceType, marketMode, start, end };
+};
+
+const getHotWindowCutoff = ({ marketMode }) => {
+  const now = Date.now();
+  if (marketMode === "real_time") return new Date(now - 7 * 24 * 60 * 60 * 1000);
+  if (marketMode === "day_ahead") return new Date(now - 3 * 24 * 60 * 60 * 1000);
+  return new Date(now - 30 * 24 * 60 * 60 * 1000);
+};
+
+const mapStoredRowsToPoints = (rows = []) =>
+  Array.from(
+    rows.reduce((map, row) => {
+      if (!row?.ts) return map;
+      map.set(row.ts, {
+        ts: row.ts,
+        value: row.value == null ? null : Number(row.value),
+        isForecast: Boolean(row.is_forecast),
+        missingReason: row.value == null ? "No rate data from project store." : null,
+      });
+      return map;
+    }, new Map()).values()
+  ).sort((a, b) => new Date(a.ts).getTime() - new Date(b.ts).getTime());
+
+const getHotWindowServeThreshold = ({ marketMode }) => {
+  if (marketMode === "real_time") return { maxAgeMs: 3 * 60 * 60 * 1000, minCoverage: 0.75 };
+  if (marketMode === "day_ahead") return { maxAgeMs: 36 * 60 * 60 * 1000, minCoverage: 0.7 };
+  return { maxAgeMs: 7 * 24 * 60 * 60 * 1000, minCoverage: 0.6 };
+};
+
+const estimateCoverage = ({ points = [], start, end, resolutionMinutes }) => {
+  const stepMs = Math.max(1, Number(resolutionMinutes || 60)) * 60 * 1000;
+  const startMs = new Date(start).getTime();
+  const endMs = new Date(end).getTime();
+  if (!Number.isFinite(startMs) || !Number.isFinite(endMs) || endMs < startMs) return 0;
+  const expectedPoints = Math.max(1, Math.floor((endMs - startMs) / stepMs) + 1);
+  const presentPoints = points.reduce((sum, point) => (Number.isFinite(Number(point?.value)) ? sum + 1 : sum), 0);
+  return Math.max(0, Math.min(1, presentPoints / expectedPoints));
+};
+
+const canServeHotWindowFromStore = ({ points = [], start, end, marketMode, resolutionMinutes }) => {
+  if (!points.length) return false;
+  const { maxAgeMs, minCoverage } = getHotWindowServeThreshold({ marketMode });
+  const coverage = estimateCoverage({ points, start, end, resolutionMinutes });
+  if (coverage < minCoverage) return false;
+  const latestPointMs = points.reduce((max, point) => {
+    const ts = new Date(point?.ts).getTime();
+    return Number.isFinite(ts) ? Math.max(max, ts) : max;
+  }, 0);
+  if (!Number.isFinite(latestPointMs) || latestPointMs <= 0) return false;
+  return Date.now() - latestPointMs <= maxAgeMs;
 };
 
 const buildTimeseriesPayload = async (request) => {
-  const { lat, lng, serviceType, marketMode, start, end } = request;
+  const { projectId, lat, lng, serviceType, marketMode, start, end } = request;
   const provider = await resolveProviderMetadata({ lat, lng });
+  const isColdWindow = end.getTime() <= getHotWindowCutoff({ marketMode }).getTime();
+  if (projectId) {
+    const resolutionMinutes = serviceType === "lmp" && marketMode === "real_time" ? 15 : 60;
+    const storedRows = await rateStore
+      .listRatePoints({
+        projectId,
+        regionId: provider.isoRegion,
+        serviceType,
+        marketMode,
+        start: start.toISOString(),
+        end: end.toISOString(),
+        resolutionMinutes,
+      })
+      .catch(() => []);
+    const storedPoints = mapStoredRowsToPoints(storedRows);
+    if (storedPoints.length && (isColdWindow || canServeHotWindowFromStore({ points: storedPoints, start, end, marketMode, resolutionMinutes }))) {
+      const sourceUnit = serviceType === "lmp" ? "USD/MWh" : "USD/kWh";
+      const qualityStatus = computeQualityStatus(storedPoints);
+      return {
+        metadata: {
+          apiVersion: "v2",
+          serviceType,
+          marketMode,
+          regionId: provider.isoRegion,
+          regionLabel: provider.regionLabel || provider.isoRegion,
+          utilityName: provider.utilityName,
+          utilityCode: provider.utilityCode,
+          timezone: provider.timezone,
+          unit: sourceUnit,
+          sourceUnit,
+          source: "rates_project_store",
+          details: {
+            reason: isColdWindow ? "project_store_backfill" : "project_store_hot_cache",
+            sourceUrl: "supabase://rate_project_series",
+            resolutionMinutes,
+          },
+          confidence: isColdWindow ? "high" : "medium",
+          qualityStatus,
+          fetchedAt: new Date().toISOString(),
+          windowStart: start.toISOString(),
+          windowEnd: end.toISOString(),
+        },
+        points: storedPoints,
+      };
+    }
+  }
   const series =
     serviceType === "tariff"
       ? await getTariffSeries({
@@ -118,6 +217,25 @@ const buildTimeseriesPayload = async (request) => {
   validateSeriesContract({ points: series.points || [], sourceUnit });
   const confidence = resolveConfidence({ serviceType, details: series.details, source: series.source });
   const qualityStatus = computeQualityStatus(series.points || []);
+  if (projectId && Array.isArray(series.points) && series.points.length) {
+    const resolutionMinutes = serviceType === "lmp" && marketMode === "real_time" ? 15 : 60;
+    const rows = series.points.map((point) => ({
+      projectId,
+      regionId: provider.isoRegion,
+      serviceType,
+      marketMode,
+      ts: point.ts,
+      resolutionMinutes,
+      value: point.value == null ? null : Number(point.value),
+      isForecast: Boolean(point.isForecast),
+      isModeled: point?.missingReason === "modeled_backfill",
+      source: series.source || "rates_proxy_phase2",
+      sourceUrl: series?.details?.sourceUrl || "",
+      status: "provisional",
+      finalizedAt: null,
+    }));
+    void rateStore.upsertRatePoints(rows).catch(() => {});
+  }
   return {
     metadata: {
       apiVersion: "v2",
@@ -206,10 +324,50 @@ const handleRatesRefresh = async (req, res) => {
   });
 };
 
+const handleRatesBackfillStart = async (req, res) => {
+  try {
+    const url = new URL(req.url, `http://${req.headers.host}`);
+    const projectId = String(url.searchParams.get("projectId") || "").trim();
+    const lat = Number(url.searchParams.get("lat"));
+    const lng = Number(url.searchParams.get("lng"));
+    const forceRaw = String(url.searchParams.get("force") || "").toLowerCase();
+    const force = ["1", "true", "yes"].includes(forceRaw);
+    if (!projectId) throw new Error("Missing required projectId.");
+    if (!Number.isFinite(lat) || !Number.isFinite(lng)) throw new Error("Missing required latitude/longitude.");
+    const job = await startBackfillJob({ projectId, lat, lng, force });
+    sendJson(res, 200, {
+      ok: true,
+      job,
+      source: "rates_backfill_manager",
+      fetchedAt: new Date().toISOString(),
+    });
+  } catch (error) {
+    sendJsonError(res, 400, String(error?.message || "Unable to start backfill job."));
+  }
+};
+
+const handleRatesBackfillStatus = async (req, res) => {
+  try {
+    const url = new URL(req.url, `http://${req.headers.host}`);
+    const projectId = String(url.searchParams.get("projectId") || "").trim();
+    if (!projectId) throw new Error("Missing required projectId.");
+    const job = await getBackfillJobStatus(projectId);
+    sendJson(res, 200, {
+      ok: true,
+      job: job || { projectId, status: "idle", progressPct: 0, totalTasks: 0, completedTasks: 0 },
+      fetchedAt: new Date().toISOString(),
+    });
+  } catch (error) {
+    sendJsonError(res, 400, String(error?.message || "Unable to load backfill job status."));
+  }
+};
+
 module.exports = {
   handleRatesProvider,
   handleRatesTimeseries,
   handleRatesTimeseriesV2,
   handleRatesHealth,
   handleRatesRefresh,
+  handleRatesBackfillStart,
+  handleRatesBackfillStatus,
 };

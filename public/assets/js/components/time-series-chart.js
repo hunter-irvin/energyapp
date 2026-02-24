@@ -6,18 +6,56 @@
   const e = ReactRef.createElement;
 
   const toArray = (value) => (Array.isArray(value) ? value : []);
+  const getCssValue = (styles, key, fallback) => {
+    const value = styles?.getPropertyValue(key)?.trim();
+    return value || fallback;
+  };
+  const readThemePalette = () => {
+    const styles = window.getComputedStyle(document.documentElement);
+    return {
+      axisTick: getCssValue(styles, "--color-text-muted", "#6d7982"),
+      axisTitle: getCssValue(styles, "--color-text-secondary", "#d0d7dc"),
+      gridPrimary: getCssValue(styles, "--chart-grid-primary", "rgba(120,120,120,0.2)"),
+      gridSecondary: getCssValue(styles, "--chart-grid-secondary", "rgba(120,120,120,0.15)"),
+      seriesDefault: getCssValue(styles, "--color-chart-total", "#a8b4be"),
+      nowIndicator: getCssValue(styles, "--color-now-indicator", "#68d37f"),
+    };
+  };
+
+  const nowIndicatorPlugin = {
+    id: "nowIndicator",
+    afterDatasetsDraw(chart, args, pluginOptions) {
+      if (!pluginOptions?.enabled) return;
+      const ratioRaw = Number(pluginOptions.ratio);
+      if (!Number.isFinite(ratioRaw)) return;
+      const ratio = Math.min(Math.max(ratioRaw, 0), 1);
+      const area = chart?.chartArea;
+      if (!area || area.left >= area.right) return;
+      const x = area.left + (area.right - area.left) * ratio;
+      const ctx = chart.ctx;
+      ctx.save();
+      ctx.beginPath();
+      ctx.moveTo(x, area.top);
+      ctx.lineTo(x, area.bottom);
+      ctx.lineWidth = Number.isFinite(pluginOptions.width) ? Math.max(1, pluginOptions.width) : 1;
+      ctx.strokeStyle = pluginOptions.color || "#68d37f";
+      ctx.globalAlpha = Number.isFinite(pluginOptions.alpha) ? Math.min(Math.max(pluginOptions.alpha, 0), 1) : 0.95;
+      ctx.stroke();
+      ctx.restore();
+    },
+  };
 
   const defaultTooltipLabel = (context) => {
     const numeric = Number(context?.parsed?.y ?? context?.raw ?? 0);
     return `${context?.dataset?.label || "Value"}: ${Number.isFinite(numeric) ? numeric.toFixed(2) : "0.00"}`;
   };
 
-  const buildOptions = (props = {}) => {
+  const buildOptions = (props = {}, palette = readThemePalette()) => {
     const defaultScales = {
       x: {
-        grid: { color: "rgba(120,120,120,0.15)" },
+        grid: { color: palette.gridSecondary },
         ticks: {
-          color: "#353535",
+          color: palette.axisTick,
           autoSkip: false,
           maxRotation: 0,
           callback(value, index) {
@@ -32,12 +70,12 @@
       },
       y: {
         min: props.minY ?? 0,
-        grid: { color: "rgba(120,120,120,0.2)" },
-        ticks: { color: "#353535" },
+        grid: { color: palette.gridPrimary },
+        ticks: { color: palette.axisTick },
         title: {
           display: Boolean(props.yTitle),
           text: props.yTitle || "",
-          color: "#2d2d2d",
+          color: palette.axisTitle,
           font: { weight: "700" },
         },
       },
@@ -50,6 +88,13 @@
       interaction: { mode: "index", intersect: false },
       plugins: {
         legend: { display: false },
+        nowIndicator: {
+          enabled: Boolean(props?.nowIndicator && Number.isFinite(props.nowIndicator.ratio)),
+          ratio: props?.nowIndicator?.ratio,
+          color: props?.nowIndicator?.color || palette.nowIndicator,
+          width: props?.nowIndicator?.width || 1,
+          alpha: props?.nowIndicator?.alpha,
+        },
         tooltip: {
           callbacks: {
             label: props.tooltipLabel || defaultTooltipLabel,
@@ -60,11 +105,11 @@
     };
   };
 
-  const buildDatasets = (datasets = []) =>
+  const buildDatasets = (datasets = [], palette = readThemePalette()) =>
     toArray(datasets).map((series) => ({
       label: series?.label || "Series",
       data: toArray(series?.data),
-      borderColor: series?.borderColor || "#000000",
+      borderColor: series?.borderColor || palette.seriesDefault,
       backgroundColor: series?.backgroundColor || "transparent",
       tension: Number.isFinite(series?.tension) ? series.tension : 0.22,
       borderWidth: Number.isFinite(series?.borderWidth) ? series.borderWidth : 2,
@@ -80,16 +125,27 @@
   const TimeSeriesChart = (props) => {
     const canvasRef = ReactRef.useRef(null);
     const chartRef = ReactRef.useRef(null);
+    const [themeVersion, setThemeVersion] = ReactRef.useState(0);
+
+    ReactRef.useEffect(() => {
+      const root = document.documentElement;
+      if (!root || typeof MutationObserver !== "function") return undefined;
+      const observer = new MutationObserver(() => setThemeVersion((value) => value + 1));
+      observer.observe(root, { attributes: true, attributeFilter: ["data-theme"] });
+      return () => observer.disconnect();
+    }, []);
 
     ReactRef.useEffect(() => {
       if (!canvasRef.current || !window.Chart) return undefined;
+      const palette = readThemePalette();
       const chart = new window.Chart(canvasRef.current, {
         type: props.type || "line",
         data: {
           labels: toArray(props.labels),
-          datasets: buildDatasets(props.datasets),
+          datasets: buildDatasets(props.datasets, palette),
         },
-        options: buildOptions(props),
+        options: buildOptions(props, palette),
+        plugins: [nowIndicatorPlugin],
       });
       chartRef.current = chart;
       if (typeof props.onChartReady === "function") {
@@ -104,11 +160,12 @@
     ReactRef.useEffect(() => {
       const chart = chartRef.current;
       if (!chart) return;
+      const palette = readThemePalette();
       chart.data.labels = toArray(props.labels);
-      chart.data.datasets = buildDatasets(props.datasets);
-      chart.options = buildOptions(props);
+      chart.data.datasets = buildDatasets(props.datasets, palette);
+      chart.options = buildOptions(props, palette);
       chart.update();
-    }, [props.labels, props.datasets, props.yTitle, props.minY, props.tooltipLabel, props.type, props.scales]);
+    }, [props.labels, props.datasets, props.yTitle, props.minY, props.tooltipLabel, props.type, props.scales, themeVersion]);
 
     return e("canvas", {
       ref: canvasRef,

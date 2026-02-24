@@ -4,6 +4,63 @@
   if (!ReactRef || !ReactDOMRef) return;
 
   const e = ReactRef.createElement;
+  const THEME_STORAGE_KEY = "energyapp.ui.theme";
+  const THEME_DARK = "dark";
+  const THEME_LIGHT = "light";
+
+  const isThemeValue = (value) => value === THEME_DARK || value === THEME_LIGHT;
+
+  const readStoredTheme = () => {
+    try {
+      const stored = window.localStorage.getItem(THEME_STORAGE_KEY);
+      return isThemeValue(stored) ? stored : null;
+    } catch (error) {
+      return null;
+    }
+  };
+
+  const applyTheme = (theme) => {
+    const normalized = isThemeValue(theme) ? theme : THEME_DARK;
+    const root = document.documentElement;
+    if (!root) return normalized;
+    root.setAttribute("data-theme", normalized);
+    root.style.colorScheme = normalized === THEME_DARK ? "dark" : "light";
+    return normalized;
+  };
+
+  const persistTheme = (theme) => {
+    try {
+      window.localStorage.setItem(THEME_STORAGE_KEY, theme);
+    } catch (error) {}
+  };
+
+  applyTheme(readStoredTheme() || THEME_DARK);
+
+  const ThemeToggle = () => {
+    const [theme, setTheme] = ReactRef.useState(() => applyTheme(readStoredTheme() || THEME_DARK));
+    const isDark = theme === THEME_DARK;
+    const nextTheme = isDark ? THEME_LIGHT : THEME_DARK;
+
+    const handleToggle = () => {
+      const appliedTheme = applyTheme(nextTheme);
+      setTheme(appliedTheme);
+      persistTheme(appliedTheme);
+    };
+
+    return e(
+      "button",
+      {
+        className: "btn btn--theme-toggle",
+        type: "button",
+        onClick: handleToggle,
+        "aria-label": `Switch to ${nextTheme} mode`,
+        "aria-pressed": String(!isDark),
+        title: `Switch to ${nextTheme} mode`,
+      },
+      e("span", { className: "btn--theme-toggle__label" }, isDark ? "Dark" : "Light"),
+      e("span", { className: "btn--theme-toggle__track", "aria-hidden": "true" }, e("span", { className: "btn--theme-toggle__thumb" }))
+    );
+  };
 
   const ProjectHeader = ({ editor = {}, exitHref = "/" }) =>
     e(
@@ -64,12 +121,17 @@
         )
       ),
       e(
-        "a",
-        {
-          className: "btn",
-          href: exitHref || "/",
-        },
-        "Exit"
+        "div",
+        { className: "project-header__right" },
+        e(ThemeToggle),
+        e(
+          "a",
+          {
+            className: "btn",
+            href: exitHref || "/",
+          },
+          "Exit"
+        )
       )
     );
 

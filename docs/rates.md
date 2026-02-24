@@ -143,6 +143,24 @@ Manual refresh acknowledgment endpoint:
 
 - `{ ok: true, refreshedAt: ISO, source: "rates_proxy_phase2" }`
 
+### `GET /api/rates/backfill/start`
+
+Query params:
+
+- `projectId` (required)
+- `lat` (required)
+- `lng` (required)
+
+Starts/queues an in-process backfill job (server-side) for the project from `2025-01-01` to now.
+
+### `GET /api/rates/backfill/status`
+
+Query params:
+
+- `projectId` (required)
+
+Returns job status/progress used by the Rates summary status line.
+
 ## Persistence model
 
 ## Supabase
@@ -185,6 +203,35 @@ Manual refresh acknowledgment endpoint:
 - `tariff`: 24 hours
 
 These TTL rules are applied in `public/assets/js/pages/rates.js` before deciding whether to call `/api/v2/rates/timeseries`.
+
+## Historical backfill and finalization policy
+
+- Historical backfill start: `2025-01-01T00:00:00Z`
+- Trigger: when project location changes on the Location page
+- Runtime: server-side in-process queue
+- RT backfill persistence: downsampled/expanded to 15-minute bins for project store
+- DA/Tariff persistence: hourly bins in project store
+
+Point finalization status defaults:
+
+- `real_time`: treat points older than 7 days as `final`
+- `day_ahead`: treat points older than 3 days as `final`
+- `tariff`: `final` immediately unless superseded by a newer effective schedule
+
+These defaults are persisted in job details for traceability and can be tuned in `lib/rates/backfill-manager.js`.
+
+## Spatial source policy (CAISO/ERCOT)
+
+- CAISO node selection:
+  - If `ENERGYAPP_CAISO_NODE` is set, use that explicit node.
+  - Else infer hub by project geography/utility:
+    - North: `TH_NP15_GEN-APND`
+    - Central: `TH_ZP26_GEN-APND`
+    - South: `TH_SP15_GEN-APND`
+- ERCOT settlement point selection:
+  - Infer `LZ_*` settlement point using utility + project geography (existing `resolveErcotSettlementPoint` logic).
+
+Both `sourceUrl` and selected `sourceNode` are surfaced in timeseries metadata and diagnostics.
 
 ## Phase 3 source behavior
 

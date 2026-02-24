@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 593">
+  <image href="https://upload.wikimedia.org/wikipedia/commons/thumb/1/1a/Blank_US_Map_%28states_only%29.svg/960px-Blank_US_Map_%28states_only%29.svg.png" width="960" height="593"/>
+  <rect width="960" height="593" fill="rgba(4, 10, 32, 0.28)"/>
+  <path d="M640 179 L706 171 L748 160 L780 159 L805 155 L842 146 L858 165 L862 196 L842 223 L816 243 L771 252 L739 265 L716 270 L688 266 L674 254 L654 245 L642 230 L622 226 L610 212 L612 196 Z" fill="rgba(116, 209, 134, 0.42)" stroke="#5fd57b" stroke-width="5" stroke-linejoin="round"/>
+</svg>

@@ -174,15 +174,15 @@ EnergyApp now treats Supabase/Postgres as the canonical persistence layer when c
 
 - `projects` stores facility/project metadata (`id`, `name`, `location_lat`, `location_lng`, `selected_date`, `weather_provider`, `map_state`, timestamps).
 - `assets` stores one row per solar/wind asset with a required `project_id` FK (`ON DELETE CASCADE`) and JSON `model` payload.
-- `nrel_cache` stores provider-agnostic weather payloads keyed by `project_id + provider + dataset + date_key + interval_minutes + source_year` plus metadata (`wkt`, `timezone`, `source`, `fetched_at`).
-- `assets.project_id` and `nrel_cache.project_id` are non-null and cascade-delete with their parent project.
+- `weather_cache` stores provider-agnostic weather payloads keyed by `project_id + provider + dataset + date_key + interval_minutes + source_year` plus metadata (`wkt`, `timezone`, `source`, `fetched_at`).
+- `assets.project_id` and `weather_cache.project_id` are non-null and cascade-delete with their parent project.
 - Row-shape constraints remain enforced even with open policies:
   - `assets.asset_type` must be `solar` or `wind`
-  - `nrel_cache.dataset` must be `solar` or `wind`
+  - `weather_cache.dataset` must be `solar` or `wind`
 
 #### Public anon/no-auth behavior implications
 
-- RLS is enabled on `projects`, `assets`, and `nrel_cache`.
+- RLS is enabled on `projects`, `assets`, and `weather_cache`.
 - Policies are intentionally permissive for role `anon` (`USING true`, `WITH CHECK true`) to support a no-login experience.
 - **Important:** data is intentionally public-editable and not tenant-isolated in this mode. Any client with the anon key can read/write all rows.
 
@@ -223,7 +223,7 @@ Recommended server env vars:
 #### Where keys are read in code
 
 - Supabase client bootstrapping reads `window.ENERGYAPP_SUPABASE_URL` and `window.ENERGYAPP_SUPABASE_ANON_KEY` in `getClient()`.
-- The resulting client powers `projects`, `assets`, and `nrel_cache` CRUD in `supabaseDb(...)`.
+- The resulting client powers `projects`, `assets`, and `weather_cache` CRUD in `supabaseDb(...)`.
 - Server-side `/api/weather-proxy` does not read Supabase credentials; it proxies and normalizes provider weather responses.
 
 ### Database setup
@@ -239,7 +239,7 @@ Recommended server env vars:
 
 The bootstrap script creates:
 
-- `projects`, `assets`, `nrel_cache` tables
+- `projects`, `assets`, `weather_cache` tables
 - non-null FKs + cascade deletes
 - dataset/asset-type constraints
 - RLS enabled on all three tables
@@ -263,11 +263,11 @@ Rollback notes:
 
 - The migration does **not** delete legacy localStorage keys.
 - To retry migration in a dev browser, clear `energyapp.legacyMigration.v1` and (if needed) clear DB rows created by the prior run.
-- If Supabase is unreachable or not configured, runtime storage falls back to local `energyapp.db.projects`, `energyapp.db.assets`, and `energyapp.db.nrelCache` keys.
+- If Supabase is unreachable or not configured, runtime storage falls back to local `energyapp.db.projects`, `energyapp.db.assets`, and `energyapp.db.weatherCache` keys.
 
-### NREL weather cache
+### Weather cache
 
-- Weather payloads are persisted in `nrel_cache` keyed by `project_id`, `provider`, `dataset`, `date_key`, `interval_minutes`, and `source_year`.
+- Weather payloads are persisted in `weather_cache` keyed by `project_id`, `provider`, `dataset`, `date_key`, `interval_minutes`, and `source_year`.
 - Cache rows store raw/normalized-compatible JSON payloads plus `fetched_at`, `wkt`, `timezone`, and `source` metadata for traceability.
 - UI loads cached payloads first and refreshes from `/api/weather-proxy` when cache is stale (24h TTL) or when the **Refresh Weather Data** action is used.
 
@@ -302,6 +302,10 @@ Served by `server.js` + `api/rates-proxy.js`:
   - returns per-region status rows (`good|partial|missing`) and coverage metrics
 - `GET /api/rates/refresh`
   - phase-1 manual refresh acknowledgment endpoint
+- `GET /api/rates/backfill/start?projectId={id}&lat={lat}&lng={lng}`
+  - queues server-side rates backfill from `2025-01-01` to now for Tariff/LMP-DA/LMP-RT
+- `GET /api/rates/backfill/status?projectId={id}`
+  - returns in-progress/completed/failed backfill status and progress counters
 
 #### Rates storage model
 
@@ -313,6 +317,8 @@ Phase-1 persistence supports Supabase and local fallback:
   - `rate_series_cache`
   - `rate_region_health`
   - `rate_ingest_runs`
+  - `rate_project_series`
+  - `rate_backfill_jobs`
 
 Local fallback keys:
 
@@ -333,6 +339,13 @@ Rates are fetched on-demand when an active user opens/interacts with the Rates p
 - real-time LMP: 5 minutes
 - day-ahead LMP: 1 hour
 - tariff: 24 hours
+
+Backfill/finalization defaults:
+
+- historical backfill starts at `2025-01-01`
+- RT points older than 7 days are marked `final`
+- DA points older than 3 days are marked `final`
+- Tariff points are treated as final unless superseded
 
 #### Phase-2 adapter behavior
 
