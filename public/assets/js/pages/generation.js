@@ -2494,7 +2494,7 @@
     const checkBackendStatus = () => {
       const status = supabaseService.getBackendStatus();
       
-      if (status.type === 'localStorage' && status.lastError) {
+      if (status?.isWorking === false && status?.lastError) {
         // Show error banner
         message.textContent = status.lastError;
         code.textContent = `Error Code: ${status.errorCode}`;

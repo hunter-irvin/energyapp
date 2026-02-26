@@ -45,6 +45,7 @@ const SOLAR_YEAR = "2014";
 const WIND_YEAR = "2014";
 const WEATHER_PROXY_ENDPOINT = "/api/weather-proxy";
 const LOCATION_REVERSE_ENDPOINT = "/api/location/reverse";
+const V3_REFRESH_ENDPOINT = "/api/v3/refresh";
 const WEATHER_CACHE_DATE_KEY = "all";
 const WEATHER_INTERVAL_MINUTES = 30;
 const PERIOD_STORAGE_SUFFIX = "selectedPeriod";
@@ -282,15 +283,17 @@ const fetchCityLabel = async ({ lat, lng }) => {
   return [city, state || country].filter(Boolean).join(", ").trim();
 };
 
-const startRatesBackfill = async ({ projectId, lat, lng }) => {
-  if (!projectId || lat == null || lng == null) return;
+const triggerLocationChangeRefresh = async ({ projectId }) => {
+  if (!projectId) return;
   try {
-    const startUrl = buildUrl("/api/rates/backfill/start", {
-      projectId,
-      lat: String(lat),
-      lng: String(lng),
+    await fetch(V3_REFRESH_ENDPOINT, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        projectId,
+        reason: "location_change",
+      }),
     });
-    await fetch(startUrl, { cache: "no-store" });
   } catch (error) {}
 };
 
@@ -348,7 +351,7 @@ const updateLocation = async (latlng) => {
     const changed = prevLat == null || prevLng == null || prevLat !== lat || prevLng !== lng;
     if (changed) {
       clearLoadedWeatherData();
-      void startRatesBackfill({ projectId: currentProject.id, lat, lng });
+      void triggerLocationChangeRefresh({ projectId: currentProject.id });
       setStatus({
         loading: false,
         success: "Location updated. Choose 2014 NREL Data or Last Year + 7 Day Forecast to load weather.",
@@ -2240,7 +2243,7 @@ const setupApiErrorBanner = () => {
   const checkBackendStatus = () => {
     const status = supabaseService.getBackendStatus();
     
-    if (status.type === 'localStorage' && status.lastError) {
+    if (status?.isWorking === false && status?.lastError) {
       // Show error banner
       message.textContent = status.lastError;
       code.textContent = `Error Code: ${status.errorCode}`;

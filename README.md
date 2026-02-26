@@ -44,9 +44,27 @@ Rates additionally exposes `five_min`/`half_hour` only when source cadence suppo
 - `server.js` static hosting + API proxy routes
 - `api/weather-proxy.js` shared weather proxy handlers (`/api/weather-proxy`, `/api/nrel-proxy`)
 - `api/nrel-proxy.js` compatibility wrapper exporting the NREL CSV handler
-- `api/rates-proxy.js` phase-1 rates provider, timeseries, health, and refresh handlers
+- `api/rates-proxy.js` rates provider/health metadata handlers
+- `api/v3-proxy.js` canonical sync + series + worker handlers (`/api/v3/*`)
 - `supabase/` schema/bootstrap/migrations
 - `tests/` automated tests
+
+### V3 API Status (Authoritative)
+
+Use these endpoints for current app behavior:
+
+- `POST /api/v3/sync/:domain`
+- `GET /api/v3/sync/:domain/status?projectId={id}`
+- `GET /api/v3/series/weather?...`
+- `GET /api/v3/series/generation?...`
+- `GET /api/v3/series/rates?...`
+- `POST /api/v3/refresh`
+- `POST /api/v3/cron/nightly-sync`
+- `POST /api/v3/worker/run-once`
+
+Legacy endpoints `/api/rates/timeseries`, `/api/v2/rates/timeseries`, and `/api/rates/refresh` are deprecated and should not be used by new code.
+
+Some lower sections in this README describe earlier phase behavior and are retained for migration history; when they conflict, this v3 section is authoritative.
 
 ## Asset Generation Formulas & Data Dictionary
 
@@ -54,7 +72,7 @@ This section documents how the **Add Assets** page computes expected generation 
 
 ### Time & Data Flow
 
-1. Facility location is loaded from the active project record (`projects.location_lat` / `projects.location_lng`) via `EnergySupabaseService` (with local fallback if Supabase is not configured).
+1. Facility location is loaded from the active project record (`projects.location_lat` / `projects.location_lng`) via `EnergySupabaseService`.
 2. Solar and wind weather rows are fetched from `/api/weather-proxy` using the selected provider (`nrel` or `open_meteo`).
 3. Weather rows are normalized to facility-local day alignment (including year normalization to selected day year).
 4. A selected day is sliced into 48 half-hour points.

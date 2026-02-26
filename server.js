@@ -33,13 +33,18 @@ const { handleWeatherProxy, handleNrelCsvProxy } = require("./api/weather-proxy"
 const { handleLocationReverse } = require("./api/location-proxy");
 const {
   handleRatesProvider,
-  handleRatesTimeseries,
-  handleRatesTimeseriesV2,
   handleRatesHealth,
-  handleRatesRefresh,
-  handleRatesBackfillStart,
-  handleRatesBackfillStatus,
 } = require("./api/rates-proxy");
+const {
+  handleV3SyncDomain,
+  handleV3SyncStatus,
+  handleV3SeriesWeather,
+  handleV3SeriesGeneration,
+  handleV3SeriesRates,
+  handleV3Refresh,
+  handleV3CronNightlySync,
+  handleV3WorkerRunOnce,
+} = require("./api/v3-proxy");
 
 const SUPABASE_URL = process.env.ENERGYAPP_SUPABASE_URL || process.env.SUPABASE_URL || "";
 const SUPABASE_ANON_KEY =
@@ -57,6 +62,14 @@ const mimeTypes = {
 
 const sendJsonError = (res, status, message) => {
   res.writeHead(status, {
+    "Content-Type": "application/json; charset=utf-8",
+    "Access-Control-Allow-Origin": "*",
+  });
+  res.end(JSON.stringify({ errors: [message] }));
+};
+
+const sendDeprecated = (res, message) => {
+  res.writeHead(410, {
     "Content-Type": "application/json; charset=utf-8",
     "Access-Control-Allow-Origin": "*",
   });
@@ -121,11 +134,11 @@ const server = http.createServer((req, res) => {
     return;
   }
   if (req.url.startsWith("/api/rates/timeseries")) {
-    handleRatesTimeseries(req, res);
+    sendDeprecated(res, "Deprecated endpoint. Use /api/v3/series/rates and /api/v3/refresh.");
     return;
   }
   if (req.url.startsWith("/api/v2/rates/timeseries")) {
-    handleRatesTimeseriesV2(req, res);
+    sendDeprecated(res, "Deprecated endpoint. Use /api/v3/series/rates and /api/v3/refresh.");
     return;
   }
   if (req.url.startsWith("/api/rates/health")) {
@@ -133,15 +146,39 @@ const server = http.createServer((req, res) => {
     return;
   }
   if (req.url.startsWith("/api/rates/refresh")) {
-    handleRatesRefresh(req, res);
+    sendDeprecated(res, "Deprecated endpoint. Use POST /api/v3/refresh.");
     return;
   }
-  if (req.url.startsWith("/api/rates/backfill/start")) {
-    handleRatesBackfillStart(req, res);
+  if (req.url.startsWith("/api/v3/sync/") && req.url.includes("/status")) {
+    handleV3SyncStatus(req, res);
     return;
   }
-  if (req.url.startsWith("/api/rates/backfill/status")) {
-    handleRatesBackfillStatus(req, res);
+  if (req.url.startsWith("/api/v3/sync/")) {
+    handleV3SyncDomain(req, res);
+    return;
+  }
+  if (req.url.startsWith("/api/v3/series/weather")) {
+    handleV3SeriesWeather(req, res);
+    return;
+  }
+  if (req.url.startsWith("/api/v3/series/generation")) {
+    handleV3SeriesGeneration(req, res);
+    return;
+  }
+  if (req.url.startsWith("/api/v3/series/rates")) {
+    handleV3SeriesRates(req, res);
+    return;
+  }
+  if (req.url.startsWith("/api/v3/refresh")) {
+    handleV3Refresh(req, res);
+    return;
+  }
+  if (req.url.startsWith("/api/v3/cron/nightly-sync")) {
+    handleV3CronNightlySync(req, res);
+    return;
+  }
+  if (req.url.startsWith("/api/v3/worker/run-once")) {
+    handleV3WorkerRunOnce(req, res);
     return;
   }
 

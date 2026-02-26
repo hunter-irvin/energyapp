@@ -604,3 +604,5 @@ const handleWeatherProxy = async (req, res) => {
 module.exports = handleWeatherProxy;
 module.exports.handleWeatherProxy = handleWeatherProxy;
 module.exports.handleNrelCsvProxy = handleNrelCsvProxy;
+module.exports.fetchAndNormalizeOpenMeteo = fetchAndNormalizeOpenMeteo;
+module.exports.fetchAndNormalizeNrel = fetchAndNormalizeNrel;

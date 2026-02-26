@@ -1,14 +1,13 @@
 (() => {
   const RATES_PROXY_ENDPOINT = "/api/rates";
-  const RATES_TIMESERIES_V2_ENDPOINT = "/api/v2/rates/timeseries";
+  const V3_RATES_SERIES_ENDPOINT = "/api/v3/series/rates";
+  const V3_RATES_SYNC_ENDPOINT = "/api/v3/sync/rates";
+  const V3_RATES_SYNC_STATUS_ENDPOINT = "/api/v3/sync/rates/status";
+  const V3_REFRESH_ENDPOINT = "/api/v3/refresh";
   const WINDOW_BACK_DAYS = 30;
   const WINDOW_FORWARD_DAYS = 7;
   const RATES_CACHE_SCHEMA_VERSION = "rates_v3_ercot_live_fix";
-  const RATE_CACHE_TTL_MS = {
-    real_time: 5 * 60 * 1000,
-    day_ahead: 60 * 60 * 1000,
-    tariff: 24 * 60 * 60 * 1000,
-  };
+  const RATES_SYNC_POLL_MS = 2 * 60 * 1000;
   const INTERVAL_STORAGE_SUFFIX = "ratesInterval";
   const INTERVAL_OPTIONS = Object.freeze(["five_min", "half_hour", "hourly", "daily"]);
   const DEFAULT_AVAILABLE_INTERVALS = Object.freeze(["hourly", "daily"]);
@@ -175,8 +174,9 @@
   const shouldPersistRateCache = (metadata = {}) => {
     const source = String(metadata?.source || "").toLowerCase();
     const reason = String(metadata?.details?.reason || "").toLowerCase();
-    if (source.includes("modeled_fallback")) return false;
     if (reason === "source_unavailable") return false;
+    if (reason === "region_not_supported") return false;
+    if (source.includes("unavailable") || source.includes("unsupported")) return false;
     return true;
   };
 
@@ -636,32 +636,48 @@
   const renderBackfillStatus = (job) => {
     if (!ratesBackfillStatus) return;
     if (!job || job.status === "idle") {
-      ratesBackfillStatus.textContent = "Rates Backfill: Not started";
+      ratesBackfillStatus.textContent = "Rates Sync: Not started";
       return;
     }
     const pct = Number(job.progressPct || 0);
     const completed = Number(job.completedTasks || 0);
     const total = Number(job.totalTasks || 0);
     if (job.status === "completed") {
-      ratesBackfillStatus.textContent = "Rates Backfill: Completed";
+      ratesBackfillStatus.textContent = "Rates Sync: Completed";
       return;
     }
     if (job.status === "failed") {
       const err = String(job.error || "failed");
-      ratesBackfillStatus.textContent = `Rates Backfill: Failed (${err})`;
+      ratesBackfillStatus.textContent = `Rates Sync: Failed (${err})`;
       return;
     }
-    ratesBackfillStatus.textContent = `Rates Backfill: ${job.status} (${pct}% - ${completed}/${total})`;
+    ratesBackfillStatus.textContent = `Rates Sync: ${job.status} (${pct}% - ${completed}/${total})`;
   };
 
   const fetchBackfillStatus = async () => {
     if (!currentProject?.id || !ratesBackfillStatus) return;
     try {
-      const statusUrl = buildUrl(`${RATES_PROXY_ENDPOINT}/backfill/status`, { projectId: currentProject.id });
+      const statusUrl = buildUrl(V3_RATES_SYNC_STATUS_ENDPOINT, { projectId: currentProject.id });
       const response = await fetch(statusUrl, { cache: "no-store" });
       if (!response.ok) return;
       const payload = await response.json();
-      renderBackfillStatus(payload?.job || null);
+      const syncState = payload?.syncState || null;
+      const job = payload?.job || null;
+      renderBackfillStatus({
+        status: job?.status || "idle",
+        progressPct: job?.status === "running" ? 50 : job?.status === "completed" ? 100 : 0,
+        completedTasks: job?.status === "completed" ? 1 : 0,
+        totalTasks: 1,
+        error: syncState?.last_error || job?.error || null,
+      });
+      if (syncState?.last_error) {
+        viewState.lastReason = String(syncState.last_error);
+      } else if (job?.status === "completed") {
+        viewState.lastReason = "";
+      }
+      if (syncState?.last_success_at) {
+        viewState.lastFetchedAt = syncState.last_success_at;
+      }
     } catch (error) {}
   };
 
@@ -671,7 +687,7 @@
     void fetchBackfillStatus();
     backfillStatusTimer = window.setInterval(() => {
       void fetchBackfillStatus();
-    }, 5000);
+    }, RATES_SYNC_POLL_MS);
   };
 
   const updateMarketModeVisibility = () => {
@@ -800,12 +816,13 @@
     applyChartFeedbackState();
   };
 
-  const sourceLooksFallback = ({ source = "", reason = "", code = "" }) => {
+  const sourceHasError = ({ source = "", reason = "", code = "" }) => {
     const sourceText = String(source || "").toLowerCase();
     const reasonText = String(reason || "").toLowerCase();
     const codeText = String(code || "").toLowerCase();
     return (
-      sourceText.includes("fallback") ||
+      sourceText.includes("unavailable") ||
+      sourceText.includes("unsupported") ||
       reasonText.includes("source_unavailable") ||
       reasonText.includes("region_not_supported") ||
       reasonText.includes("request_failed") ||
@@ -816,11 +833,11 @@
 
   const updateSourceWarning = () => {
     if (!ratesSourceWarning) return;
-    const show = sourceLooksFallback({ source: viewState.lastSource, reason: viewState.lastReason });
+    const show = sourceHasError({ source: viewState.lastSource, reason: viewState.lastReason });
     ratesSourceWarning.hidden = !show;
     if (!show) return;
-    const sourceText = viewState.lastSourceUrl || viewState.lastSource || "fallback_modeled_source";
-    ratesSourceWarning.textContent = `❌ Live market source unavailable. Showing fallback modeled rates. Source: ${sourceText}`;
+    const sourceText = viewState.lastSourceUrl || viewState.lastSource || "unavailable_source";
+    ratesSourceWarning.textContent = `❌ Live market source unavailable. No rates available for this window. Source: ${sourceText}`;
     applyChartFeedbackState();
   };
 
@@ -959,7 +976,7 @@
     const reason = row?.details?.reason || "";
     const code = row?.details?.latestFailureCode || row?.details?.upstreamErrorCode || "";
     if (!source) return '<span class="rates-source--fallback">❌ Not connected</span>';
-    const isFallback = sourceLooksFallback({ source: row?.source || "", reason, code });
+    const isFallback = sourceHasError({ source: row?.source || "", reason, code });
     const escaped = escapeHtml(source);
     if (!isFallback) return `<span class="rates-source-value" title="${escaped}">${escaped}</span>`;
     const codeBadge = code ? `${escapeHtml(code)} ` : "";
@@ -1148,84 +1165,15 @@
       windowEnd,
     };
 
-    if (!forceRefresh) {
-      const cached = await supabaseService.getRateSeriesCache(currentProject.id, cacheKey);
-      const cachedAt = new Date(cached?.fetched_at || 0).getTime();
-      const ttl = RATE_CACHE_TTL_MS[marketMode] || RATE_CACHE_TTL_MS.day_ahead;
-      const cacheSchema = cached?.payload?.metadata?.cacheSchemaVersion || "";
-      const cachedSource = cached?.payload?.metadata?.source || "";
-      const cachedReason = cached?.payload?.metadata?.details?.reason || "";
-      const isFallbackCache = sourceLooksFallback({ source: cachedSource, reason: cachedReason });
-      if (
-        cached?.payload?.points &&
-        cacheSchema === RATES_CACHE_SCHEMA_VERSION &&
-        !isFallbackCache &&
-        Number.isFinite(cachedAt) &&
-        Date.now() - cachedAt <= ttl
-      ) {
-        const cachedPoints = sanitizePoints(cached.payload.points);
-        const cachedUnit = cached?.payload?.metadata?.unit || "";
-        const cachedSourceUnit = cached?.payload?.metadata?.sourceUnit || "";
-        viewState.apiVersion = cached?.payload?.metadata?.apiVersion || "v2";
-        viewState.qualityStatus = cached?.payload?.metadata?.qualityStatus || "unknown";
-        viewState.lastSource = cached?.payload?.metadata?.source || "";
-        viewState.lastSourceUrl = cached?.payload?.metadata?.details?.sourceUrl || cached?.source || "";
-        viewState.lastSourceNode = cached?.payload?.metadata?.details?.sourceNode || "";
-        viewState.lastReason = cached?.payload?.metadata?.details?.reason || "";
-        viewState.lastFetchedAt = cached?.payload?.metadata?.fetchedAt || cached?.fetched_at || null;
-        const resolvedSourceUnit = resolveSourceUnit({
-          sourceUnit: cachedSourceUnit,
-          unit: cachedUnit,
-          serviceType: viewState.serviceType,
-          points: cachedPoints,
-        });
-        const repaired = repairLikelyLegacyLmpScale({
-          points: cachedPoints,
-          serviceType: viewState.serviceType,
-          sourceUnit: resolvedSourceUnit,
-        });
-        const repairedMwhLabel = repairLikelyMislabeledLmpMwh({
-          points: repaired.points,
-          serviceType: viewState.serviceType,
-          sourceUnit: repaired.sourceUnit,
-        });
-        viewState.sourceUnit = repairedMwhLabel.sourceUnit;
-        viewState.rawPoints = repairedMwhLabel.points;
-        refreshAvailableIntervals();
-        if (repaired.repaired) {
-          console.warn("Repaired legacy LMP cache scale by x1000 (USD/kWh).");
-        }
-        if (repairedMwhLabel.repaired) {
-          console.warn("Repaired mislabeled legacy LMP cache source unit (USD/MWh -> USD/kWh).");
-        }
-        if (!suppressRender) renderChart();
-        return;
-      }
-    }
-
     try {
-      const ratesUrl = buildUrl(RATES_TIMESERIES_V2_ENDPOINT, {
+      const ratesUrl = buildUrl(V3_RATES_SERIES_ENDPOINT, {
         projectId: currentProject.id,
-        lat: currentProject.lat,
-        lng: currentProject.lng,
         serviceType: viewState.serviceType,
         marketMode,
         start: windowStart,
         end: windowEnd,
       });
-      let response = await fetch(ratesUrl, { cache: "no-store" });
-      if (!response.ok && response.status === 404) {
-        const legacyUrl = buildUrl(`${RATES_PROXY_ENDPOINT}/timeseries`, {
-          projectId: currentProject.id,
-          lat: currentProject.lat,
-          lng: currentProject.lng,
-          serviceType: viewState.serviceType,
-          marketMode,
-          start: windowStart,
-          end: windowEnd,
-        });
-        response = await fetch(legacyUrl, { cache: "no-store" });
-      }
+      const response = await fetch(ratesUrl, { cache: "no-store" });
       if (!response.ok) {
         const responseText = await response.text().catch(() => "");
         throw new Error(`Failed to retrieve rate timeseries. HTTP ${response.status}. ${responseText}`.trim());
@@ -1252,48 +1200,13 @@
       });
       viewState.sourceUnit = repairedMwhLabel.sourceUnit;
       viewState.qualityStatus = metadata.qualityStatus || "unknown";
-      viewState.lastSource = metadata.source || "";
-      viewState.lastSourceUrl = metadata?.details?.sourceUrl || "";
-      viewState.lastSourceNode = metadata?.details?.sourceNode || "";
-      viewState.lastReason = metadata?.details?.reason || "";
+      viewState.lastSource = "v3_rates_series";
+      viewState.lastSourceUrl = "supabase://rate_project_series";
+      viewState.lastSourceNode = "";
+      viewState.lastReason = viewState.lastReason || "";
       viewState.lastFetchedAt = metadata.fetchedAt || new Date().toISOString();
       viewState.rawPoints = repairedMwhLabel.points;
       refreshAvailableIntervals();
-      if (shouldPersistRateCache(metadata)) {
-        await supabaseService.upsertRateSeriesCache({
-          projectId: currentProject.id,
-          regionId: payload?.metadata?.regionId || viewState.regionId || "NON-ISO",
-          serviceType: viewState.serviceType,
-          marketMode,
-          windowStart,
-          windowEnd,
-          timezone: payload?.metadata?.timezone || viewState.timezone || "UTC",
-          source: metadata?.details?.sourceUrl || payload?.metadata?.source || "rates_proxy_phase2",
-          sourceUnit: repairedMwhLabel.sourceUnit,
-          qualityStatus: metadata.qualityStatus || "unknown",
-          apiVersion: metadata.apiVersion || "v2",
-          ingestNotes: {
-            reason: metadata?.details?.reason || null,
-            fetchedFrom: "timeseries",
-          },
-          fetchedAt: payload?.metadata?.fetchedAt || new Date().toISOString(),
-          payload: {
-            points: repairedPayload.points,
-            missingIntervals: payload?.missingIntervals || [],
-            metadata: {
-              ...(payload?.metadata || {}),
-              cacheSchemaVersion: RATES_CACHE_SCHEMA_VERSION,
-              apiVersion: metadata.apiVersion || "v2",
-              qualityStatus: metadata.qualityStatus || "unknown",
-              unit: payload?.metadata?.unit || repairedMwhLabel.sourceUnit,
-              sourceUnit:
-                payload?.metadata?.sourceUnit || payload?.metadata?.unit || repairedMwhLabel.sourceUnit,
-            },
-          },
-        });
-      } else {
-        console.warn("Skipping rate cache write for fallback/unavailable source response.");
-      }
       const missingHours = repairedMwhLabel.points.reduce((sum, point) => (point?.value == null ? sum + 1 : sum), 0);
       const ingestStatus =
         String(metadata?.details?.reason || "").toLowerCase() === "source_unavailable"
@@ -1307,7 +1220,7 @@
           regionId: payload?.metadata?.regionId || viewState.regionId || "NON-ISO",
           serviceType: viewState.serviceType,
           marketMode,
-          source: metadata?.details?.sourceUrl || payload?.metadata?.source || "rates_proxy_phase2",
+          source: "v3_rates_series",
           sourceUnit: repairedMwhLabel.sourceUnit,
           apiVersion: metadata.apiVersion || "v2",
           status: ingestStatus,
@@ -1316,9 +1229,9 @@
           message: metadata?.details?.reason || null,
           details: {
             qualityStatus: metadata?.qualityStatus || null,
-            reason: metadata?.details?.reason || null,
-            sourceUrl: metadata?.details?.sourceUrl || null,
-            sourceNode: metadata?.details?.sourceNode || null,
+            reason: metadata?.details?.reason || viewState.lastReason || null,
+            sourceUrl: viewState.lastSourceUrl || null,
+            sourceNode: viewState.lastSourceNode || null,
             upstreamErrorCode: metadata?.details?.upstreamErrorCode || null,
             upstreamHttpStatus: metadata?.details?.upstreamHttpStatus ?? null,
           },
@@ -1545,34 +1458,16 @@
       const windowStart = start.toISOString();
       const windowEnd = end.toISOString();
 
-      if (typeof supabaseService.clearRateSeriesCache === "function") {
-        await Promise.all(
-          RATE_FEED_PLAN.map((feed) =>
-            supabaseService.clearRateSeriesCache(currentProject.id, {
-              regionId: viewState.regionId || undefined,
-              serviceType: feed.serviceType,
-              marketMode: feed.marketMode,
-              windowStart,
-              windowEnd,
-            })
-          )
-        );
-      }
-
-      await fetch(`${RATES_PROXY_ENDPOINT}/refresh`, { cache: "no-store" }).catch(() => {});
-
-      const refreshErrors = [];
-      for (const feed of RATE_FEED_PLAN) {
-        viewState.serviceType = feed.serviceType;
-        viewState.marketMode = feed.marketMode;
-        // Force API fetch for every feed; skip intermediate re-renders.
-        try {
-          // eslint-disable-next-line no-await-in-loop
-          await fetchRatesSeries({ forceRefresh: true, suppressRender: true });
-        } catch (error) {
-          refreshErrors.push(`${feed.serviceType}:${feed.marketMode}`);
-        }
-      }
+      await fetch(V3_REFRESH_ENDPOINT, {
+        method: "POST",
+        cache: "no-store",
+        headers: { "Content-Type": "application/json; charset=utf-8" },
+        body: JSON.stringify({
+          projectId: currentProject.id,
+          domains: ["rates"],
+          reason: "manual_refresh",
+        }),
+      }).catch(() => {});
 
       viewState.serviceType = originalServiceType;
       viewState.marketMode = originalMarketMode;
@@ -1580,11 +1475,9 @@
       applyToggleState(ratesMarketButtons, viewState.marketMode, "ratesMarket");
       updateMarketModeVisibility();
 
-      await fetchRatesSeries({ forceRefresh: false });
+      await fetchRatesSeries({ forceRefresh: true });
+      await fetchBackfillStatus();
       await fetchHealth();
-      if (refreshErrors.length) {
-        console.warn(`One or more feed refreshes failed: ${refreshErrors.join(", ")}`);
-      }
 
       try {
         currentProject = await withRetry(() =>
@@ -1696,6 +1589,14 @@
 
     window.addEventListener("scroll", hideRatesFieldTooltip, true);
     window.addEventListener("resize", hideRatesFieldTooltip);
+    window.addEventListener("focus", () => {
+      void fetchBackfillStatus();
+    });
+    document.addEventListener("visibilitychange", () => {
+      if (document.visibilityState === "visible") {
+        void fetchBackfillStatus();
+      }
+    });
 
     if (headerProjectNameEditButton && headerProjectNameInput) {
       headerProjectNameEditButton.addEventListener("click", () => {

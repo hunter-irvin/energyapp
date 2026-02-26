@@ -7,6 +7,73 @@ require(path.join(__dirname, "..", "public", "assets", "js", "core", "data-utils
 const { normalizeHeader, mapHeaders, mergeSeriesOnTimestamps } = global.window.EnergyDataUtils;
 const { runSolarComputeTests } = require(path.join(__dirname, "solar-compute.test.js"));
 const { runWindComputeTests } = require(path.join(__dirname, "wind-compute.test.js"));
+const { runDbSchemaTests } = require(path.join(__dirname, "db", "schema.test.js"));
+const { runDbRlsTests } = require(path.join(__dirname, "db", "rls.test.js"));
+const { runDbConstraintTests } = require(path.join(__dirname, "db", "constraint.test.js"));
+const { runSupabaseRequiredTests } = require(path.join(__dirname, "client", "supabase-required.test.js"));
+const { runNoLocalDomainFallbackTests } = require(path.join(__dirname, "client", "no-local-domain-fallback.test.js"));
+const { runV3ContractTests } = require(path.join(__dirname, "api", "v3", "contracts.test.js"));
+const { runV3ValidationTests } = require(path.join(__dirname, "api", "v3", "validation.test.js"));
+const { runParityLocalVsServerlessTests } = require(path.join(__dirname, "api", "parity-local-vs-serverless.test.js"));
+const { runJobLifecycleTests } = require(path.join(__dirname, "jobs", "lifecycle.test.js"));
+const { runJobIdempotencyTests } = require(path.join(__dirname, "jobs", "idempotency.test.js"));
+const { runJobRetryTests } = require(path.join(__dirname, "jobs", "retry.test.js"));
+const { runWeatherRollingWindowTests } = require(path.join(__dirname, "weather", "rolling-window.test.js"));
+const { runWeatherUpsertDedupTests } = require(path.join(__dirname, "weather", "upsert-dedup.test.js"));
+const { runWeatherSyncStateTests } = require(path.join(__dirname, "weather", "sync-state.test.js"));
+const { runGenerationVisibleWindowPriorityTests } = require(path.join(
+  __dirname,
+  "generation",
+  "visible-window-priority.test.js"
+));
+const { runGenerationOverwriteSemanticsTests } = require(path.join(
+  __dirname,
+  "generation",
+  "overwrite-semantics.test.js"
+));
+const { runGenerationBackgroundBackfillTests } = require(path.join(
+  __dirname,
+  "generation",
+  "background-backfill.test.js"
+));
+const { runNoModeledFallbackTests } = require(path.join(__dirname, "rates", "no-modeled-fallback.test.js"));
+const { runUnsupportedRegionTests } = require(path.join(__dirname, "rates", "unsupported-region.test.js"));
+const { runRatesCadenceAvailabilityTests } = require(path.join(
+  __dirname,
+  "rates",
+  "cadence-availability.test.js"
+));
+const { runRatesDayAheadCadenceTests } = require(path.join(__dirname, "rates", "day-ahead-cadence.test.js"));
+const { runLocationChangeInvalidationTests } = require(path.join(
+  __dirname,
+  "invalidation",
+  "location-change.test.js"
+));
+const { runRatesFingerprintConditionalTests } = require(path.join(
+  __dirname,
+  "invalidation",
+  "rates-fingerprint-conditional.test.js"
+));
+const { runAssetChangeInvalidationTests } = require(path.join(
+  __dirname,
+  "invalidation",
+  "asset-change.test.js"
+));
+const { runRatesPollingIntervalTests } = require(path.join(
+  __dirname,
+  "frontend",
+  "rates-polling-interval.test.js"
+));
+const { runManualRefreshTriggersStatusTests } = require(path.join(
+  __dirname,
+  "frontend",
+  "manual-refresh-triggers-status.test.js"
+));
+const { runCadenceControlsTests } = require(path.join(__dirname, "frontend", "cadence-controls.test.js"));
+const { runBackfillScriptTests } = require(path.join(__dirname, "migration", "backfill-script.test.js"));
+const { runNoRegressionSmokeTests } = require(path.join(__dirname, "migration", "no-regression-smoke.test.js"));
+const { runEndpointsParityTests } = require(path.join(__dirname, "parity", "endpoints-parity.test.js"));
+const { runResponseParityTests } = require(path.join(__dirname, "parity", "response-parity.test.js"));
 
 const runDataUtilsTests = () => {
   assert.strictEqual(normalizeHeader(" GHI (W/m^2) "), "ghi");
@@ -46,7 +113,45 @@ const runDataUtilsTests = () => {
   assert.strictEqual(merged.solar[0].ghi, 0);
 };
 
-runDataUtilsTests();
-runSolarComputeTests();
-runWindComputeTests();
-console.log("All tests passed.");
+const run = async () => {
+  runDataUtilsTests();
+  runSolarComputeTests();
+  runWindComputeTests();
+  runDbSchemaTests();
+  runDbRlsTests();
+  runDbConstraintTests();
+  runSupabaseRequiredTests();
+  runNoLocalDomainFallbackTests();
+  await runV3ContractTests();
+  await runV3ValidationTests();
+  await runParityLocalVsServerlessTests();
+  await runJobLifecycleTests();
+  await runJobIdempotencyTests();
+  await runJobRetryTests();
+  await runWeatherRollingWindowTests();
+  await runWeatherUpsertDedupTests();
+  await runWeatherSyncStateTests();
+  await runGenerationVisibleWindowPriorityTests();
+  await runGenerationOverwriteSemanticsTests();
+  await runGenerationBackgroundBackfillTests();
+  await runNoModeledFallbackTests();
+  await runUnsupportedRegionTests();
+  await runRatesCadenceAvailabilityTests();
+  await runRatesDayAheadCadenceTests();
+  await runLocationChangeInvalidationTests();
+  await runRatesFingerprintConditionalTests();
+  await runAssetChangeInvalidationTests();
+  runRatesPollingIntervalTests();
+  runManualRefreshTriggersStatusTests();
+  runCadenceControlsTests();
+  await runBackfillScriptTests();
+  await runNoRegressionSmokeTests();
+  runEndpointsParityTests();
+  await runResponseParityTests();
+  console.log("All tests passed.");
+};
+
+run().catch((error) => {
+  console.error(error);
+  process.exit(1);
+});
