@@ -56,7 +56,7 @@ Use this file as the source of truth during implementation and update it continu
 | S6 | Generation visible-window-first recompute | DONE | local-uncommitted | 2026-02-26 | Added generation sync engine with visible-window-first compute + rolling backfill enqueue; overwrite semantics implemented in generation upserts; S6 generation tests passing. |
 | S7 | Rates: remove modeled fallback + 5-min true cadence | DONE | local-uncommitted | 2026-02-26 | Removed modeled fallback paths in LMP adapter, added explicit unsupported/unavailable empty-series behavior, and aligned cadence handling to true upstream resolution (RT supports 5-min where available). S7 rates tests passing. |
 | S8 | Location/asset fingerprint invalidation rules | DONE | local-uncommitted | 2026-02-26 | Added explicit invalidation-rule engine for location/asset changes with persisted fingerprint patching and conditional rates refresh based on rates-source fingerprint changes; S8 invalidation tests passing. |
-| S9 | Frontend migration to v3 endpoints + polling changes | DONE | local-uncommitted | 2026-02-26 | Migrated rates page to v3 series/sync/status flow, changed status polling to 120s minimum + refresh/focus triggers, and added frontend tests for polling/manual-refresh/cadence controls. |
+| S9 | Frontend migration to v3 endpoints + polling changes | DONE | local-uncommitted | 2026-03-02 | Migrated rates page to v3 series/sync/status flow with dynamic polling (2s active jobs, 120s idle), refresh/focus triggers, and cadence-control coverage tests. |
 | S10 | Backfill/data migration + dual-read cutover | DONE | local-uncommitted | 2026-02-26 | Added legacy->v3 backfill module/script and feature-flagged dual-read fallback (v3-first) for weather/rates series endpoints; added S10 migration tests, all passing. |
 | S11 | Localhost/prod parity verification | DONE | local-uncommitted | 2026-02-26 | Added full v3 route availability parity checks and direct-vs-wrapper response parity fixtures across all v3 endpoints; tests passing. |
 | S12 | Cleanup + deprecation removal + docs finalization | DONE | local-uncommitted | 2026-02-26 | Removed runtime dual-read fallback, migrated location-change refresh trigger to v3, deprecated legacy rates routes, and updated architecture/rates/readme docs with current v3 contracts and rollback notes. |
@@ -284,7 +284,7 @@ Use this file as the source of truth during implementation and update it continu
 #### Implementation
 
 1. Switch pages to v3 series/sync/status endpoints.
-2. Rates status polling interval: minimum 120 seconds.
+2. Rates status polling is dynamic: 2s while active job chunks are running, 120s when idle/completed.
 3. Trigger status refresh on manual refresh and foreground/focus events.
 4. Ensure chart interval controls still obey period/cadence rules.
 
@@ -340,10 +340,10 @@ Use this file as the source of truth during implementation and update it continu
 
 #### Required Tests
 
-1. `tests/parity/endpoints-parity.test.js`
-   - every v3 route exists in both runtime shapes
-2. `tests/parity/response-parity.test.js`
-   - equivalent payload semantics for same fixtures
+1. `tests/parity/route-count-and-mapping.test.js`
+   - active serverless route count stays under 10 and catch-all mapping remains complete
+2. `tests/parity/local-vs-serverless-routes.test.js`
+   - catch-all route responses match direct shared handlers for supported endpoints
 
 #### Exit Criteria
 
@@ -468,3 +468,4 @@ If context is reset:
 2. Continue from the first `IN_PROGRESS` or `BLOCKED` step in `Master Tracker`.
 3. Validate unmerged assumptions against current code before implementing.
 4. Do not start a new step until the current step has updated tests and tracker fields.
+

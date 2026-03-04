@@ -14,10 +14,14 @@ const { runSupabaseRequiredTests } = require(path.join(__dirname, "client", "sup
 const { runNoLocalDomainFallbackTests } = require(path.join(__dirname, "client", "no-local-domain-fallback.test.js"));
 const { runV3ContractTests } = require(path.join(__dirname, "api", "v3", "contracts.test.js"));
 const { runV3ValidationTests } = require(path.join(__dirname, "api", "v3", "validation.test.js"));
+const { runRatesContractsTests } = require(path.join(__dirname, "api", "v3", "rates-contracts.test.js"));
+const { runRatesCompatibilityTests } = require(path.join(__dirname, "api", "v3", "rates-compatibility.test.js"));
 const { runParityLocalVsServerlessTests } = require(path.join(__dirname, "api", "parity-local-vs-serverless.test.js"));
 const { runJobLifecycleTests } = require(path.join(__dirname, "jobs", "lifecycle.test.js"));
 const { runJobIdempotencyTests } = require(path.join(__dirname, "jobs", "idempotency.test.js"));
 const { runJobRetryTests } = require(path.join(__dirname, "jobs", "retry.test.js"));
+const { runRatesChunkLifecycleTests } = require(path.join(__dirname, "jobs", "rates-chunk-lifecycle.test.js"));
+const { runRatesProgressAggregationTests } = require(path.join(__dirname, "jobs", "rates-progress-aggregation.test.js"));
 const { runWeatherRollingWindowTests } = require(path.join(__dirname, "weather", "rolling-window.test.js"));
 const { runWeatherUpsertDedupTests } = require(path.join(__dirname, "weather", "upsert-dedup.test.js"));
 const { runWeatherSyncStateTests } = require(path.join(__dirname, "weather", "sync-state.test.js"));
@@ -44,6 +48,14 @@ const { runRatesCadenceAvailabilityTests } = require(path.join(
   "cadence-availability.test.js"
 ));
 const { runRatesDayAheadCadenceTests } = require(path.join(__dirname, "rates", "day-ahead-cadence.test.js"));
+const { runDbFirstCoveragePlannerTests } = require(path.join(__dirname, "rates", "db-first-coverage-planner.test.js"));
+const { runMissingRangeChunkingTests } = require(path.join(__dirname, "rates", "missing-range-chunking.test.js"));
+const { runRatesVisibleWindowPriorityTests } = require(path.join(__dirname, "rates", "visible-window-priority.test.js"));
+const { runRatesIncrementalUpsertAndResumeTests } = require(path.join(__dirname, "rates", "incremental-upsert-and-resume.test.js"));
+const { runCaisoRequestWindowCapTests } = require(path.join(__dirname, "rates", "caiso-request-window-cap.test.js"));
+const { runCaisoChunkPlanPerformanceHeuristicsTests } = require(path.join(__dirname, "rates", "caiso-chunk-plan-performance-heuristics.test.js"));
+const { runCaisoDaParserNoMwFallbackTests } = require(path.join(__dirname, "rates", "caiso-da-parser-no-mw-fallback.test.js"));
+const { runDbFirstCoverageValueAwareTests } = require(path.join(__dirname, "rates", "db-first-coverage-value-aware.test.js"));
 const { runLocationChangeInvalidationTests } = require(path.join(
   __dirname,
   "invalidation",
@@ -64,16 +76,90 @@ const { runRatesPollingIntervalTests } = require(path.join(
   "frontend",
   "rates-polling-interval.test.js"
 ));
+const { runRatesActiveVsIdlePollingTests } = require(path.join(
+  __dirname,
+  "frontend",
+  "rates-active-vs-idle-polling.test.js"
+));
+const { runRatesIncrementalChartRefreshTests } = require(path.join(
+  __dirname,
+  "frontend",
+  "rates-incremental-chart-refresh.test.js"
+));
 const { runManualRefreshTriggersStatusTests } = require(path.join(
   __dirname,
   "frontend",
   "manual-refresh-triggers-status.test.js"
 ));
+const { runRatesDebugTableColumnsTests } = require(path.join(__dirname, "frontend", "rates-debug-table-columns.test.js"));
+const { runRatesAvailabilityBarsTests } = require(path.join(__dirname, "frontend", "rates-availability-bars.test.js"));
+
+const { runRatesNullSafetyFeedbackTests } = require(path.join(
+  __dirname,
+  "frontend",
+  "rates-null-safety-feedback.test.js"
+));
+const { runRatesProgressReconciliationTests } = require(path.join(
+  __dirname,
+  "frontend",
+  "rates-progress-reconciliation.test.js"
+));
+const { runRatesSyncTimeoutUnblocksUiTests } = require(path.join(
+  __dirname,
+  "frontend",
+  "rates-sync-timeout-unblocks-ui.test.js"
+));
+const { runRatesLoadingIndicatorsStateMachineTests } = require(path.join(
+  __dirname,
+  "frontend",
+  "rates-loading-indicators-state-machine.test.js"
+));
+
+
+const { runRatesStatusShapeGuaranteeTests } = require(path.join(
+  __dirname,
+  "api",
+  "v3",
+  "rates-status-shape-guarantee.test.js"
+));
+
+const { runRatesWindowCompleteReadTests } = require(path.join(
+  __dirname,
+  "api",
+  "v3",
+  "rates-window-complete-read.test.js"
+));
+
+const { runRatesWindowChangeDbFirstReloadTests } = require(path.join(
+  __dirname,
+  "frontend",
+  "rates-window-change-db-first-reload.test.js"
+));
+const { runRatesWindowMissingGapFetchTests } = require(path.join(
+  __dirname,
+  "frontend",
+  "rates-window-missing-gap-fetch.test.js"
+));
+const { runRatesAvailabilityBarExtentsTests } = require(path.join(
+  __dirname,
+  "frontend",
+  "rates-availability-bar-extents.test.js"
+));
+const { runRatesWindowScopedPercentagesTests } = require(path.join(
+  __dirname,
+  "frontend",
+  "rates-window-scoped-percentages.test.js"
+));
+const { runRatesMissingOverlayVsZeroTests } = require(path.join(__dirname, "frontend", "rates-missing-overlay-vs-zero.test.js"));
+const { runRatesGapTriggersVisibleWindowSyncTests } = require(path.join(__dirname, "frontend", "rates-gap-triggers-visible-window-sync.test.js"));
 const { runCadenceControlsTests } = require(path.join(__dirname, "frontend", "cadence-controls.test.js"));
 const { runBackfillScriptTests } = require(path.join(__dirname, "migration", "backfill-script.test.js"));
 const { runNoRegressionSmokeTests } = require(path.join(__dirname, "migration", "no-regression-smoke.test.js"));
-const { runEndpointsParityTests } = require(path.join(__dirname, "parity", "endpoints-parity.test.js"));
-const { runResponseParityTests } = require(path.join(__dirname, "parity", "response-parity.test.js"));
+const { runRatesCaisoDaZeroRepairTests } = require(path.join(__dirname, "migration", "rates-caiso-da-zero-repair.test.js"));
+const { runRatesCaisoRtZeroRepairTests } = require(path.join(__dirname, "migration", "rates-caiso-rt-zero-repair.test.js"));
+const { runV3RatesDocParityTests } = require(path.join(__dirname, "docs", "v3-rates-doc-parity.test.js"));
+const { runRouteCountAndMappingTests } = require(path.join(__dirname, "parity", "route-count-and-mapping.test.js"));
+const { runLocalVsServerlessRoutesTests } = require(path.join(__dirname, "parity", "local-vs-serverless-routes.test.js"));
 
 const runDataUtilsTests = () => {
   assert.strictEqual(normalizeHeader(" GHI (W/m^2) "), "ghi");
@@ -124,10 +210,14 @@ const run = async () => {
   runNoLocalDomainFallbackTests();
   await runV3ContractTests();
   await runV3ValidationTests();
+  await runRatesContractsTests();
+  await runRatesCompatibilityTests();
   await runParityLocalVsServerlessTests();
   await runJobLifecycleTests();
   await runJobIdempotencyTests();
   await runJobRetryTests();
+  await runRatesChunkLifecycleTests();
+  await runRatesProgressAggregationTests();
   await runWeatherRollingWindowTests();
   await runWeatherUpsertDedupTests();
   await runWeatherSyncStateTests();
@@ -138,16 +228,44 @@ const run = async () => {
   await runUnsupportedRegionTests();
   await runRatesCadenceAvailabilityTests();
   await runRatesDayAheadCadenceTests();
+  await runDbFirstCoveragePlannerTests();
+  await runMissingRangeChunkingTests();
+  await runRatesVisibleWindowPriorityTests();
+  await runRatesIncrementalUpsertAndResumeTests();
+  await runCaisoRequestWindowCapTests();
+  await runCaisoChunkPlanPerformanceHeuristicsTests();
+  await runCaisoDaParserNoMwFallbackTests();
+  await runDbFirstCoverageValueAwareTests();
   await runLocationChangeInvalidationTests();
   await runRatesFingerprintConditionalTests();
   await runAssetChangeInvalidationTests();
   runRatesPollingIntervalTests();
+  runRatesActiveVsIdlePollingTests();
+  runRatesIncrementalChartRefreshTests();
   runManualRefreshTriggersStatusTests();
+  
+  runRatesNullSafetyFeedbackTests();
+  runRatesProgressReconciliationTests();
+  runRatesSyncTimeoutUnblocksUiTests();
+  runRatesLoadingIndicatorsStateMachineTests();
+  runRatesStatusShapeGuaranteeTests();
+  runRatesWindowCompleteReadTests();
+  runRatesDebugTableColumnsTests();
+  runRatesAvailabilityBarsTests();
+  runRatesWindowChangeDbFirstReloadTests();
+  runRatesWindowMissingGapFetchTests();
+  runRatesAvailabilityBarExtentsTests();
+  runRatesWindowScopedPercentagesTests();
+  runRatesMissingOverlayVsZeroTests();
+  runRatesGapTriggersVisibleWindowSyncTests();
   runCadenceControlsTests();
   await runBackfillScriptTests();
   await runNoRegressionSmokeTests();
-  runEndpointsParityTests();
-  await runResponseParityTests();
+  await runRatesCaisoDaZeroRepairTests();
+  await runRatesCaisoRtZeroRepairTests();
+  runV3RatesDocParityTests();
+  runRouteCountAndMappingTests();
+  await runLocalVsServerlessRoutesTests();
   console.log("All tests passed.");
 };
 
@@ -155,3 +273,23 @@ run().catch((error) => {
   console.error(error);
   process.exit(1);
 });
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

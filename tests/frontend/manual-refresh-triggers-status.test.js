@@ -5,14 +5,17 @@ const path = require("path");
 const runManualRefreshTriggersStatusTests = () => {
   const filePath = path.join(__dirname, "..", "..", "public", "assets", "js", "pages", "rates.js");
   const source = fs.readFileSync(filePath, "utf8");
-  assert.ok(source.includes("await fetch(V3_REFRESH_ENDPOINT"), "Expected manual refresh to hit v3 refresh endpoint.");
-  assert.ok(source.includes("reason: \"manual_refresh\""), "Expected manual refresh request reason.");
+  assert.ok(
+    source.includes("await requestRatesSync({ runNow: true, mode: \"rolling\" })"),
+    "Expected manual refresh to invoke v3 rates sync directly."
+  );
+  assert.ok(source.includes("runNow ? \"manual_refresh\" : \"user_login\""), "Expected manual refresh request reason.");
   assert.ok(
     source.includes("await fetchBackfillStatus();"),
     "Expected manual refresh flow to trigger immediate sync status refresh."
   );
   assert.ok(
-    source.includes("window.addEventListener(\"focus\", () => {\n      void fetchBackfillStatus();\n    });"),
+    /window\.addEventListener\("focus", \(\) => \{\r?\n\s*void fetchBackfillStatus\(\);\r?\n\s*\}\);/.test(source),
     "Expected focus event to trigger status refresh."
   );
 };

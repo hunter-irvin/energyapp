@@ -3,11 +3,13 @@
   const V3_RATES_SERIES_ENDPOINT = "/api/v3/series/rates";
   const V3_RATES_SYNC_ENDPOINT = "/api/v3/sync/rates";
   const V3_RATES_SYNC_STATUS_ENDPOINT = "/api/v3/sync/rates/status";
-  const V3_REFRESH_ENDPOINT = "/api/v3/refresh";
   const WINDOW_BACK_DAYS = 30;
   const WINDOW_FORWARD_DAYS = 7;
   const RATES_CACHE_SCHEMA_VERSION = "rates_v3_ercot_live_fix";
   const RATES_SYNC_POLL_MS = 2 * 60 * 1000;
+  const RATES_SYNC_ACTIVE_POLL_MS = 2 * 1000;
+  const RATES_SYNC_REQUEST_TIMEOUT_MS = 20 * 1000;
+  const RATES_SYNC_STALE_QUEUE_MS = 60 * 1000;
   const INTERVAL_STORAGE_SUFFIX = "ratesInterval";
   const INTERVAL_OPTIONS = Object.freeze(["five_min", "half_hour", "hourly", "daily"]);
   const DEFAULT_AVAILABLE_INTERVALS = Object.freeze(["hourly", "daily"]);
@@ -302,6 +304,20 @@
     return { start, end };
   };
 
+
+  const getActiveChartWindow = () => {
+    const selectedDate = parseDateKey(viewState.selectedDateKey) || new Date();
+    return getDateRangeForPeriod(viewState.period, selectedDate);
+  };
+
+  const getActiveChartWindowIso = () => {
+    const { start, end } = getActiveChartWindow();
+    return {
+      start: new Date(start).toISOString(),
+      end: new Date(end).toISOString(),
+    };
+  };
+
   const viewState = {
     period: "week",
     interval: "hourly",
@@ -323,6 +339,10 @@
     rawPoints: [],
     availableIntervals: Array.from(DEFAULT_AVAILABLE_INTERVALS),
     healthRows: [],
+    syncProgressByFeed: {},
+    seriesCoverageByFeed: {},
+    progressWindowStart: null,
+    progressWindowEnd: null,
     expandedRegions: new Set(),
     legend: {
       rate: true,
@@ -335,6 +355,9 @@
   let ratesControlStripBridge = null;
   let ratesLegendBridge = null;
   let backfillStatusTimer = null;
+  let backfillStatusPollMs = RATES_SYNC_POLL_MS;
+  let incrementalRefreshInFlight = false;
+  let lastActiveFeedProgressSignature = "";
 
   const getScopedUiKey = (projectIdValue, suffix) => {
     if (!projectIdValue) return "";
@@ -402,7 +425,8 @@
       ratesChartFrame.setAttribute("data-state", "warning");
       return;
     }
-    ratesChartFrame.setAttribute("data-state", viewState.displaySeries.length ? "ready" : "idle");
+    const hasPoints = Array.isArray(viewState.rawPoints) && viewState.rawPoints.length > 0;
+    ratesChartFrame.setAttribute("data-state", hasPoints ? "ready" : "idle");
   };
 
   const applyToggleState = (buttons, activeValue, attribute) => {
@@ -476,7 +500,7 @@
           viewState.interval = intervalKey;
           persistInterval(currentProject?.id, viewState.interval);
           syncControlStrip();
-          renderChart();
+          void reloadWindowScopedData();
         },
       })
     );
@@ -503,7 +527,7 @@
               viewState.period = "day";
               refreshAvailableIntervals();
               syncControlStrip();
-              renderChart();
+              void reloadWindowScopedData();
             },
           },
           {
@@ -514,7 +538,7 @@
               viewState.period = "week";
               refreshAvailableIntervals();
               syncControlStrip();
-              renderChart();
+              void reloadWindowScopedData();
             },
           },
           {
@@ -525,7 +549,7 @@
               viewState.period = "month";
               refreshAvailableIntervals();
               syncControlStrip();
-              renderChart();
+              void reloadWindowScopedData();
             },
           },
         ],
@@ -573,7 +597,7 @@
       if (!nextValue) return;
       viewState.selectedDateKey = nextValue;
       syncControlStrip();
-      renderChart();
+      void reloadWindowScopedData();
       if (currentProject) {
         void supabaseService
           .updateProject(currentProject.id, { selectedDate: viewState.selectedDateKey })
@@ -635,41 +659,126 @@
 
   const renderBackfillStatus = (job) => {
     if (!ratesBackfillStatus) return;
-    if (!job || job.status === "idle") {
+    const status = String(job?.status || "idle").toLowerCase();
+    if (!job || status === "idle") {
       ratesBackfillStatus.textContent = "Rates Sync: Not started";
       return;
     }
     const pct = Number(job.progressPct || 0);
     const completed = Number(job.completedTasks || 0);
     const total = Number(job.totalTasks || 0);
-    if (job.status === "completed") {
+    if (status === "completed") {
       ratesBackfillStatus.textContent = "Rates Sync: Completed";
       return;
     }
-    if (job.status === "failed") {
+    if (status === "failed") {
       const err = String(job.error || "failed");
       ratesBackfillStatus.textContent = `Rates Sync: Failed (${err})`;
       return;
     }
-    ratesBackfillStatus.textContent = `Rates Sync: ${job.status} (${pct}% - ${completed}/${total})`;
+    const createdAtMs = job?.createdAt ? new Date(job.createdAt).getTime() : NaN;
+    const isStaleQueued = status === "queued" && Number.isFinite(createdAtMs) && Date.now() - createdAtMs > RATES_SYNC_STALE_QUEUE_MS;
+    const hasOutstanding = Number(job?.missingPoints || 0) > 0;
+    if (isStaleQueued) {
+      ratesBackfillStatus.textContent = hasOutstanding
+        ? "Rates Sync: queued (worker not processing; missing data pending)"
+        : "Rates Sync: queued (waiting for worker; retrying automatically)";
+      return;
+    }
+    if (status === "queued" && hasOutstanding) {
+      ratesBackfillStatus.textContent = `Rates Sync: queued (${pct}% - ${completed}/${total}; missing data pending)`;
+      return;
+    }
+    ratesBackfillStatus.textContent = `Rates Sync: ${status} (${pct}% - ${completed}/${total})`;
+  };
+
+  const resolveActiveFeedKeyForStatus = () =>
+    viewState.serviceType === "tariff" ? "tariff" : viewState.marketMode === "real_time" ? "lmp_rt" : "lmp_da";
+
+  const normalizeProgressEntry = (entry) => {
+    const source = entry && typeof entry === "object" ? entry : {};
+    return {
+      coveragePct: Number(source.coveragePct || 0),
+      expectedPoints: Number(source.expectedPoints || 0),
+      availablePoints: Number(source.availablePoints || 0),
+      missingPoints: Number(source.missingPoints || 0),
+      runningChunks: Number(source.runningChunks || 0),
+      queuedChunks: Number(source.queuedChunks || 0),
+      completedChunks: Number(source.completedChunks || 0),
+      failedChunks: Number(source.failedChunks || 0),
+      chunkProgressPct: Number(source.chunkProgressPct || 0),
+      windowStart: source.windowStart || null,
+      windowEnd: source.windowEnd || null,
+    };
+  };
+
+  const mapProgressByFeed = (progress) => ({
+    tariff: normalizeProgressEntry(progress?.byClass?.tariff),
+    lmp_rt: normalizeProgressEntry(progress?.byClass?.lmpRt),
+    lmp_da: normalizeProgressEntry(progress?.byClass?.lmpDa),
+  });
+
+  const buildActiveFeedProgressSignature = ({ progressByFeed, activeFeedKey, windowStart, windowEnd }) => {
+    const active = progressByFeed?.[activeFeedKey] || {};
+    return JSON.stringify({
+      activeFeedKey,
+      windowStart: windowStart || null,
+      windowEnd: windowEnd || null,
+      coveragePct: Number(active.coveragePct || 0),
+      availablePoints: Number(active.availablePoints || 0),
+      missingPoints: Number(active.missingPoints || 0),
+      runningChunks: Number(active.runningChunks || 0),
+      queuedChunks: Number(active.queuedChunks || 0),
+      completedChunks: Number(active.completedChunks || 0),
+      failedChunks: Number(active.failedChunks || 0),
+    });
+  };
+
+  const setBackfillStatusPollingInterval = (intervalMs) => {
+    const nextInterval = Math.max(1000, Number(intervalMs) || RATES_SYNC_POLL_MS);
+    if (backfillStatusPollMs === nextInterval && backfillStatusTimer) return;
+    backfillStatusPollMs = nextInterval;
+    if (backfillStatusTimer) clearInterval(backfillStatusTimer);
+    backfillStatusTimer = window.setInterval(() => {
+      void fetchBackfillStatus();
+    }, backfillStatusPollMs);
   };
 
   const fetchBackfillStatus = async () => {
     if (!currentProject?.id || !ratesBackfillStatus) return;
     try {
-      const statusUrl = buildUrl(V3_RATES_SYNC_STATUS_ENDPOINT, { projectId: currentProject.id });
+      const chartWindow = getActiveChartWindowIso();
+      const statusUrl = buildUrl(V3_RATES_SYNC_STATUS_ENDPOINT, {
+        projectId: currentProject.id,
+        start: chartWindow.start,
+        end: chartWindow.end,
+      });
       const response = await fetch(statusUrl, { cache: "no-store" });
       if (!response.ok) return;
       const payload = await response.json();
       const syncState = payload?.syncState || null;
       const job = payload?.job || null;
+      const progress = payload?.progress || null;
+      const progressByFeed = mapProgressByFeed(progress);
+      viewState.syncProgressByFeed = progressByFeed;
+      viewState.progressWindowStart = progress?.windowStart || chartWindow.start;
+      viewState.progressWindowEnd = progress?.windowEnd || chartWindow.end;
+
+      const isActiveJob =
+        String(job?.status || "").toLowerCase() === "running" || Number(progress?.overall?.runningChunks || 0) > 0;
+
       renderBackfillStatus({
         status: job?.status || "idle",
-        progressPct: job?.status === "running" ? 50 : job?.status === "completed" ? 100 : 0,
-        completedTasks: job?.status === "completed" ? 1 : 0,
-        totalTasks: 1,
+        progressPct:
+          progress?.overall?.chunkProgressPct ??
+          (job?.status === "running" ? 50 : job?.status === "completed" ? 100 : 0),
+        completedTasks: progress?.overall?.completedChunks ?? (job?.status === "completed" ? 1 : 0),
+        totalTasks: progress?.overall?.totalChunks ?? 1,
+        missingPoints: progress?.overall?.missingPoints ?? 0,
         error: syncState?.last_error || job?.error || null,
+        createdAt: job?.created_at || null,
       });
+
       if (syncState?.last_error) {
         viewState.lastReason = String(syncState.last_error);
       } else if (job?.status === "completed") {
@@ -678,18 +787,35 @@
       if (syncState?.last_success_at) {
         viewState.lastFetchedAt = syncState.last_success_at;
       }
+
+      setBackfillStatusPollingInterval(isActiveJob ? RATES_SYNC_ACTIVE_POLL_MS : RATES_SYNC_POLL_MS);
+
+      const activeFeedKey = resolveActiveFeedKeyForStatus();
+      const nextSignature = buildActiveFeedProgressSignature({
+        progressByFeed,
+        activeFeedKey,
+        windowStart: progress?.windowStart,
+        windowEnd: progress?.windowEnd,
+      });
+      const shouldRefreshSeries = isActiveJob && nextSignature !== lastActiveFeedProgressSignature;
+      lastActiveFeedProgressSignature = nextSignature;
+
+      if (shouldRefreshSeries && !incrementalRefreshInFlight) {
+        incrementalRefreshInFlight = true;
+        await fetchRatesSeries({ forceRefresh: false, suppressRender: false }).catch(() => {});
+        incrementalRefreshInFlight = false;
+      }
     } catch (error) {}
   };
 
   const startBackfillStatusPolling = () => {
     if (!ratesBackfillStatus) return;
     if (backfillStatusTimer) clearInterval(backfillStatusTimer);
+    backfillStatusPollMs = RATES_SYNC_POLL_MS;
+    backfillStatusTimer = null;
     void fetchBackfillStatus();
-    backfillStatusTimer = window.setInterval(() => {
-      void fetchBackfillStatus();
-    }, RATES_SYNC_POLL_MS);
+    setBackfillStatusPollingInterval(RATES_SYNC_POLL_MS);
   };
-
   const updateMarketModeVisibility = () => {
     const isLmp = viewState.serviceType === "lmp";
     if (ratesMarketModeGroup) {
@@ -983,6 +1109,96 @@
     return `<span class="rates-source--fallback" title="${escaped}">❌ ${codeBadge}${escaped}</span>`;
   };
 
+  const clampPct = (value) => Math.max(0, Math.min(100, Number(value) || 0));
+
+  const getHealthRowCoveragePct = (feedKey) => {
+    const activeRow = (Array.isArray(viewState.healthRows) ? viewState.healthRows : []).find((row) => {
+      const rowFeedKey = getFeedKey(row?.serviceType, row?.marketMode);
+      return rowFeedKey === feedKey && row?.regionId === viewState.regionId;
+    });
+    const available = Number(activeRow?.details?.availablePoints || 0);
+    const missing = Number(activeRow?.details?.missingPoints || 0);
+    const expected = Number(activeRow?.details?.expectedPoints || available + missing);
+    if (!expected) return 0;
+    return clampPct((available / expected) * 100);
+  };
+
+  const getSeriesCoveragePct = (feedKey) => clampPct(viewState.seriesCoverageByFeed?.[feedKey] || 0);
+  const shouldTriggerVisibleWindowSync = (progressEntry) => {
+    const activeFeedKey = getActiveFeedKey();
+    const coveragePct = getSeriesCoveragePct(activeFeedKey);
+    const missingByCoverage = Number.isFinite(coveragePct) && coveragePct < 100;
+    const missingByStatus = Number(progressEntry?.missingPoints || 0) > 0;
+    return missingByCoverage || missingByStatus;
+  };
+
+  const formatWindowExtentLabel = (isoValue) => {
+    if (!isoValue) return "--";
+    const ts = new Date(isoValue);
+    if (Number.isNaN(ts.getTime())) return "--";
+    try {
+      const formatter = new Intl.DateTimeFormat("en-US", {
+        timeZone: viewState.timezone || "UTC",
+        month: "numeric",
+        day: "numeric",
+        hour: "2-digit",
+        minute: "2-digit",
+        hour12: false,
+      });
+      return formatter.format(ts);
+    } catch (error) {
+      return formatShortDate(ts);
+    }
+  };
+
+  const resolveFeedWindowBounds = (feedKey) => {
+    const progress = normalizeProgressEntry(viewState.syncProgressByFeed?.[feedKey]);
+    const fallbackWindow = getActiveChartWindowIso();
+    return {
+      start: progress.windowStart || viewState.progressWindowStart || fallbackWindow.start,
+      end: progress.windowEnd || viewState.progressWindowEnd || fallbackWindow.end,
+    };
+  };
+
+
+  const getFeedProgressState = (feedKey) => {
+    const progress = normalizeProgressEntry(viewState.syncProgressByFeed?.[feedKey]);
+    const fallbackCoverage = Math.max(getSeriesCoveragePct(feedKey), getHealthRowCoveragePct(feedKey));
+    const greenPct = clampPct(progress.coveragePct || fallbackCoverage);
+    const isActiveFeed = feedKey === getActiveFeedKey();
+    const hasActiveChunk = Number(progress.runningChunks || 0) > 0 || (isActiveFeed && ratesChartLoading && !ratesChartLoading.hidden);
+    const remainingPct = Math.max(0, 100 - greenPct);
+    const yellowPct = hasActiveChunk ? Math.min(remainingPct, Math.max(2, Math.round(remainingPct * 0.35))) : 0;
+    const grayPct = Math.max(0, 100 - greenPct - yellowPct);
+    return {
+      greenPct,
+      yellowPct,
+      grayPct,
+      runningChunks: Number(progress.runningChunks || 0),
+      queuedChunks: Number(progress.queuedChunks || 0),
+      completedChunks: Number(progress.completedChunks || 0),
+      failedChunks: Number(progress.failedChunks || 0),
+      windowStartLabel: formatWindowExtentLabel(resolveFeedWindowBounds(feedKey).start),
+      windowEndLabel: formatWindowExtentLabel(resolveFeedWindowBounds(feedKey).end),
+    };
+  };
+
+  const buildDataAvailabilityCell = (feedKey) => {
+    const state = getFeedProgressState(feedKey);
+    const title = `DB ${state.greenPct}% | Active ${state.yellowPct}% | Pending ${state.grayPct}%`;
+    return `
+      <div class="rates-availability" role="img" aria-label="${escapeHtml(title)}" title="${escapeHtml(title)}">
+        <span class="rates-availability__segment rates-availability__segment--db" style="width:${state.greenPct}%"></span>
+        <span class="rates-availability__segment rates-availability__segment--active" style="width:${state.yellowPct}%"></span>
+        <span class="rates-availability__segment rates-availability__segment--pending" style="width:${state.grayPct}%"></span>
+      </div>
+      <span class="rates-availability__meta">${state.greenPct}% DB</span>
+      <div class="rates-availability__extents">
+        <span class="rates-availability__extent rates-availability__extent--start">${escapeHtml(state.windowStartLabel)}</span>
+        <span class="rates-availability__extent rates-availability__extent--end">${escapeHtml(state.windowEndLabel)}</span>
+      </div>
+    `;
+  };
   const buildFeedDebugContent = (feed, row) => {
     const details = row?.details || {};
     const lastSuccessAt = row?.lastUpdatedAt || "";
@@ -1008,7 +1224,6 @@
       </div>
     `;
   };
-
   const renderHealthTable = () => {
     if (!ratesHealthBody) return;
     const rows = Array.isArray(viewState.healthRows) ? viewState.healthRows : [];
@@ -1052,7 +1267,7 @@
           const activeClass = isActive ? " rates-health-cell--active" : "";
           return `
             <td class="rates-health-cell${activeClass}">${escapeHtml(formatTimestamp(row.lastUpdatedAt))}</td>
-            <td class="rates-health-cell${activeClass}">${formatSourceCell(row)}</td>
+            <td class="rates-health-cell${activeClass}">${buildDataAvailabilityCell(feed.key)}</td>
           `;
         }).join("");
 
@@ -1151,21 +1366,82 @@
     }
   };
 
-  const fetchRatesSeries = async ({ forceRefresh = false, suppressRender = false } = {}) => {
+  const requestRatesSync = async ({ runNow = false, mode = "visible_window", windowStart = null, windowEnd = null } = {}) => {
+    if (!currentProject || currentProject.lat == null || currentProject.lng == null) return null;
+    const fallbackWindow = buildActiveWindow();
+    const requestWindowStart = windowStart || fallbackWindow.start.toISOString();
+    const requestWindowEnd = windowEnd || fallbackWindow.end.toISOString();
+    const controller = new AbortController();
+    const timeoutId = window.setTimeout(() => controller.abort(), RATES_SYNC_REQUEST_TIMEOUT_MS);
+    let response;
+    try {
+      response = await fetch(V3_RATES_SYNC_ENDPOINT, {
+        method: "POST",
+        cache: "no-store",
+        headers: { "Content-Type": "application/json; charset=utf-8" },
+        body: JSON.stringify({
+          projectId: currentProject.id,
+          mode,
+          reason: runNow ? "manual_refresh" : "user_login",
+          windowStart: requestWindowStart,
+          windowEnd: requestWindowEnd,
+          runNow,
+        }),
+        signal: controller.signal,
+      });
+    } catch (error) {
+      if (error?.name === "AbortError") {
+        throw new Error("Rates sync request timed out.");
+      }
+      throw error;
+    } finally {
+      window.clearTimeout(timeoutId);
+    }
+    if (!response.ok) {
+      const responseText = await response.text().catch(() => "");
+      throw new Error(`Failed to sync rates. HTTP ${response.status}. ${responseText}`.trim());
+    }
+    return response.json().catch(() => null);
+  };
+
+  const resolveExpectedPointsForSeries = ({ start, end, interval }) => {
+    const startMs = new Date(start).getTime();
+    const endMs = new Date(end).getTime();
+    if (!Number.isFinite(startMs) || !Number.isFinite(endMs) || endMs < startMs) return 0;
+    const intervalMinutes =
+      interval === "five_min" ? 5 : interval === "half_hour" ? 30 : interval === "daily" ? 24 * 60 : 60;
+    const intervalMs = intervalMinutes * 60 * 1000;
+    return Math.max(1, Math.floor((endMs - startMs) / intervalMs) + 1);
+  };
+
+  const updateSeriesCoverageForFeed = ({ feedKey, points, start, end, interval }) => {
+    if (!feedKey) return;
+    const expectedPoints = resolveExpectedPointsForSeries({ start, end, interval });
+    if (!expectedPoints) {
+      viewState.seriesCoverageByFeed[feedKey] = 0;
+      return;
+    }
+    const availablePoints = (Array.isArray(points) ? points : []).reduce(
+      (sum, point) => (Number.isFinite(point?.value) ? sum + 1 : sum),
+      0
+    );
+    viewState.seriesCoverageByFeed[feedKey] = clampPct((availablePoints / expectedPoints) * 100);
+  };
+
+  const fetchRatesSeries = async ({ forceRefresh = false, suppressRender = false, didSyncRetry = false } = {}) => {
     if (!currentProject || currentProject.lat == null || currentProject.lng == null) return;
-    const { start, end } = buildActiveWindow();
-    const windowStart = start.toISOString();
-    const windowEnd = end.toISOString();
+    const activeWindow = getActiveChartWindowIso();
+    const windowStart = activeWindow.start;
+    const windowEnd = activeWindow.end;
     const marketMode = viewState.serviceType === "tariff" ? "tariff" : viewState.marketMode;
-    const cacheKey = {
-      regionId: viewState.regionId,
-      serviceType: viewState.serviceType,
-      marketMode,
-      windowStart,
-      windowEnd,
-    };
 
     try {
+      if (forceRefresh) {
+        await requestRatesSync({ runNow: true, mode: "visible_window", windowStart, windowEnd }).catch((error) => {
+          console.warn("Rates sync request failed; continuing with cached series.", error);
+        });
+      }
+
       const ratesUrl = buildUrl(V3_RATES_SERIES_ENDPOINT, {
         projectId: currentProject.id,
         serviceType: viewState.serviceType,
@@ -1198,6 +1474,10 @@
         serviceType: viewState.serviceType,
         sourceUnit: repairedPayload.sourceUnit,
       });
+      if (!forceRefresh && !didSyncRetry && repairedMwhLabel.points.length === 0) {
+        await requestRatesSync({ runNow: true, mode: "visible_window", windowStart, windowEnd }).catch(() => {});
+        return fetchRatesSeries({ forceRefresh: false, suppressRender, didSyncRetry: true });
+      }
       viewState.sourceUnit = repairedMwhLabel.sourceUnit;
       viewState.qualityStatus = metadata.qualityStatus || "unknown";
       viewState.lastSource = "v3_rates_series";
@@ -1206,14 +1486,25 @@
       viewState.lastReason = viewState.lastReason || "";
       viewState.lastFetchedAt = metadata.fetchedAt || new Date().toISOString();
       viewState.rawPoints = repairedMwhLabel.points;
+      updateSeriesCoverageForFeed({
+        feedKey: getFeedKey(viewState.serviceType, marketMode),
+        points: repairedMwhLabel.points,
+        start: windowStart,
+        end: windowEnd,
+        interval: viewState.interval,
+      });
       refreshAvailableIntervals();
+      const rowCount = repairedMwhLabel.points.length;
       const missingHours = repairedMwhLabel.points.reduce((sum, point) => (point?.value == null ? sum + 1 : sum), 0);
+      const hasAnyValue = repairedMwhLabel.points.some((point) => point?.value != null);
       const ingestStatus =
         String(metadata?.details?.reason || "").toLowerCase() === "source_unavailable"
           ? "failed"
-          : missingHours > 0
+          : rowCount === 0 || !hasAnyValue
             ? "partial"
-            : "success";
+            : missingHours > 0
+              ? "partial"
+              : "success";
       void supabaseService
         .insertRateIngestRun({
           projectId: currentProject.id,
@@ -1224,7 +1515,7 @@
           sourceUnit: repairedMwhLabel.sourceUnit,
           apiVersion: metadata.apiVersion || "v2",
           status: ingestStatus,
-          rowCount: repairedMwhLabel.points.length,
+          rowCount,
           missingHours,
           message: metadata?.details?.reason || null,
           details: {
@@ -1275,12 +1566,11 @@
       throw error;
     }
   };
-
   const fetchHealth = async () => {
     if (!currentProject || currentProject.lat == null || currentProject.lng == null) return;
-    const { start, end } = buildActiveWindow();
-    const windowStart = start.toISOString();
-    const windowEnd = end.toISOString();
+    const activeWindow = getActiveChartWindowIso();
+    const windowStart = activeWindow.start;
+    const windowEnd = activeWindow.end;
     const fetchHealthRows = async (serviceType) => {
       const healthUrl = buildUrl(`${RATES_PROXY_ENDPOINT}/health`, {
         projectId: currentProject.id,
@@ -1403,11 +1693,35 @@
     setLoading(true);
     try {
       await resolveProvider();
+      if (forceRefresh) {
+        const activeWindow = getActiveChartWindowIso();
+        await requestRatesSync({
+          runNow: true,
+          mode: "visible_window",
+          windowStart: activeWindow.start,
+          windowEnd: activeWindow.end,
+        }).catch(() => {});
+      }
       try {
         await fetchRatesSeries({ forceRefresh });
       } catch (error) {
         console.error("Failed to load rates series.", error);
       }
+
+      await fetchBackfillStatus();
+      const activeFeedKey = getActiveFeedKey();
+      const progress = normalizeProgressEntry(viewState.syncProgressByFeed?.[activeFeedKey]);
+      if (shouldTriggerVisibleWindowSync(progress)) {
+        const activeWindow = getActiveChartWindowIso();
+        await requestRatesSync({
+          runNow: true,
+          mode: "visible_window",
+          windowStart: activeWindow.start,
+          windowEnd: activeWindow.end,
+        }).catch(() => {});
+        await fetchBackfillStatus();
+      }
+
       await fetchHealth();
       try {
         currentProject = await withRetry(() =>
@@ -1434,7 +1748,7 @@
     else next.setMonth(next.getMonth() + direction);
     viewState.selectedDateKey = formatDateKey(next);
     syncControlStrip();
-    renderChart();
+    void reloadWindowScopedData();
     if (currentProject) {
       void supabaseService
         .updateProject(currentProject.id, { selectedDate: viewState.selectedDateKey })
@@ -1442,6 +1756,35 @@
           currentProject = project;
         })
         .catch(() => {});
+    }
+  };
+
+  const reloadWindowScopedData = async () => {
+    if (!currentProject || currentProject.lat == null || currentProject.lng == null) return;
+
+    setLoading(true);
+    try {
+      await fetchRatesSeries({ forceRefresh: false });
+      await fetchBackfillStatus();
+
+      const activeFeedKey = getActiveFeedKey();
+      const progress = normalizeProgressEntry(viewState.syncProgressByFeed?.[activeFeedKey]);
+      if (shouldTriggerVisibleWindowSync(progress)) {
+        const activeWindow = getActiveChartWindowIso();
+        await requestRatesSync({
+          runNow: true,
+          mode: "visible_window",
+          windowStart: activeWindow.start,
+          windowEnd: activeWindow.end,
+        }).catch(() => {});
+        await fetchBackfillStatus();
+      }
+
+      await fetchHealth();
+    } catch (error) {
+      console.error("Failed to reload rates window.", error);
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -1454,20 +1797,9 @@
     setLoading(true);
     try {
       await resolveProvider();
-      const { start, end } = buildActiveWindow();
-      const windowStart = start.toISOString();
-      const windowEnd = end.toISOString();
-
-      await fetch(V3_REFRESH_ENDPOINT, {
-        method: "POST",
-        cache: "no-store",
-        headers: { "Content-Type": "application/json; charset=utf-8" },
-        body: JSON.stringify({
-          projectId: currentProject.id,
-          domains: ["rates"],
-          reason: "manual_refresh",
-        }),
-      }).catch(() => {});
+      await requestRatesSync({ runNow: true, mode: "rolling" }).catch((error) => {
+        console.warn("Rates sync enqueue/run failed during manual refresh.", error);
+      });
 
       viewState.serviceType = originalServiceType;
       viewState.marketMode = originalMarketMode;
@@ -1475,8 +1807,19 @@
       applyToggleState(ratesMarketButtons, viewState.marketMode, "ratesMarket");
       updateMarketModeVisibility();
 
-      await fetchRatesSeries({ forceRefresh: true });
-      await fetchBackfillStatus();
+      await fetchRatesSeries({ forceRefresh: true });      await fetchBackfillStatus();
+      const activeFeedKey = getActiveFeedKey();
+      const progress = normalizeProgressEntry(viewState.syncProgressByFeed?.[activeFeedKey]);
+      if (shouldTriggerVisibleWindowSync(progress)) {
+        const activeWindow = getActiveChartWindowIso();
+        await requestRatesSync({
+          runNow: true,
+          mode: "visible_window",
+          windowStart: activeWindow.start,
+          windowEnd: activeWindow.end,
+        }).catch(() => {});
+        await fetchBackfillStatus();
+      }
       await fetchHealth();
 
       try {
@@ -1495,7 +1838,6 @@
       setLoading(false);
     }
   };
-
   const bindControlStripTooltips = () => {
     if (!ratesControlStripRoot) return;
     const getHelpButton = (target) => target?.closest?.("[data-rates-help]");
@@ -1693,3 +2035,28 @@
 
   void init();
 })();
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

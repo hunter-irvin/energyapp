@@ -1921,6 +1921,59 @@ textarea:focus-visible {
   word-break: break-word;
 }
 
+.rates-availability {
+  display: flex;
+  width: 100%;
+  min-width: 120px;
+  height: 14px;
+  border: 1px solid var(--color-border-default);
+  background: color-mix(in srgb, var(--color-bg-muted) 82%, transparent);
+  overflow: hidden;
+}
+
+.rates-availability__segment {
+  height: 100%;
+}
+
+.rates-availability__segment--db {
+  background: #6fd08f;
+}
+
+.rates-availability__segment--active {
+  background: #e8df7a;
+}
+
+.rates-availability__segment--pending {
+  background: #595959;
+}
+
+.rates-availability__meta {
+  display: inline-block;
+  margin-top: 4px;
+  font-size: var(--type-caption-size);
+  line-height: var(--type-caption-line);
+  color: var(--color-text-secondary);
+}.rates-availability__extents {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 2px;
+  font-size: 10px;
+  line-height: 1.2;
+  color: var(--color-text-secondary);
+}
+
+.rates-availability__extent {
+  white-space: nowrap;
+}
+
+.rates-availability__extent--start {
+  text-align: left;
+}
+
+.rates-availability__extent--end {
+  text-align: right;
+}
 .rates-health-detail__label {
   font-weight: 700;
   color: var(--color-text-secondary);
@@ -2200,4 +2253,6 @@ textarea:focus-visible {
     width: min(400px, 100%);
   }
 }
+
+
 

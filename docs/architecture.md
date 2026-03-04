@@ -3,10 +3,14 @@
 ## Runtime
 
 - Static pages and assets are served by `server.js` from `public/`.
-- Weather proxy routes are handled by `api/weather-proxy.js` (`/api/weather-proxy`, `/api/nrel-proxy`).
-- Rates provider/health metadata routes are handled by `api/rates-proxy.js` (`/api/rates/provider`, `/api/rates/health`).
-- Canonical domain sync and series routes are handled by `api/v3-proxy.js` (`/api/v3/*`).
-- Runtime config and diagnostics are exposed by `/api/runtime-config` and `/api/diagnostics`.
+- Local runtime (`server.js`) and serverless runtime share the same handler modules.
+- Serverless routing is consolidated through `api/[...path].js`.
+- Domain/API handlers:
+  - `api/weather-proxy.js` (`/api/weather-proxy`, `/api/nrel-proxy`)
+  - `api/rates-proxy.js` (`/api/rates/provider`, `/api/rates/health`)
+  - `api/location-proxy.js` (`/api/location/reverse`)
+  - `api/v3-proxy.js` (`/api/v3/*`)
+  - `api/runtime-config.js`, `api/diagnostics.js`
 
 ## Route Map
 
@@ -14,7 +18,7 @@
 - `/projects/location.html` -> location + weather chart
 - `/projects/generation.html` -> generation asset modeling + chart
 - `/projects/storage.html` -> storage asset modeling + chart
-- `/projects/rates.html` -> rates chart + sync status + availability debug
+- `/projects/rates.html` -> rates chart + sync status + data-availability debug
 
 ## Frontend Module Boundaries
 
@@ -52,16 +56,18 @@
 ## Rates Backend Boundaries
 
 - `lib/rates/provider-resolver.js`: utility/ISO/timezone inference
-- `lib/rates/lmp-adapters.js`: live LMP retrieval, unsupported/unavailable signaling (no modeled fallback)
+- `lib/rates/lmp-adapters.js`: live LMP retrieval, chunk planning, unsupported/unavailable signaling (no modeled fallback)
 - `lib/rates/tariff-adapters.js`: tariff series adapters
 - `lib/rates/health-utils.js`: availability/status summaries
 - `lib/rates/series-utils.js`: range/cadence normalization helpers
+- `lib/v3/rates-sync.js`: DB-first planning, visible-window-first chunk execution, rolling backfill orchestration
 
 ## Supabase Canonical Tables (v3)
 
 - `weather_project_series`
 - `generation_project_series`
 - `rate_project_series`
+- `rate_sync_chunks`
 - `domain_sync_state`
 - `ingestion_jobs`
 - `projects` fingerprint columns used for invalidation (`location_fingerprint`, `asset_fingerprint`, `rates_source_fingerprint`)

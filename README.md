@@ -289,7 +289,7 @@ Rollback notes:
 - Cache rows store raw/normalized-compatible JSON payloads plus `fetched_at`, `wkt`, `timezone`, and `source` metadata for traceability.
 - UI loads cached payloads first and refreshes from `/api/weather-proxy` when cache is stale (24h TTL) or when the **Refresh Weather Data** action is used.
 
-### Rates Page (Phase 3)
+### Rates Page (Current v3 DB-First Progressive Sync)
 
 `/projects/rates.html` provides electricity-rate visualization with project-inferred location context.
 
@@ -299,84 +299,52 @@ Rollback notes:
   - market mode: `Real-Time` or `Day-Ahead` (LMP only)
   - chart period: `Day`, `Week`, `Month`
   - date picker + range shift controls
-- Fixed source window for ingestion/cache in phase 1: `last 30 days + next 7 days`.
-- Missing values are intentionally returned as `null` and rendered as:
-  - line breaks in the chart
-  - shaded missing-data bands over empty intervals
-- Empty-window notice appears when selected window has no published values for the active mode.
-- Debug table under chart reports status, coverage, source, source unit, and confidence.
+- DB-first behavior:
+  - query existing `rate_project_series` for the visible window first
+  - render available points immediately
+  - fetch only missing periods/chunks
+- Progressive sync behavior:
+  - visible-window chunks are prioritized before backlog chunks
+  - chart refreshes incrementally as chunk coverage changes
+  - sync polling is dynamic: fast while active (`2s`), slower when idle (`120s`)
+- Debug table behavior:
+  - `Data Availability` columns for `Tariff`, `LMP-RT`, `LMP-DA`
+  - segmented bars show `DB` (green), `active fetch` (yellow), and `pending` (gray)
+  - source details remain in expandable diagnostics rows
 
-#### Rates API endpoints
-
-Served by `server.js` + `api/rates-proxy.js`:
+#### Rates API endpoints (current)
 
 - `GET /api/rates/provider?lat={lat}&lng={lng}`
   - resolves inferred `utilityName`, `isoRegion`, and `timezone`
-- `GET /api/v2/rates/timeseries?lat={lat}&lng={lng}&serviceType={lmp|tariff}&marketMode={real_time|day_ahead|tariff}&start={ISO}&end={ISO}`
-  - returns hourly points and missing intervals for charting
-  - includes contract metadata: `apiVersion`, `unit`, `sourceUnit`, `confidence`, `qualityStatus`
-  - Rates UI applies display-unit conversion (`USD/kWh` or `USD/MWh`) client-side
-- `GET /api/rates/health?lat={lat}&lng={lng}&serviceType={lmp|tariff}&start={ISO}&end={ISO}`
-  - returns per-region status rows (`good|partial|missing`) and coverage metrics
+- `GET /api/rates/health?lat={lat}&lng={lng}&serviceType={lmp|tariff|all}&start={ISO}&end={ISO}`
+  - returns availability/status rows for the debug table
+- `GET /api/v3/series/rates?projectId={id}&serviceType={lmp|tariff}&marketMode={real_time|day_ahead|tariff}&start={ISO}&end={ISO}`
+  - returns normalized points + coverage metadata (`expectedPoints`, `availablePoints`, `missingPoints`, `coveragePct`, `qualityStatus`)
+- `POST /api/v3/sync/rates`
+  - enqueues rolling/full/visible-window rates sync job
+- `GET /api/v3/sync/rates/status?projectId={id}`
+  - returns latest job + per-class progress/coverage (`tariff`, `lmpRt`, `lmpDa`)
+- `POST /api/v3/refresh`
+  - queues domain refresh with invalidation-aware behavior
+
+Deprecated routes retained for compatibility only:
+
+- `GET /api/rates/timeseries`
+- `GET /api/v2/rates/timeseries`
 - `GET /api/rates/refresh`
-  - phase-1 manual refresh acknowledgment endpoint
-- `GET /api/rates/backfill/start?projectId={id}&lat={lat}&lng={lng}`
-  - queues server-side rates backfill from `2025-01-01` to now for Tariff/LMP-DA/LMP-RT
-- `GET /api/rates/backfill/status?projectId={id}`
-  - returns in-progress/completed/failed backfill status and progress counters
 
-#### Rates storage model
+#### Rates storage model (v3)
 
-Phase-1 persistence supports Supabase and local fallback:
+- Canonical series table: `rate_project_series`
+- Sync/job state tables: `domain_sync_state`, `ingestion_jobs`, `rate_sync_chunks`
+- Debug/support tables: `rate_region_health`, `rate_ingest_runs`
 
-- Project metadata additions in `projects`:
-  - `utility_name`, `iso_region`, `timezone`, `rates_service_type`, `rates_market_mode`
-- New tables:
-  - `rate_series_cache`
-  - `rate_region_health`
-  - `rate_ingest_runs`
-  - `rate_project_series`
-  - `rate_backfill_jobs`
+#### Rates source behavior
 
-Local fallback keys:
-
-- `energyapp.db.rateSeriesCache`
-- `energyapp.db.rateRegionHealth`
-
-`EnergySupabaseService` additions:
-
-- `getRateSeriesCache(projectId, options)`
-- `upsertRateSeriesCache(payload)`
-- `listRateRegionHealth(projectId, options)`
-- `upsertRateRegionHealth(payload)`
-
-#### Phase-2 freshness behavior
-
-Rates are fetched on-demand when an active user opens/interacts with the Rates page. Cache TTLs:
-
-- real-time LMP: 5 minutes
-- day-ahead LMP: 1 hour
-- tariff: 24 hours
-
-Backfill/finalization defaults:
-
-- historical backfill starts at `2025-01-01`
-- RT points older than 7 days are marked `final`
-- DA points older than 3 days are marked `final`
-- Tariff points are treated as final unless superseded
-
-#### Phase-2 adapter behavior
-
-- Backend routes are unchanged, but rates processing is now modular:
-  - provider resolution
-  - LMP adapter
-  - tariff adapter
-  - health/status builder
-- CAISO LMP path attempts live retrieval from CAISO OASIS.
-- Live LMP adapters currently: CAISO OASIS and ERCOT Public API.
-- PJM/MISO/NYISO/ISO-NE/SPP are currently marked not live-capable for LMP and use modeled fallback.
-- When a live connector fails or credentials are missing, responses fall back to modeled series with explicit reason metadata (`source_unavailable`).
-- Tariff path now uses utility-program proxy schedules selected by inferred utility/region; program identifiers are exposed in response metadata/details.
+- No modeled fallback rates are returned.
+- Unsupported regions return explicit unsupported/unavailable responses with empty points.
+- 5-minute cadence is exposed only when upstream source cadence truly supports it.
+- CAISO fetches are chunked with a hard request window cap (<=31 days) and bounded concurrency.
 
 ### Backlog: future auth/ownership hardening
 
@@ -386,3 +354,4 @@ If requirements move away from no-auth/public editing, plan a follow-up migratio
 - replace permissive anon policies with ownership-aware RLS
 - add tenant isolation and scoped reads/writes
 - rotate/restrict existing anon usage patterns
+
