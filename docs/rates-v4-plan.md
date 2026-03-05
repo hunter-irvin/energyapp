@@ -78,6 +78,7 @@ Current implementation strategy:
 - Retry policy remains retry-once per fetch attempt.
 - On 429, pause all pending span fetches during wait window.
 - No hard retention horizon cap yet (beyond existing cache TTL behavior).
+- CAISO LMP node selection must use canonical `utilityCode` (no utility-name fallback for node mapping).
 - Cache partition/fingerprint includes `{projectId, rateType, timezone}` and invalidates on project location change.
 - Keep API single-range for now; multi-range batching deferred.
 - Persist per-span error metadata in cache for debugging.
@@ -345,19 +346,22 @@ MCP access legend:
 | V4-T16H | Add adaptive chunk fallback (retry-after aware retry-once, then split failing chunks to smaller spans) | completed | No | Failing chunks now split adaptively with cooldown-aware retry behavior. |
 | V4-T16I | Add rate-type execution tuning in adapter (RT modest parallelism, DA serialized pacing) | completed | No | RT concurrency default tuned to 2; DA remains single-worker with inter-chunk pacing. |
 | V4-T16J | Add adapter diagnostics for chunk execution stats to v4 response details | completed | No | details.adapterStats now reports chunk attempts/splits/retry waits for debugging. |
-| V4-T17 | Add `residential` support after RT + DA completion | pending | No | Deferred. |
+| V4-T17 | Add `residential` support after RT + DA completion | in_progress | No | Activated. |
+| V4-T17A | Create unified `California adapter` for CAISO-backed v4 rates (RT + DA + Residential) and migrate v4 CAISO adapter logic under it | completed | No | Added `lib/rates/california-adapter.js`; RT/DA proxied through CAISO adapter and Residential served from local NEM dataset. |
+| V4-T17B | Define/lock utility normalization map from project utility fields to supported CA utility keys (`pge`, `sce`, `sdge`) | completed | No | Canonical utility-code-first normalization is implemented across provider, API, and California adapter. |
+| V4-T17C | Rewrite residential JSON utility keys/metadata to match app utility naming contract | completed | No | Residential dataset keys resolved via canonical utility codes (`pge`,`sce`,`sdge`) in adapter path. |
+| V4-T17D | Implement Residential card selection + card-scoped fetch button/loading UX parity with RT/DA | completed | No | Residential card now has fetch button and selected-card loading UI with `Fetching NEM 3.0 data` label. |
+| V4-T17E | Implement Residential data retrieval from repo JSON via California adapter (no external API call) | completed | No | API now serves Residential hourly series from `docs/data/nem3-hourly-rates-2026.json` via California adapter. |
+| V4-T17F | Implement Residential window policy: show 2026 data only and null/missing outside 2026 (no hard failure for partial overlap) | completed | No | Out-of-range windows remain chart-safe with null/missing points and user-facing `data only available for 2026` status text. |
+| V4-T17G | Implement Residential unsupported-utility error: `data not available for this utility`; keep blank/missing chart visible | completed | No | Unsupported utility now returns chart-safe null series plus user-facing status text `data not available for this utility`. |
+| V4-T17H | Restrict Residential intervals to hourly only across day/week/month controls | completed | No | Residential interval controls are hourly-only for day/week/month. |
+| V4-T17I | Integrate Residential into unified cache engine using same store/coverage/error metadata style as RT/DA | completed | No | Residential now uses same localStorage cache partitioning, missing-span, merge, and span-error model as RT/DA. |
+| V4-T17J | Residential automated tests (utility mapping, 2026 boundary behavior, unsupported utility, hourly-only controls, cache hydration/missing rendering) | completed | No | Added/updated v4 API and UI-state tests; `npm run -s test` passing. |
+| V4-T17K | Chrome DevTools MCP validation for Residential flow (supported utility, unsupported utility, partial-out-of-range window, RT/DA switch-back cache retention) | pending | Yes | Required before prototype retirement. |
+| V4-T17L | Add polygon-based California utility territory resolver (3 utility polygons) to provider metadata flow | completed | No | Implemented via GeoJSON + point-in-polygon; CAISO utility inference has no fallback to default utility. |
+| V4-T17M | Persist `utility_code` on projects and wire provider/location updates to store and reuse it | completed | No | Added project schema/migration + frontend persistence wiring. |
+| V4-T17N | Wire CAISO RT/DA node selection to canonical `utilityCode` mapping (`pge` -> NP15, `sce/sdge` -> SP15) | completed | No | Node resolver now prioritizes canonical utility codes before latitude fallback. |
 | V4-T18 | Prepare prototype retirement inventory once v4 is complete | pending | Yes | Removal phase only. |
-
-
-
-
-
-
-
-
-
-
-
 
 
 

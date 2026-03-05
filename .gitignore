@@ -5,3 +5,5 @@ dev-startup.out.log
 .env
 .env.local
 .env.*.local
+
+tmp/nem3/

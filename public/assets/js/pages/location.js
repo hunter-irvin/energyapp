@@ -343,6 +343,7 @@ const updateLocation = async (latlng) => {
         lng,
         mapState: { ...getMapState(), city: null },
         utilityName: null,
+        utilityCode: null,
         isoRegion: null,
         timezone: null,
       })
@@ -377,12 +378,18 @@ const refreshUtilityMetadata = async ({ lat, lng }) => {
     if (!response.ok) return;
     const payload = await response.json();
     const provider = payload?.provider || {};
-    const utilityName = provider.utilityName || currentProject.utilityName || null;
+    const utilityName = Object.prototype.hasOwnProperty.call(provider, "utilityName")
+      ? provider.utilityName
+      : currentProject.utilityName || null;
+    const utilityCode = Object.prototype.hasOwnProperty.call(provider, "utilityCode")
+      ? provider.utilityCode
+      : currentProject.utilityCode || null;
     const isoRegion = provider.isoRegion || currentProject.isoRegion || null;
     const timezone = provider.timezone || currentProject.timezone || null;
     currentProject = await withRetry(() =>
       supabaseService.updateProject(currentProject.id, {
         utilityName,
+        utilityCode,
         isoRegion,
         timezone,
       })
@@ -2282,6 +2289,4 @@ if (typeof document !== 'undefined') {
 }
 
 void init();
-
-
 

@@ -9,6 +9,7 @@ create table if not exists public.projects (
   selected_date text,
   weather_provider text check (weather_provider in ('nrel', 'open_meteo')),
   utility_name text,
+  utility_code text,
   iso_region text,
   timezone text,
   rates_service_type text check (rates_service_type in ('lmp', 'tariff')),
@@ -195,3 +196,4 @@ create policy rate_backfill_jobs_anon_all on public.rate_backfill_jobs
   to anon
   using (true)
   with check (true);
+

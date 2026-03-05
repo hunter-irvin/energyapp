@@ -191,6 +191,7 @@
     selected_date: project.selectedDate || null,
     weather_provider: project.weatherProvider || null,
     utility_name: project.utilityName || null,
+    utility_code: project.utilityCode ?? project.utility_code ?? null,
     iso_region: project.isoRegion || null,
     timezone: project.timezone || null,
     rates_service_type: project.ratesServiceType || null,
@@ -208,6 +209,8 @@
     selectedDate: row.selected_date || null,
     weatherProvider: row.weather_provider || null,
     utilityName: row.utility_name || null,
+    utilityCode: row.utility_code || null,
+    utility_code: row.utility_code || null,
     isoRegion: row.iso_region || null,
     timezone: row.timezone || null,
     ratesServiceType: row.rates_service_type || null,
@@ -282,6 +285,8 @@
       if (Object.prototype.hasOwnProperty.call(patch, "selectedDate")) updatePayload.selected_date = patch.selectedDate;
       if (Object.prototype.hasOwnProperty.call(patch, "weatherProvider")) updatePayload.weather_provider = patch.weatherProvider;
       if (Object.prototype.hasOwnProperty.call(patch, "utilityName")) updatePayload.utility_name = patch.utilityName;
+      if (Object.prototype.hasOwnProperty.call(patch, "utilityCode")) updatePayload.utility_code = patch.utilityCode;
+      if (Object.prototype.hasOwnProperty.call(patch, "utility_code")) updatePayload.utility_code = patch.utility_code;
       if (Object.prototype.hasOwnProperty.call(patch, "isoRegion")) updatePayload.iso_region = patch.isoRegion;
       if (Object.prototype.hasOwnProperty.call(patch, "timezone")) updatePayload.timezone = patch.timezone;
       if (Object.prototype.hasOwnProperty.call(patch, "ratesServiceType"))
@@ -294,6 +299,7 @@
       if (error && this._isMissingColumnError(error)) {
         const fallbackPayload = { ...updatePayload };
         delete fallbackPayload.utility_name;
+        delete fallbackPayload.utility_code;
         delete fallbackPayload.iso_region;
         delete fallbackPayload.timezone;
         delete fallbackPayload.rates_service_type;
@@ -738,3 +744,4 @@
     });
   }
 })();
+

@@ -22,7 +22,7 @@ Query params:
 - `lat` (required)
 - `lng` (required)
 
-Returns inferred `utilityName`, `isoRegion`, `timezone`, and `confidence`.
+Returns inferred `utilityName`, `utilityCode`, `isoRegion`, and `timezone`.
 
 ### `GET /api/rates/health`
 
@@ -143,3 +143,4 @@ Supporting metadata tables used by the debug view:
 - `GET /api/rates/refresh`
 
 These legacy routes are not part of active UI flows.
+

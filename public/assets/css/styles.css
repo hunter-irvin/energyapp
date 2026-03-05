@@ -2283,7 +2283,7 @@ textarea:focus-visible {
 }
 
 .rates-v4-type-card {
-  width: 200px;
+  width: 300px;
   min-height: 0;
   display: flex;
   flex-direction: column;
@@ -2329,6 +2329,13 @@ textarea:focus-visible {
   color: var(--color-text-secondary);
 }
 
+.rates-v4-type-meta {
+  display: block;
+  font-size: var(--type-caption-size);
+  line-height: var(--type-caption-line);
+  color: var(--color-text-muted);
+}
+
 .rates-v4-chart-section {
   margin-top: 0;
 }
@@ -2362,6 +2369,13 @@ textarea:focus-visible {
 .rates-v4-card-status {
   margin-top: var(--space-2);
   width: 100%;
+  padding: 0;
+  border: 0;
+  background: transparent;
+}
+
+.rates-v4-card-status .status__text {
+  margin-bottom: 6px;
 }
 
 .rates-v4-type-card .loading-bars {

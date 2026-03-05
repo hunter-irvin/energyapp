@@ -1,6 +1,6 @@
 (() => {
   const RATE_TYPES = Object.freeze([
-    { key: "residential", title: "Residential", seriesLabel: "Residential Rate", color: "#6ea8ff", enabled: false },
+    { key: "residential", title: "Residential", seriesLabel: "Residential Rate", color: "#6ea8ff", enabled: true },
     {
       key: "commercial_day_ahead",
       title: "Commercial - Day Ahead",
@@ -35,6 +35,11 @@
     week: Object.freeze(["hourly"]),
     month: Object.freeze(["hourly"]),
   });
+  const INTERVALS_BY_PERIOD_RESIDENTIAL = Object.freeze({
+    day: Object.freeze(["hourly"]),
+    week: Object.freeze(["hourly"]),
+    month: Object.freeze(["hourly"]),
+  });
   const INTERVAL_LABELS = Object.freeze({
     five_min: "5 min",
     half_hour: "30 min",
@@ -50,7 +55,16 @@
   const DA_TAIL_REFRESH_MS = 30 * 60 * 1000;
   const RT_TAIL_LOOKBACK_MS = 6 * 60 * 60 * 1000;
   const DA_TAIL_LOOKBACK_MS = 24 * 60 * 60 * 1000;
-  const STATUS_LABELS = Object.freeze(["Fetching OASIS data..."]);
+  const STATUS_LABELS_BY_RATE_TYPE = Object.freeze({
+    residential: Object.freeze(["Fetching NEM 3.0 data"]),
+    commercial_realtime: Object.freeze(["Fetching OASIS data..."]),
+    commercial_day_ahead: Object.freeze(["Fetching OASIS data..."]),
+  });
+  const UTILITY_NAME_BY_CODE = Object.freeze({
+    pge: "Pacific Gas & Electric Company",
+    sce: "Southern California Edison",
+    sdge: "San Diego Gas & Electric",
+  });
 
   const supabaseService = window.EnergySupabaseService;
   const queryParams = new URLSearchParams(window.location.search);
@@ -103,6 +117,7 @@
 
   const requestState = {
     byRateType: {
+      residential: { requestId: 0, controller: null },
       commercial_realtime: { requestId: 0, controller: null },
       commercial_day_ahead: { requestId: 0, controller: null },
     },
@@ -111,6 +126,18 @@
   const dataState = {
     timezone: "UTC",
     byRateType: {
+      residential: {
+        cachePartition: null,
+        windowStartIso: null,
+        windowEndIso: null,
+        series: {
+          five_min: [],
+          half_hour: [],
+          hourly: [],
+        },
+        fetchedAt: null,
+        details: null,
+      },
       commercial_realtime: {
         cachePartition: null,
         windowStartIso: null,
@@ -121,6 +148,7 @@
           hourly: [],
         },
         fetchedAt: null,
+        details: null,
       },
       commercial_day_ahead: {
         cachePartition: null,
@@ -132,6 +160,7 @@
           hourly: [],
         },
         fetchedAt: null,
+        details: null,
       },
     },
   };
@@ -159,6 +188,7 @@
           hourly: [],
         },
         fetchedAt: null,
+        details: null,
       };
     }
     return dataState.byRateType[rateType];
@@ -255,7 +285,7 @@
       };
     }
 
-    const startYmd = addDaysYmd(ymd, -29);
+    const startYmd = addDaysYmd(ymd, -28);
     const endYmd = addDaysYmd(ymd, 1);
     return {
       startIso: zonedDateTimeToUtcIso({ ...startYmd, hh: 0, mm: 0, ss: 0 }, timeZone),
@@ -276,6 +306,53 @@
       lat: Number(project?.location_lat ?? project?.lat),
       lng: Number(project?.location_lng ?? project?.lng),
     };
+  }
+
+  function normalizeUtilityCode(value) {
+    const raw = String(value || "").trim().toLowerCase();
+    if (!raw) return "";
+    if (raw === "pge" || raw === "sce" || raw === "sdge") return raw;
+    const compact = raw.replace(/[^a-z0-9]/g, "");
+    if (compact === "pacificgasandelectric" || compact === "pacificgasandelectriccompany") return "pge";
+    if (compact === "southerncaliforniaedison") return "sce";
+    if (compact === "sandiegogasandelectric") return "sdge";
+    return raw;
+  }
+
+  function resolveProjectUtilityName() {
+    const explicitName = String(currentProject?.utilityName || currentProject?.utility_name || "").trim();
+    if (explicitName) return explicitName;
+    const utilityCode = normalizeUtilityCode(currentProject?.utilityCode || currentProject?.utility_code || "");
+    return UTILITY_NAME_BY_CODE[utilityCode] || "--";
+  }
+
+  function resolveCaisoNodeLabel(rateType) {
+    const rateState = getRateState(rateType);
+    const sourceNode = String(rateState?.details?.sourceNode || "").trim();
+    if (sourceNode) return sourceNode;
+
+    const utilityCode = normalizeUtilityCode(currentProject?.utilityCode || currentProject?.utility_code || "");
+    if (utilityCode === "pge") return "TH_NP15_GEN-APND";
+    if (utilityCode === "sce" || utilityCode === "sdge") return "TH_SP15_GEN-APND";
+
+    const coords = getLocationCoordinates(currentProject);
+    if (Number.isFinite(coords.lat)) {
+      if (coords.lat >= 38) return "TH_NP15_GEN-APND";
+      if (coords.lat < 35.5) return "TH_SP15_GEN-APND";
+      return "TH_ZP26_GEN-APND";
+    }
+
+    return "--";
+  }
+
+  function renderCardMetadata() {
+    const residentialMeta = document.querySelector('[data-rate-meta="residential"]');
+    const daMeta = document.querySelector('[data-rate-meta="commercial_day_ahead"]');
+    const rtMeta = document.querySelector('[data-rate-meta="commercial_realtime"]');
+
+    if (residentialMeta) residentialMeta.textContent = "Utility: " + resolveProjectUtilityName();
+    if (daMeta) daMeta.textContent = "Node: " + resolveCaisoNodeLabel("commercial_day_ahead");
+    if (rtMeta) rtMeta.textContent = "Node: " + resolveCaisoNodeLabel("commercial_realtime");
   }
 
   function buildCachePartition(rateType = viewState.rateType) {
@@ -309,11 +386,13 @@
     rateState.windowStartIso = payload.windowStart || null;
     rateState.windowEndIso = payload.windowEnd || null;
     rateState.fetchedAt = payload.fetchedAt || new Date().toISOString();
+    if (payload.details) rateState.details = payload.details;
     rateState.series = {
       five_min: Array.isArray(payload.series.five_min) ? payload.series.five_min : [],
       half_hour: Array.isArray(payload.series.half_hour) ? payload.series.half_hour : [],
       hourly: Array.isArray(payload.series.hourly) ? payload.series.hourly : [],
     };
+    renderCardMetadata();
   }
 
   function getSeriesForActiveInterval() {
@@ -370,7 +449,15 @@
   }
 
   function supportsFetchForRateType(rateType) {
+    return rateType === "commercial_realtime" || rateType === "commercial_day_ahead" || rateType === "residential";
+  }
+
+  function supportsTailRefreshForRateType(rateType) {
     return rateType === "commercial_realtime" || rateType === "commercial_day_ahead";
+  }
+
+  function resolveLoadingLabelsForRateType(rateType) {
+    return STATUS_LABELS_BY_RATE_TYPE[rateType] || STATUS_LABELS_BY_RATE_TYPE.commercial_realtime;
   }
 
   function setStatusForCard(rateType, { visible, text, progressPct }) {
@@ -412,6 +499,7 @@
     const endMs = Date.parse(String(range?.endIso || ""));
     if (!Number.isFinite(startMs) || !Number.isFinite(endMs)) return null;
 
+    if (rateType === "residential") return null;
     const lookbackMs = rateType === "commercial_day_ahead" ? DA_TAIL_LOOKBACK_MS : RT_TAIL_LOOKBACK_MS;
     const nowMs = Date.now();
     const tailStartMs = nowMs - lookbackMs;
@@ -426,7 +514,9 @@
   }
 
   function resolveTailRefreshCadenceMs(rateType) {
-    return rateType === "commercial_day_ahead" ? DA_TAIL_REFRESH_MS : RT_TAIL_REFRESH_MS;
+    if (rateType === "commercial_day_ahead") return DA_TAIL_REFRESH_MS;
+    if (rateType === "commercial_realtime") return RT_TAIL_REFRESH_MS;
+    return 0;
   }
 
   function clearTailRefreshScheduler() {
@@ -439,9 +529,10 @@
   function startTailRefreshScheduler() {
     clearTailRefreshScheduler();
     const cadenceMs = resolveTailRefreshCadenceMs(viewState.rateType);
+    if (!cadenceMs || !supportsTailRefreshForRateType(viewState.rateType)) return;
     schedulerState.tailTimer = window.setInterval(() => {
       if (document.hidden) return;
-      if (!supportsFetchForRateType(viewState.rateType)) return;
+      if (!supportsTailRefreshForRateType(viewState.rateType)) return;
       void refreshActiveRateWindow({ forceRemote: false, tailRefresh: true });
     }, cadenceMs);
   }
@@ -450,6 +541,7 @@
     window.addEventListener("beforeunload", () => {
       clearTailRefreshScheduler();
       clearLoadingTimers();
+      abortInFlightForRateType("residential");
       abortInFlightForRateType("commercial_realtime");
       abortInFlightForRateType("commercial_day_ahead");
     });
@@ -517,20 +609,21 @@
     loadingState.isStalled = false;
 
     setFetchButtonState(rateType, true);
+    const labels = resolveLoadingLabelsForRateType(rateType);
     setStatusForCard(rateType, {
       visible: true,
-      text: STATUS_LABELS[0],
+      text: labels[0],
       progressPct: 3,
     });
 
     loadingState.labelTimer = window.setInterval(() => {
       if (!loadingState.activeRateType) return;
-      loadingState.labelIndex = (loadingState.labelIndex + 1) % STATUS_LABELS.length;
+      loadingState.labelIndex = (loadingState.labelIndex + 1) % labels.length;
       const elapsed = Date.now() - loadingState.startedAtMs;
       const progress = elapsed >= LOADING_MAX_MS ? 95 : Math.min(95, 95 * Math.pow(elapsed / LOADING_MAX_MS, 0.9));
       setStatusForCard(rateType, {
         visible: true,
-        text: STATUS_LABELS[loadingState.labelIndex],
+        text: labels[loadingState.labelIndex],
         progressPct: progress,
       });
     }, 2000);
@@ -541,7 +634,7 @@
       const progress = elapsed >= LOADING_MAX_MS ? 95 : Math.min(95, 95 * Math.pow(elapsed / LOADING_MAX_MS, 0.9));
       setStatusForCard(rateType, {
         visible: true,
-        text: STATUS_LABELS[loadingState.labelIndex],
+        text: labels[loadingState.labelIndex],
         progressPct: progress,
       });
     }, 120);
@@ -610,10 +703,19 @@
   }
 
   function getIntervalsForPeriod(period) {
+    if (viewState.rateType === "residential") {
+      return INTERVALS_BY_PERIOD_RESIDENTIAL[period] || INTERVALS_BY_PERIOD_RESIDENTIAL.week;
+    }
     if (viewState.rateType === "commercial_day_ahead") {
       return INTERVALS_BY_PERIOD_DA[period] || INTERVALS_BY_PERIOD_DA.week;
     }
     return INTERVALS_BY_PERIOD_RT[period] || INTERVALS_RT;
+  }
+
+  function getRtIntervalForPeriod(period) {
+    if (period === "day") return "five_min";
+    if (period === "week") return "half_hour";
+    return "hourly";
   }
 
   function normalizeIntervalForPeriod() {
@@ -726,6 +828,17 @@
     const padding = Math.max(Math.abs(min) * 0.1, 1);
     return Number((min - padding).toFixed(3));
   }
+  function resolveNowIndicator() {
+    const range = resolveRollingWindow(viewState.period, viewState.selectedDateKey || toDateKey(new Date()), dataState.timezone);
+    if (!range) return null;
+    const startMs = Date.parse(String(range.startIso || ""));
+    const endMs = Date.parse(String(range.endIso || ""));
+    if (!Number.isFinite(startMs) || !Number.isFinite(endMs) || endMs <= startMs) return null;
+    const nowMs = Date.now();
+    if (nowMs < startMs || nowMs > endMs) return null;
+    return { ratio: (nowMs - startMs) / (endMs - startMs), width: 1 };
+  }
+
   function buildChartData() {
     const rows = getSeriesForActiveInterval();
     const cfg = RATE_TYPE_LOOKUP[viewState.rateType];
@@ -839,6 +952,8 @@
     if (chartTitle) chartTitle.textContent = cfg.title;
     if (axis) axis.textContent = chartData.axisText;
 
+    const nowIndicator = resolveNowIndicator();
+
     if (!chartBridge) {
       chartBridge = window.EnergyTimeSeriesChart.createBridge();
       chartBridge.mount(chartRoot, {
@@ -846,17 +961,26 @@
         datasets: chartData.datasets,
         yTitle: "Rate (USD/MWh)",
         minY: chartData.minY,
+        nowIndicator,
       });
       renderMissingBands(chartData.rows || []);
       return;
     }
 
-    chartBridge.update({ labels: chartData.labels, datasets: chartData.datasets, yTitle: "Rate (USD/MWh)", minY: chartData.minY });
+    chartBridge.update({
+      labels: chartData.labels,
+      datasets: chartData.datasets,
+      yTitle: "Rate (USD/MWh)",
+      minY: chartData.minY,
+      nowIndicator,
+    });
     renderMissingBands(chartData.rows || []);
   }
 
   function resolveCadenceMsForRateType(rateType) {
-    return rateType === "commercial_day_ahead" ? 60 * 60 * 1000 : 5 * 60 * 1000;
+    if (rateType === "commercial_day_ahead") return 60 * 60 * 1000;
+    if (rateType === "residential") return 60 * 60 * 1000;
+    return 5 * 60 * 1000;
   }
 
   function resolveCoverageWindowForPayload(rateType, span, payload) {
@@ -923,6 +1047,7 @@
     if (!forceRemote) {
       const cachedPayload = cacheEngine.buildWindowPayload(store, range.startIso, range.endIso);
       if (cachedPayload?.series) {
+        if (store?.meta?.lastDetails) cachedPayload.details = store.meta.lastDetails;
         applySeriesPayload(rateType, cachedPayload);
         if (viewState.rateType === rateType) renderChart();
       }
@@ -953,7 +1078,7 @@
     startLoadingAnimation(rateType);
 
     const coords = getLocationCoordinates(currentProject);
-    const utilityCode = String(currentProject.utility_code || currentProject.utility_name || "");
+    const utilityCode = String(currentProject.utilityCode || currentProject.utility_code || "").trim().toLowerCase();
 
     const fetchSpan = async (span) => {
       const params = new URLSearchParams({
@@ -995,6 +1120,7 @@
     let hadSuccess = false;
     let finalResponse = null;
     let finalPayload = null;
+    let nonFatalMessage = "";
 
     try {
       for (let i = 0; i < missingSpans.length; i += 1) {
@@ -1017,6 +1143,8 @@
 
         if (result.finalResponse?.ok && result.finalPayload?.series) {
           hadSuccess = true;
+          const maybeMessage = String(result.finalPayload?.details?.userError || "").trim();
+          if (maybeMessage) nonFatalMessage = maybeMessage;
           const coverageWindow = resolveCoverageWindowForPayload(rateType, span, result.finalPayload);
           store = cacheEngine.mergeSeriesIntoStore(store, result.finalPayload, {
             spanStartIso: span.startIso,
@@ -1055,9 +1183,14 @@
 
       if (hadSuccess) {
         const mergedPayload = cacheEngine.buildWindowPayload(store, range.startIso, range.endIso);
+        if (store?.meta?.lastDetails) mergedPayload.details = store.meta.lastDetails;
         applySeriesPayload(rateType, mergedPayload);
         if (viewState.rateType === rateType) renderChart();
-        stopLoadingAnimation(rateType, { hide: true });
+        if (nonFatalMessage) {
+          stopLoadingAnimation(rateType, { hide: false, text: nonFatalMessage, progressPct: 100 });
+        } else {
+          stopLoadingAnimation(rateType, { hide: true });
+        }
         return;
       }
 
@@ -1102,6 +1235,7 @@
   }
   function render() {
     updateCards();
+    renderCardMetadata();
     if (controlBridge) controlBridge.update(buildControlStripProps());
     if (legendBridge) legendBridge.update(buildLegendProps());
     renderChart();
@@ -1144,29 +1278,47 @@
     return Array.isArray(projects) && projects.length ? projects[0] : null;
   }
 
-  async function resolveProjectTimezone(project) {
+  async function resolveProjectProvider(project) {
     const lat = Number(project?.location_lat ?? project?.lat);
     const lng = Number(project?.location_lng ?? project?.lng);
-    if (!Number.isFinite(lat) || !Number.isFinite(lng)) return "UTC";
+    const fallback = {
+      timezone: "UTC",
+      utilityName: project?.utilityName || project?.utility_name || null,
+      utilityCode: project?.utilityCode || project?.utility_code || null,
+    };
+    if (!Number.isFinite(lat) || !Number.isFinite(lng)) return fallback;
 
     try {
       const url = new URL("/api/rates/provider", window.location.origin);
       url.searchParams.set("lat", String(lat));
       url.searchParams.set("lng", String(lng));
       const response = await fetch(url.toString(), { method: "GET", headers: { Accept: "application/json" } });
-      if (!response.ok) return "UTC";
+      if (!response.ok) return fallback;
       const payload = await response.json();
-      return String(payload?.provider?.timezone || "UTC");
+      return {
+        timezone: String(payload?.provider?.timezone || "UTC"),
+        utilityName: payload?.provider?.utilityName || fallback.utilityName,
+        utilityCode: payload?.provider?.utilityCode || fallback.utilityCode,
+      };
     } catch (_error) {
-      return "UTC";
+      return fallback;
     }
   }
 
   function selectRateType(next) {
     if (!next || next === viewState.rateType) return;
+    const previousRateType = viewState.rateType;
+    abortInFlightForRateType("residential");
     abortInFlightForRateType("commercial_realtime");
     abortInFlightForRateType("commercial_day_ahead");
     viewState.rateType = next;
+
+    const toRealtimeFromSlowerSource =
+      next === "commercial_realtime" && (previousRateType === "residential" || previousRateType === "commercial_day_ahead");
+    if (toRealtimeFromSlowerSource) {
+      viewState.interval = getRtIntervalForPeriod(viewState.period);
+    }
+
     normalizeIntervalForPeriod();
     startTailRefreshScheduler();
     render();
@@ -1193,12 +1345,9 @@
         event.stopPropagation();
         const rateType = button.dataset.rateFetch;
         if (!supportsFetchForRateType(rateType)) return;
-        abortInFlightForRateType("commercial_realtime");
-        abortInFlightForRateType("commercial_day_ahead");
-        viewState.rateType = rateType;
-        normalizeIntervalForPeriod();
-        startTailRefreshScheduler();
-        render();
+        if (rateType !== viewState.rateType) {
+          selectRateType(rateType);
+        }
         void refreshActiveRateWindow({ forceRemote: true });
       });
     });
@@ -1279,7 +1428,15 @@
     setProjectLinks(currentProject?.id);
     setProjectNameEditorMode(false);
 
-    dataState.timezone = await resolveProjectTimezone(currentProject);
+    const provider = await resolveProjectProvider(currentProject);
+    dataState.timezone = provider.timezone;
+    currentProject = {
+      ...currentProject,
+      utilityName: provider.utilityName || currentProject?.utilityName || currentProject?.utility_name || null,
+      utilityCode: provider.utilityCode || currentProject?.utilityCode || currentProject?.utility_code || null,
+      utility_name: provider.utilityName || currentProject?.utility_name || null,
+      utility_code: provider.utilityCode || currentProject?.utility_code || null,
+    };
     viewState.selectedDateKey = todayDateKeyForTimezone(dataState.timezone);
 
     bindProjectNameEditor();
@@ -1293,41 +1450,4 @@
 
   void init();
 })();
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 

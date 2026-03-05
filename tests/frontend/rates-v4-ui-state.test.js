@@ -11,13 +11,14 @@ const runRatesV4UiStateTests = () => {
   assert.ok(/const\s+PERIODS\s*=\s*Object\.freeze\(\["day",\s*"week",\s*"month"\]\)/.test(js), "Expected day/week/month period controls only.");
   assert.ok(/INTERVALS_BY_PERIOD_RT\s*=\s*Object\.freeze\(\{[\s\S]*month:\s*Object\.freeze\(\["hourly"\]\)/.test(js), "Expected RT month period to allow hourly interval only.");
   assert.ok(/INTERVALS_BY_PERIOD_DA\s*=\s*Object\.freeze\(\{[\s\S]*day:\s*Object\.freeze\(\["hourly"\]\)[\s\S]*week:\s*Object\.freeze\(\["hourly"\]\)[\s\S]*month:\s*Object\.freeze\(\["hourly"\]\)/.test(js), "Expected DA to be hourly-only across day/week/month.");
+  assert.ok(/INTERVALS_BY_PERIOD_RESIDENTIAL\s*=\s*Object\.freeze\(\{[\s\S]*day:\s*Object\.freeze\(\["hourly"\]\)[\s\S]*week:\s*Object\.freeze\(\["hourly"\]\)[\s\S]*month:\s*Object\.freeze\(\["hourly"\]\)/.test(js), "Expected Residential to be hourly-only across day/week/month.");
   assert.ok(/rateType:\s*"commercial_realtime"/.test(js), "Expected default selected rate type to be commercial_realtime.");
   assert.ok(/period:\s*"week"/.test(js), "Expected default period to be week.");
 
   assert.ok(/const\s+RT_TAIL_REFRESH_MS\s*=\s*5\s*\*\s*60\s*\*\s*1000/.test(js), "Expected 5-minute RT tail refresh cadence.");
   assert.ok(/const\s+DA_TAIL_REFRESH_MS\s*=\s*30\s*\*\s*60\s*\*\s*1000/.test(js), "Expected 30-minute DA tail refresh cadence.");
   assert.ok(/function\s+startTailRefreshScheduler\s*\(/.test(js), "Expected tail refresh scheduler function.");
-  assert.ok(/refreshActiveRateWindow\(\{\s*forceRemote:\s*false,\s*tailRefresh:\s*true\s*\}\)/.test(js), "Expected scheduled tail refresh window requests.");
+  assert.ok(/supportsTailRefreshForRateType/.test(js), "Expected Residential to bypass tail refresh polling.");
 
   assert.ok(/function\s+setGlobalRateLimitPause\s*\(/.test(js), "Expected global 429 pause state setter.");
   assert.ok(/function\s+hasGlobalRateLimitPause\s*\(/.test(js), "Expected global 429 pause state check.");
@@ -34,12 +35,13 @@ const runRatesV4UiStateTests = () => {
 
   assert.ok(/(?:response\.status|finalResponse\?\.status)\s*===\s*429/.test(js) && /start429Countdown\(/.test(js), "Expected 429 countdown handling.");
   assert.ok(/setFetchButtonState\(rateType,\s*true\)/.test(js) && /setFetchButtonState\(rateType,\s*false\)/.test(js), "Expected fetch button disable/enable logic.");
+
   assert.ok(/data-rate-fetch="commercial_realtime"/.test(html), "Expected Fetch data button on commercial_realtime card.");
   assert.ok(/data-rate-fetch="commercial_day_ahead"/.test(html), "Expected Fetch data button on commercial_day_ahead card.");
+  assert.ok(/data-rate-fetch="residential"/.test(html), "Expected Fetch data button on residential card.");
+  assert.ok(/Fetching NEM 3\.0 data/.test(html), "Expected residential loading label copy.");
+  assert.ok(/toRealtimeFromSlowerSource/.test(js) && /getRtIntervalForPeriod/.test(js), "Expected DA/Residential -> RT interval reset logic.");
   assert.ok(/id="rates-v4-missing-overlay"/.test(html), "Expected missing overlay container on Rates V4 chart frame.");
 };
 
 module.exports = { runRatesV4UiStateTests };
-
-
-

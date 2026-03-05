@@ -1,6 +1,10 @@
 const { URL } = require("url");
 const { resolveProviderMetadata } = require("../lib/rates/provider-resolver");
-const { getV4RealtimeSeries, getV4DayAheadSeries } = require("../lib/rates/v4-caiso-adapter");
+const {
+  getCaliforniaRealtimeSeries,
+  getCaliforniaDayAheadSeries,
+  getCaliforniaResidentialSeries,
+} = require("../lib/rates/california-adapter");
 
 const sendJson = (res, status, payload) => {
   res.writeHead(status, {
@@ -85,14 +89,21 @@ const mapRateTypeToConfig = (rateType) => {
     return {
       serviceType: "lmp",
       marketMode: "real_time",
-      fetchSeries: getV4RealtimeSeries,
+      fetchSeries: getCaliforniaRealtimeSeries,
     };
   }
   if (rateType === "commercial_day_ahead") {
     return {
       serviceType: "lmp",
       marketMode: "day_ahead",
-      fetchSeries: getV4DayAheadSeries,
+      fetchSeries: getCaliforniaDayAheadSeries,
+    };
+  }
+  if (rateType === "residential") {
+    return {
+      serviceType: "tariff",
+      marketMode: "tariff",
+      fetchSeries: getCaliforniaResidentialSeries,
     };
   }
   return null;
@@ -136,7 +147,7 @@ const handleV4RatesSeries = async (req, res) => {
   const config = mapRateTypeToConfig(rateType);
   if (!config) {
     sendJsonError(res, 400, "Unsupported rateType for current v4 phase.", {
-      supportedRateTypes: ["commercial_realtime", "commercial_day_ahead"],
+      supportedRateTypes: ["commercial_realtime", "commercial_day_ahead", "residential"],
     });
     return;
   }
@@ -183,9 +194,12 @@ const handleV4RatesSeries = async (req, res) => {
         upstreamErrorCode: details?.upstreamErrorCode || null,
         upstreamHttpStatus: details?.upstreamHttpStatus ?? null,
         upstreamError: details?.upstreamError || null,
+        userError: details?.userError || null,
         retryAfterSeconds,
         effectiveWindowEnd: details?.effectiveWindowEnd || null,
         adapterStats: details?.adapterStats || null,
+        availableWindowStart: details?.availableWindowStart || null,
+        availableWindowEnd: details?.availableWindowEnd || null,
       },
       series: {
         five_min: basePoints,
@@ -219,4 +233,3 @@ module.exports = {
     parseRetryAfterSeconds,
   },
 };
-

@@ -234,7 +234,7 @@ const createRatesDomainHandler = (store) => async (job, helper = {}) => {
     method: "GET",
     table: "projects",
     searchParams: {
-      select: "id,location_lat,location_lng,iso_region,utility_name",
+      select: "id,location_lat,location_lng,iso_region,utility_name,utility_code",
       id: `eq.${job.project_id}`,
       limit: "1",
     },
@@ -961,7 +961,7 @@ const handleV3Refresh = async (req, res) => {
         method: "GET",
         table: "projects",
         searchParams: {
-          select: "id,location_lat,location_lng,weather_provider,utility_name,rates_source_fingerprint,location_fingerprint,asset_fingerprint",
+          select: "id,location_lat,location_lng,weather_provider,utility_name,utility_code,rates_source_fingerprint,location_fingerprint,asset_fingerprint",
           id: `eq.${projectId}`,
           limit: "1",
         },
@@ -1102,11 +1102,4 @@ module.exports = {
   handleV3CronNightlySync,
   handleV3WorkerRunOnce,
 };
-
-
-
-
-
-
-
 
