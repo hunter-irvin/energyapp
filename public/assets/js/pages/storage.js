@@ -33,6 +33,7 @@
   const storageSettingsLink = document.getElementById("storage-settings-link");
   const storageAssetsLink = document.getElementById("storage-assets-link");
   const storageRatesLink = document.getElementById("storage-rates-link");
+  const storageRatesV4Link = document.getElementById("storage-rates-v4-link");
   const storageAssetsHeaderLink = document.getElementById("storage-assets-header-link");
   const storageBackToFacility = document.getElementById("storage-back-to-facility");
   const storageProjectName = document.getElementById("storage-project-name");
@@ -2031,6 +2032,7 @@
     if (storageSettingsLink) storageSettingsLink.href = `/projects/location.html?projectId=${encodeURIComponent(currentProject.id)}`;
     if (storageAssetsLink) storageAssetsLink.href = `/projects/generation.html?projectId=${encodeURIComponent(currentProject.id)}`;
     if (storageRatesLink) storageRatesLink.href = `/projects/rates.html?projectId=${encodeURIComponent(currentProject.id)}`;
+    if (storageRatesV4Link) storageRatesV4Link.href = `/projects/rates-v4.html?projectId=${encodeURIComponent(currentProject.id)}`;
     if (storageAssetsHeaderLink) storageAssetsHeaderLink.href = `/projects/generation.html?projectId=${encodeURIComponent(currentProject.id)}`;
     if (storageBackToFacility) storageBackToFacility.href = `/projects/location.html?projectId=${encodeURIComponent(currentProject.id)}`;
 
@@ -2098,3 +2100,5 @@
 
   void initProject();
 })();
+
+

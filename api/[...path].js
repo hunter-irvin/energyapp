@@ -11,6 +11,7 @@ const {
   handleV3CronNightlySync,
   handleV3WorkerRunOnce,
 } = require("./v3-proxy");
+const { handleV4RatesSeries } = require("./v4-rates-proxy");
 
 const SUPABASE_URL = process.env.ENERGYAPP_SUPABASE_URL || process.env.SUPABASE_URL || "";
 const SUPABASE_ANON_KEY = process.env.ENERGYAPP_SUPABASE_ANON_KEY || process.env.SUPABASE_ANON_KEY || "";
@@ -109,6 +110,10 @@ module.exports = (req, res) => {
   }
   if (url.startsWith("/api/v3/series/rates")) {
     handleV3SeriesRates(req, res);
+    return;
+  }
+  if (url.startsWith("/api/v4/rates/series")) {
+    handleV4RatesSeries(req, res);
     return;
   }
   if (url.startsWith("/api/v3/refresh")) {

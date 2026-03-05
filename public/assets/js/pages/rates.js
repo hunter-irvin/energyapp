@@ -85,6 +85,7 @@
   const ratesLocationLink = document.getElementById("rates-location-link");
   const ratesGenerationLink = document.getElementById("rates-generation-link");
   const ratesStorageLink = document.getElementById("rates-storage-link");
+  const ratesV4Link = document.getElementById("rates-v4-link");
 
   const ratesProviderLabel = document.getElementById("rates-provider-label");
   const ratesRegionLabel = document.getElementById("rates-region-label");
@@ -2026,6 +2027,7 @@
     if (ratesLocationLink) ratesLocationLink.href = `/projects/location.html?projectId=${encodeURIComponent(currentProject.id)}`;
     if (ratesGenerationLink) ratesGenerationLink.href = `/projects/generation.html?projectId=${encodeURIComponent(currentProject.id)}`;
     if (ratesStorageLink) ratesStorageLink.href = `/projects/storage.html?projectId=${encodeURIComponent(currentProject.id)}`;
+    if (ratesV4Link) ratesV4Link.href = `/projects/rates-v4.html?projectId=${encodeURIComponent(currentProject.id)}`;
 
     bindControls();
     syncControlStrip();
@@ -2035,6 +2037,8 @@
 
   void init();
 })();
+
+
 
 
 

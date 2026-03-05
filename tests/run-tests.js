@@ -153,6 +153,10 @@ const { runRatesWindowScopedPercentagesTests } = require(path.join(
 const { runRatesMissingOverlayVsZeroTests } = require(path.join(__dirname, "frontend", "rates-missing-overlay-vs-zero.test.js"));
 const { runRatesGapTriggersVisibleWindowSyncTests } = require(path.join(__dirname, "frontend", "rates-gap-triggers-visible-window-sync.test.js"));
 const { runCadenceControlsTests } = require(path.join(__dirname, "frontend", "cadence-controls.test.js"));
+const { runRatesV4UiStateTests } = require(path.join(__dirname, "frontend", "rates-v4-ui-state.test.js"));
+const { runRatesV4CacheEngineTests } = require(path.join(__dirname, "frontend", "rates-v4-cache-engine.test.js"));
+const { runV4RatesAggregationTests } = require(path.join(__dirname, "rates", "v4-aggregation.test.js"));
+const { runV4RatesContractTests } = require(path.join(__dirname, "api", "v4", "rates-contracts.test.js"));
 const { runBackfillScriptTests } = require(path.join(__dirname, "migration", "backfill-script.test.js"));
 const { runNoRegressionSmokeTests } = require(path.join(__dirname, "migration", "no-regression-smoke.test.js"));
 const { runRatesCaisoDaZeroRepairTests } = require(path.join(__dirname, "migration", "rates-caiso-da-zero-repair.test.js"));
@@ -259,6 +263,10 @@ const run = async () => {
   runRatesMissingOverlayVsZeroTests();
   runRatesGapTriggersVisibleWindowSyncTests();
   runCadenceControlsTests();
+  runRatesV4UiStateTests();
+  runRatesV4CacheEngineTests();
+  runV4RatesAggregationTests();
+  await runV4RatesContractTests();
   await runBackfillScriptTests();
   await runNoRegressionSmokeTests();
   await runRatesCaisoDaZeroRepairTests();
@@ -273,6 +281,7 @@ run().catch((error) => {
   console.error(error);
   process.exit(1);
 });
+
 
 
 

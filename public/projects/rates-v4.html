@@ -1,0 +1,136 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Rates V4 | Energy Explorer</title>
+    <link rel="stylesheet" href="/assets/css/styles.css" />
+  </head>
+  <body class="project-page-body">
+    <div id="project-header-root"></div>
+    <main class="page page--project assets-page">
+      <div id="project-sidebar-root"></div>
+      <section class="card assets-card rates-v4-card">
+        <header class="card__header">
+          <h1>Electricity Rates V4</h1>
+        </header>
+
+        <section class="rates-v4-summary-section" aria-label="Rate Type Summary">
+          <h2 class="rates-v4-section-title">Rate Type</h2>
+          <div class="rates-v4-type-grid" id="rates-v4-type-grid">
+            <div class="rates-v4-type-card" data-rate-type="residential" role="button" tabindex="0" aria-pressed="false">
+              <span class="rates-v4-type-title">Residential</span>
+              <span class="rates-v4-type-subtitle">Utility export compensation profile</span>
+              <div class="rates-v4-card-actions">
+                <span class="rates-v4-card-note">Coming later</span>
+              </div>
+            </div>
+
+            <div class="rates-v4-type-card" data-rate-type="commercial_day_ahead" role="button" tabindex="0" aria-pressed="false">
+              <span class="rates-v4-type-title">Commercial - Day Ahead</span>
+              <span class="rates-v4-type-subtitle">Scheduled wholesale market profile</span>
+              <div class="rates-v4-card-actions">
+                <button class="btn btn--toggle rates-v4-fetch-button" data-rate-fetch="commercial_day_ahead" type="button" hidden>
+                  Fetch data
+                </button>
+              </div>
+              <div class="status status--loading rates-v4-card-status" data-rate-status="commercial_day_ahead" hidden>
+                <span class="status__text" data-rate-status-text="commercial_day_ahead">Fetching OASIS data...</span>
+                <div class="loading-bars">
+                  <div class="loading-bar loading-bar--overall">
+                    <span class="loading-bar__fill" data-rate-status-bar="commercial_day_ahead"></span>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div
+              class="rates-v4-type-card is-active"
+              data-rate-type="commercial_realtime"
+              role="button"
+              tabindex="0"
+              aria-pressed="true"
+            >
+              <span class="rates-v4-type-title">Commercial - Realtime</span>
+              <span class="rates-v4-type-subtitle">Operational real-time wholesale profile</span>
+              <div class="rates-v4-card-actions">
+                <button class="btn btn--toggle rates-v4-fetch-button" data-rate-fetch="commercial_realtime" type="button">
+                  Fetch data
+                </button>
+              </div>
+              <div class="status status--loading rates-v4-card-status" data-rate-status="commercial_realtime" hidden>
+                <span class="status__text" data-rate-status-text="commercial_realtime">Fetching OASIS data...</span>
+                <div class="loading-bars">
+                  <div class="loading-bar loading-bar--overall">
+                    <span class="loading-bar__fill" data-rate-status-bar="commercial_realtime"></span>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <div class="assets-divider"></div>
+
+        <section class="assets-chart-section rates-v4-chart-section" aria-label="Rates Chart">
+          <h3 class="assets-chart-title" id="rates-v4-chart-title">Commercial - Realtime</h3>
+          <div class="assets-chart-header">
+            <div class="assets-chart-controls">
+              <div id="rates-v4-control-strip-root"></div>
+            </div>
+            <div id="rates-v4-chart-legend-root"></div>
+          </div>
+          <div class="assets-chart-frame rates-chart-frame">
+            <div id="rates-v4-chart-root" class="generation-chart"></div>
+            <div id="rates-v4-missing-overlay" class="rates-missing-overlay" aria-hidden="true"></div>
+          </div>
+          <div class="assets-chart-axis" id="rates-v4-axis"></div>
+        </section>
+      </section>
+    </main>
+
+    <script src="/config.local.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/react@18/umd/react.production.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/react-dom@18/umd/react-dom.production.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
+    <script src="/assets/js/core/charting.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+    <script src="/assets/js/core/supabase-config.js"></script>
+    <script src="/assets/js/core/supabase-client.js"></script>
+    <script src="/assets/js/components/chart-ui.js"></script>
+    <script src="/assets/js/components/time-series-chart.js"></script>
+    <script src="/assets/js/components/project-shell.js"></script>
+    <script src="/assets/js/features/rates-v4-cache-engine.js"></script>
+    <script>
+      window.EnergyProjectShell?.mount({
+        headerRootId: "project-header-root",
+        sidebarRootId: "project-sidebar-root",
+        header: {
+          editor: {
+            editorId: "rates-v4-project-name-editor",
+            displayId: "rates-v4-header-project-name-display",
+            editButtonId: "rates-v4-header-project-name-edit",
+            inputId: "rates-v4-header-project-name",
+            saveButtonId: "rates-v4-header-project-name-save",
+            cancelButtonId: "rates-v4-header-project-name-cancel",
+          },
+          exitHref: "/",
+        },
+        sidebar: {
+          ariaLabel: "Project navigation",
+          items: [
+            { key: "location", label: "Location", href: "/projects/location.html", id: "rates-v4-location-link" },
+            { key: "generation", label: "Generation", href: "/projects/generation.html", id: "rates-v4-generation-link" },
+            { key: "storage", label: "Storage", href: "/projects/storage.html", id: "rates-v4-storage-link" },
+            { key: "rates", label: "Rates (Prototype)", href: "/projects/rates.html", id: "rates-v4-rates-prototype-link" },
+            { key: "rates-v4", label: "Rates V4", href: "/projects/rates-v4.html", active: true },
+          ],
+        },
+      });
+    </script>
+    <script src="/assets/js/pages/rates-v4.js"></script>
+  </body>
+</html>
+
+
+

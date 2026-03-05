@@ -2256,3 +2256,114 @@ textarea:focus-visible {
 
 
 
+
+/* Rates V4 scaffold */
+.rates-v4-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-6);
+}
+
+.rates-v4-summary-section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+.rates-v4-section-title {
+  margin: 0;
+  font-size: var(--type-h3-size);
+  line-height: var(--type-h3-line);
+}
+
+.rates-v4-type-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-4);
+}
+
+.rates-v4-type-card {
+  width: 200px;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-2);
+  padding: var(--space-4);
+  border: 1px solid var(--color-border-default);
+  border-radius: var(--radius-md);
+  background: var(--color-bg-panel-2);
+  color: var(--color-text-primary);
+  text-align: left;
+  cursor: pointer;
+  transition: border-color var(--motion-fast), box-shadow var(--motion-fast), transform var(--motion-fast);
+}
+
+.rates-v4-type-card:hover {
+  border-color: var(--color-border-strong);
+  box-shadow: var(--shadow-sm);
+}
+
+.rates-v4-type-card:focus-visible {
+  outline: 2px solid var(--color-focus-ring);
+  outline-offset: 2px;
+}
+
+.rates-v4-type-card.is-active {
+  border-color: var(--color-accent-primary);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--color-accent-primary) 70%, transparent);
+  transform: translateY(-1px);
+}
+
+.rates-v4-type-title {
+  display: block;
+  font-size: 0.95rem;
+  font-weight: var(--font-weight-bold);
+  line-height: 1.35;
+}
+
+.rates-v4-type-subtitle {
+  display: block;
+  font-size: var(--type-caption-size);
+  line-height: var(--type-caption-line);
+  color: var(--color-text-secondary);
+}
+
+.rates-v4-chart-section {
+  margin-top: 0;
+}
+
+@media (max-width: 740px) {
+  .rates-v4-type-grid {
+    gap: var(--space-3);
+  }
+
+  .rates-v4-type-card {
+    width: 100%;
+  }
+}
+
+.rates-v4-card-actions {
+  margin-top: var(--space-2);
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.rates-v4-fetch-button {
+  min-height: 32px;
+}
+
+.rates-v4-card-note {
+  font-size: var(--type-caption-size);
+  color: var(--color-text-muted);
+}
+
+.rates-v4-card-status {
+  margin-top: var(--space-2);
+  width: 100%;
+}
+
+.rates-v4-type-card .loading-bars {
+  width: 100%;
+}

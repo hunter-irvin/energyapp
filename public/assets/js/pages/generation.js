@@ -45,6 +45,7 @@
   const headerSettingsLink = document.getElementById("header-settings-link");
   const sidebarStorageLink = document.getElementById("sidebar-storage-link");
   const sidebarRatesLink = document.getElementById("sidebar-rates-link");
+  const sidebarRatesV4Link = document.getElementById("sidebar-rates-v4-link");
   const assetFieldTooltip = document.getElementById("asset-field-tooltip");
 
   const queryParams = new URLSearchParams(window.location.search);
@@ -2460,6 +2461,9 @@
     if (sidebarRatesLink) {
       sidebarRatesLink.href = `/projects/rates.html?projectId=${encodeURIComponent(currentProject.id)}`;
     }
+    if (sidebarRatesV4Link) {
+      sidebarRatesV4Link.href = `/projects/rates-v4.html?projectId=${encodeURIComponent(currentProject.id)}`;
+    }
 
     selectedDateKey = currentProject.selectedDate || DEFAULT_DATE_KEY;
     viewState.period = loadPersistedPeriod(currentProject.id, viewState.period);
@@ -2524,3 +2528,5 @@
 
   void initProject();
 })();
+
+

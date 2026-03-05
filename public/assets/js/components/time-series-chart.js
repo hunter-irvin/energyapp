@@ -17,6 +17,7 @@
       axisTitle: getCssValue(styles, "--color-text-secondary", "#d0d7dc"),
       gridPrimary: getCssValue(styles, "--chart-grid-primary", "rgba(120,120,120,0.2)"),
       gridSecondary: getCssValue(styles, "--chart-grid-secondary", "rgba(120,120,120,0.15)"),
+      zeroLine: getCssValue(styles, "--chart-zero-line", "#ffffff"),
       seriesDefault: getCssValue(styles, "--color-chart-total", "#a8b4be"),
       nowIndicator: getCssValue(styles, "--color-now-indicator", "#68d37f"),
     };
@@ -70,7 +71,16 @@
       },
       y: {
         min: props.minY ?? 0,
-        grid: { color: palette.gridPrimary },
+        grid: {
+          color: (ctx) => {
+            const tickValue = Number(ctx?.tick?.value);
+            return Number.isFinite(tickValue) && Math.abs(tickValue) < 1e-9 ? palette.zeroLine : palette.gridPrimary;
+          },
+          lineWidth: (ctx) => {
+            const tickValue = Number(ctx?.tick?.value);
+            return Number.isFinite(tickValue) && Math.abs(tickValue) < 1e-9 ? 1.5 : 1;
+          },
+        },
         ticks: { color: palette.axisTick },
         title: {
           display: Boolean(props.yTitle),
@@ -227,3 +237,5 @@
     createBridge,
   };
 })();
+
+

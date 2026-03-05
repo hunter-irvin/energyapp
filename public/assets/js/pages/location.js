@@ -35,6 +35,7 @@ const headerProjectNameCancelButton = document.getElementById("header-project-na
 const headerAssetsLink = document.getElementById("header-assets-link");
 const headerStorageLink = document.getElementById("header-storage-link");
 const headerRatesLink = document.getElementById("header-rates-link");
+const headerRatesV4Link = document.getElementById("header-rates-v4-link");
 const supabaseService = window.EnergySupabaseService;
 const sharedCache = window.EnergySharedCache || null;
 const queryParams = new URLSearchParams(window.location.search);
@@ -2222,6 +2223,9 @@ const init = async () => {
   if (headerRatesLink) {
     headerRatesLink.href = `/projects/rates.html?projectId=${encodeURIComponent(project.id)}`;
   }
+  if (headerRatesV4Link) {
+    headerRatesV4Link.href = `/projects/rates-v4.html?projectId=${encodeURIComponent(project.id)}`;
+  }
 
   updateView();
   if (project.lat != null && project.lng != null) {
@@ -2278,3 +2282,6 @@ if (typeof document !== 'undefined') {
 }
 
 void init();
+
+
+
