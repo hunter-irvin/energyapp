@@ -5,10 +5,13 @@
   const WEATHER_INTERVAL_MINUTES = 30;
   const POINTS_PER_DAY = (24 * 60) / WEATHER_INTERVAL_MINUTES;
   const WEATHER_CACHE_TTL_MS = 1000 * 60 * 60 * 24;
-  const OPEN_METEO_FULL_SYNC_SUFFIX = "openMeteoFullSync";
-  const OPEN_METEO_FULL_SYNC_STALE_MS = 1000 * 60 * 5;
-  const OPEN_METEO_FULL_SYNC_WAIT_MS = 6000;
-  const OPEN_METEO_FULL_SYNC_WAIT_STEP_MS = 500;
+  const OPEN_METEO_COVERAGE_RUN_SUFFIX = "openMeteoCoverageRun";
+  const OPEN_METEO_EVENT_SOURCE = "generation_page";
+  const OPEN_METEO_RUN_STALE_MS = 1000 * 60 * 30;
+  const OPEN_METEO_EXPANSION_PLAN = [
+    { tier: "tier_1m", monthsBack: 1 },
+    { tier: "tier_3m", monthsBack: 3 },
+  ];
   const ASSET_EDIT_DEBOUNCE_MS = 200;
   const GENERATION_DERIVED_SCHEMA_VERSION = "gen_month_interval_v2";
   const PERIOD_STORAGE_SUFFIX = "selectedPeriod";
@@ -21,6 +24,8 @@
   };
   const supabaseService = window.EnergySupabaseService;
   const sharedCache = window.EnergySharedCache || null;
+  const weatherCoverage = window.EnergyWeatherCoverage || null;
+  const weatherSyncBus = window.EnergyWeatherSyncBus || null;
 
   const solarList = document.getElementById("solar-assets");
   const windList = document.getElementById("wind-assets");
@@ -212,25 +217,49 @@
     return `energyapp.project.${projectId}.${suffix}`;
   };
 
-  const readOpenMeteoFullSyncMarker = (projectId) => {
-    const key = getScopedUiKey(projectId, OPEN_METEO_FULL_SYNC_SUFFIX);
+  const getOpenMeteoCoverageRunKey = (projectId) => getScopedUiKey(projectId, OPEN_METEO_COVERAGE_RUN_SUFFIX);
+
+  const readOpenMeteoCoverageRunState = (projectId) => {
+    const key = getOpenMeteoCoverageRunKey(projectId);
     if (!key) return null;
     try {
       const raw = localStorage.getItem(key);
       if (!raw) return null;
       const parsed = JSON.parse(raw);
-      const startedAt = Number(parsed?.startedAt || 0);
-      if (!Number.isFinite(startedAt) || Date.now() - startedAt > OPEN_METEO_FULL_SYNC_STALE_MS) {
+      const updatedAtMs = Date.parse(String(parsed?.updatedAt || parsed?.startedAt || ""));
+      if (Number.isFinite(updatedAtMs) && Date.now() - updatedAtMs > OPEN_METEO_RUN_STALE_MS) {
         localStorage.removeItem(key);
         return null;
       }
-      return {
-        provider: String(parsed?.provider || ""),
-        startedAt,
-      };
+      return parsed;
     } catch (error) {
       return null;
     }
+  };
+
+  const writeOpenMeteoCoverageRunState = (projectId, patch = {}) => {
+    const key = getOpenMeteoCoverageRunKey(projectId);
+    if (!key) return;
+    const current = readOpenMeteoCoverageRunState(projectId) || {};
+    try {
+      localStorage.setItem(
+        key,
+        JSON.stringify({
+          ...current,
+          ...patch,
+          updatedAt: new Date().toISOString(),
+        })
+      );
+    } catch (error) {}
+  };
+
+  const broadcastOpenMeteoSyncEvent = (type, payload = {}) => {
+    try {
+      weatherSyncBus?.broadcast?.(type, {
+        source: OPEN_METEO_EVENT_SOURCE,
+        ...payload,
+      });
+    } catch (error) {}
   };
 
   const loadPersistedPeriod = (projectId, fallback = "week") => {
@@ -1447,9 +1476,143 @@
     return Number.isFinite(fetchedAt) && Date.now() - fetchedAt <= WEATHER_CACHE_TTL_MS;
   };
 
+  const unpackWeatherCachePayload = (cacheRow) => {
+    const payload = cacheRow?.payload;
+    if (Array.isArray(payload)) {
+      return { records: payload, metadata: {} };
+    }
+    if (payload && typeof payload === "object") {
+      if (Array.isArray(payload.records)) {
+        return { records: payload.records, metadata: payload.metadata || payload.meta || {} };
+      }
+      if (Array.isArray(payload.rows)) {
+        return { records: payload.rows, metadata: payload.metadata || payload.meta || {} };
+      }
+    }
+    return { records: [], metadata: {} };
+  };
+
+  const buildWeatherCachePayload = (provider, records, metadata) => {
+    if (provider !== "open_meteo") {
+      return records;
+    }
+    return {
+      schema: "weather_open_meteo_cache_v1",
+      records,
+      metadata: {
+        ...(metadata || {}),
+        updatedAt: new Date().toISOString(),
+      },
+    };
+  };
+
+  const mergeCoverageRecords = (baseRecords = [], incomingRecords = []) => {
+    if (weatherCoverage?.mergeRecordsByTimestamp) {
+      return weatherCoverage.mergeRecordsByTimestamp(baseRecords, incomingRecords);
+    }
+    const map = new Map();
+    [...(Array.isArray(baseRecords) ? baseRecords : []), ...(Array.isArray(incomingRecords) ? incomingRecords : [])].forEach((row) => {
+      const ts = row?.normalized_timestamp || row?.timestamp || `${row?.year}-${row?.month}-${row?.day}-${row?.hour}-${row?.minute}`;
+      if (!ts) return;
+      map.set(ts, row);
+    });
+    return Array.from(map.values());
+  };
+
+  const isCoverageWindowSatisfied = (records = [], startIso = "", endIso = "") => {
+    if (weatherCoverage?.isWindowCovered) {
+      return weatherCoverage.isWindowCovered(records, startIso, endIso, WEATHER_INTERVAL_MINUTES);
+    }
+    return false;
+  };
+
+  const resolveWindowCoverageGaps = (records = [], startIso = "", endIso = "") => {
+    if (weatherCoverage?.computeCoverageGaps) {
+      return weatherCoverage.computeCoverageGaps(records, startIso, endIso, WEATHER_INTERVAL_MINUTES);
+    }
+    return [];
+  };
+
+  const buildOpenMeteoRunId = () =>
+    `open_meteo_generation_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+
   const getProviderLabel = (provider) => WEATHER_PROVIDERS[provider] || provider;
 
-  const loadPersistedOrRemoteWeather = async ({ forceRefresh = false } = {}) => {
+  const buildOpenMeteoWindowRequest = () => {
+    const selectedDate = parseDateKey(selectedDateKey) || new Date();
+    const { start, end } = getDateRangeForPeriod(viewState.period, selectedDate);
+    const startDate = formatDateKey(start);
+    const endDate = formatDateKey(end);
+    return {
+      startDate,
+      endDate,
+      startIso: `${startDate}T00:00:00.000Z`,
+      endIso: `${endDate}T23:30:00.000Z`,
+    };
+  };
+
+  const dateKeyMonthsBack = (dateKey, monthsBack) => {
+    const base = new Date(`${dateKey}T00:00:00`);
+    if (Number.isNaN(base.getTime())) {
+      return dateKey;
+    }
+    base.setMonth(base.getMonth() - Number(monthsBack || 0));
+    return formatDateKey(base);
+  };
+
+  const upsertWeatherCacheRecords = async ({
+    provider,
+    sourceYear,
+    wkt,
+    timeZone,
+    weatherPayload,
+    solarRecords,
+    windRecords,
+  }) => {
+    const fetchedAt = new Date().toISOString();
+    const coverageMeta = {
+      ...(weatherPayload?.meta || {}),
+      coverageGaps: resolveWindowCoverageGaps(
+        solarRecords,
+        weatherPayload?.meta?.requestedWindow?.start || "",
+        weatherPayload?.meta?.requestedWindow?.end || ""
+      ),
+    };
+    try {
+      await Promise.all([
+        supabaseService.upsertWeatherCache({
+          projectId: currentProject.id,
+          provider,
+          dataset: "solar",
+          dateKey: WEATHER_CACHE_DATE_KEY,
+          sourceYear,
+          intervalMinutes: WEATHER_INTERVAL_MINUTES,
+          wkt,
+          timezone: timeZone,
+          source: weatherPayload?.meta?.provider || provider,
+          fetchedAt,
+          payload: buildWeatherCachePayload(provider, solarRecords, coverageMeta),
+        }),
+        supabaseService.upsertWeatherCache({
+          projectId: currentProject.id,
+          provider,
+          dataset: "wind",
+          dateKey: WEATHER_CACHE_DATE_KEY,
+          sourceYear,
+          intervalMinutes: WEATHER_INTERVAL_MINUTES,
+          wkt,
+          timezone: timeZone,
+          source: weatherPayload?.meta?.provider || provider,
+          fetchedAt,
+          payload: buildWeatherCachePayload(provider, windRecords, coverageMeta),
+        }),
+      ]);
+    } catch (cacheError) {
+      console.warn("[Generation] Weather cache write failed; continuing with fetched payload.", cacheError);
+    }
+  };
+
+  const loadPersistedOrRemoteWeather = async ({ forceRefresh = false, backgroundSync = true } = {}) => {
     if (currentProject?.lat == null || currentProject?.lng == null) {
       throw new Error("Project location is required to load weather data.");
     }
@@ -1458,72 +1621,217 @@
     const sourceYear = provider === "nrel" ? 2014 : null;
     const wkt = `POINT(${currentProject.lng} ${currentProject.lat})`;
     const cacheLookup = { sourceYear, intervalMinutes: WEATHER_INTERVAL_MINUTES };
-    const [cachedSolar, cachedWind] = await Promise.all([
+    const [cachedSolarRow, cachedWindRow] = await Promise.all([
       supabaseService.getWeatherCache(currentProject.id, provider, "solar", WEATHER_CACHE_DATE_KEY, cacheLookup),
       supabaseService.getWeatherCache(currentProject.id, provider, "wind", WEATHER_CACHE_DATE_KEY, cacheLookup),
     ]);
-    const openMeteoCacheLooksFull =
-      provider !== "open_meteo" ||
-      ((Array.isArray(cachedSolar?.payload) ? cachedSolar.payload.length : 0) >= POINTS_PER_DAY * 60 &&
-        (Array.isArray(cachedWind?.payload) ? cachedWind.payload.length : 0) >= POINTS_PER_DAY * 60);
+    const cachedSolar = unpackWeatherCachePayload(cachedSolarRow);
+    const cachedWind = unpackWeatherCachePayload(cachedWindRow);
+
+    const cachedTimeZone =
+      cachedSolarRow?.timezone ||
+      cachedWindRow?.timezone ||
+      (await fetchTimeZone({ lat: currentProject.lat, lng: currentProject.lng }));
 
     if (
       !forceRefresh &&
-      isFreshCache(cachedSolar) &&
-      isFreshCache(cachedWind) &&
-      cachedSolar?.payload &&
-      cachedWind?.payload &&
-      openMeteoCacheLooksFull
+      provider !== "open_meteo" &&
+      isFreshCache(cachedSolarRow) &&
+      isFreshCache(cachedWindRow) &&
+      cachedSolar.records.length &&
+      cachedWind.records.length
     ) {
       return {
         provider,
-        rawSolarRecords: cachedSolar.payload,
-        rawWindRecords: cachedWind.payload,
-        timeZone: cachedSolar.timezone || cachedWind.timezone || (await fetchTimeZone({ lat: currentProject.lat, lng: currentProject.lng })),
+        rawSolarRecords: cachedSolar.records,
+        rawWindRecords: cachedWind.records,
+        timeZone: cachedTimeZone,
         metadata: {
+          ...(cachedSolar.metadata || {}),
+          ...(cachedWind.metadata || {}),
           fetchMode: "cache",
-          requestStartDate: null,
-          requestEndDate: null,
         },
       };
     }
 
-    const marker = !forceRefresh && provider === "open_meteo" ? readOpenMeteoFullSyncMarker(currentProject.id) : null;
-    if (marker?.provider === "open_meteo") {
-      const waitUntil = Date.now() + OPEN_METEO_FULL_SYNC_WAIT_MS;
-      while (Date.now() < waitUntil) {
-        await sleep(OPEN_METEO_FULL_SYNC_WAIT_STEP_MS);
-        const [queuedSolar, queuedWind] = await Promise.all([
-          supabaseService.getWeatherCache(currentProject.id, provider, "solar", WEATHER_CACHE_DATE_KEY, cacheLookup),
-          supabaseService.getWeatherCache(currentProject.id, provider, "wind", WEATHER_CACHE_DATE_KEY, cacheLookup),
-        ]);
-        const queuedOpenMeteoCacheLooksFull =
-          provider !== "open_meteo" ||
-          ((Array.isArray(queuedSolar?.payload) ? queuedSolar.payload.length : 0) >= POINTS_PER_DAY * 60 &&
-            (Array.isArray(queuedWind?.payload) ? queuedWind.payload.length : 0) >= POINTS_PER_DAY * 60);
-        if (
-          isFreshCache(queuedSolar) &&
-          isFreshCache(queuedWind) &&
-          queuedSolar?.payload &&
-          queuedWind?.payload &&
-          queuedOpenMeteoCacheLooksFull
-        ) {
-          return {
-            provider,
-            rawSolarRecords: queuedSolar.payload,
-            rawWindRecords: queuedWind.payload,
-            timeZone:
-              queuedSolar.timezone ||
-              queuedWind.timezone ||
-              (await fetchTimeZone({ lat: currentProject.lat, lng: currentProject.lng })),
-            metadata: {
-              fetchMode: "cache_after_background_sync",
-              requestStartDate: null,
-              requestEndDate: null,
-            },
-          };
-        }
+    const fetchOpenMeteoWindow = async ({ startDate, endDate, expansionTier = "window", runId = "" } = {}) => {
+      const weatherResponse = await fetch(
+        buildUrl(WEATHER_PROXY_ENDPOINT, {
+          provider,
+          lat: String(currentProject.lat),
+          lng: String(currentProject.lng),
+          mode: "load_window",
+          startDate,
+          endDate,
+          expansionTier,
+          runId,
+        })
+      );
+      if (!weatherResponse.ok) {
+        const message = await weatherResponse.text();
+        throw new Error(message || `Unable to load ${getProviderLabel(provider)} weather data for selected location.`);
       }
+      return weatherResponse.json();
+    };
+
+    if (provider === "open_meteo") {
+      const windowRequest = buildOpenMeteoWindowRequest();
+      let mergedSolar = Array.isArray(cachedSolar.records) ? cachedSolar.records.slice() : [];
+      let mergedWind = Array.isArray(cachedWind.records) ? cachedWind.records.slice() : [];
+      let metadata = {
+        ...(cachedSolar.metadata || {}),
+        ...(cachedWind.metadata || {}),
+        fetchMode: "cache",
+      };
+
+      const runState = readOpenMeteoCoverageRunState(currentProject.id) || {};
+      const runId = runState?.runId || buildOpenMeteoRunId();
+
+      const windowCovered = isCoverageWindowSatisfied(mergedSolar, windowRequest.startIso, windowRequest.endIso);
+      const needsForegroundWindowFetch = forceRefresh || !windowCovered;
+
+      if (needsForegroundWindowFetch) {
+        const windowPayload = await fetchOpenMeteoWindow({
+          startDate: windowRequest.startDate,
+          endDate: windowRequest.endDate,
+          expansionTier: "window",
+          runId,
+        });
+        mergedSolar = mergeCoverageRecords(mergedSolar, Array.isArray(windowPayload?.solar) ? windowPayload.solar : []);
+        mergedWind = mergeCoverageRecords(mergedWind, Array.isArray(windowPayload?.wind) ? windowPayload.wind : []);
+        metadata = {
+          ...metadata,
+          ...(windowPayload?.meta || {}),
+          fetchMode: "window_minutely_15",
+        };
+        await upsertWeatherCacheRecords({
+          provider,
+          sourceYear,
+          wkt,
+          timeZone: cachedTimeZone,
+          weatherPayload: windowPayload,
+          solarRecords: mergedSolar,
+          windRecords: mergedWind,
+        });
+        broadcastOpenMeteoSyncEvent("weather_coverage_upsert", {
+          projectId: currentProject.id,
+          provider,
+          runId,
+          expansionTier: "window",
+          coverageGaps: resolveWindowCoverageGaps(mergedSolar, windowRequest.startIso, windowRequest.endIso),
+        });
+      }
+
+      writeOpenMeteoCoverageRunState(currentProject.id, {
+        runId,
+        status: "active",
+        activeTier: "window",
+        pendingTiers: OPEN_METEO_EXPANSION_PLAN.map((entry) => entry.tier),
+        completedTiers: [],
+        provider,
+        projectId: currentProject.id,
+      });
+
+      const runBackgroundExpansion = async () => {
+        const completedTiers = [];
+        for (const tierConfig of OPEN_METEO_EXPANSION_PLAN) {
+          const tierStartDate = dateKeyMonthsBack(windowRequest.startDate, tierConfig.monthsBack);
+          writeOpenMeteoCoverageRunState(currentProject.id, {
+            runId,
+            status: "active",
+            activeTier: tierConfig.tier,
+            pendingTiers: OPEN_METEO_EXPANSION_PLAN.map((entry) => entry.tier).filter((tier) => !completedTiers.includes(tier)),
+            completedTiers,
+            provider,
+            projectId: currentProject.id,
+          });
+          broadcastOpenMeteoSyncEvent("weather_sync_tier_started", {
+            projectId: currentProject.id,
+            provider,
+            runId,
+            expansionTier: tierConfig.tier,
+            startDate: tierStartDate,
+            endDate: windowRequest.endDate,
+          });
+
+          try {
+            const tierPayload = await fetchOpenMeteoWindow({
+              startDate: tierStartDate,
+              endDate: windowRequest.endDate,
+              expansionTier: tierConfig.tier,
+              runId,
+            });
+            mergedSolar = mergeCoverageRecords(mergedSolar, Array.isArray(tierPayload?.solar) ? tierPayload.solar : []);
+            mergedWind = mergeCoverageRecords(mergedWind, Array.isArray(tierPayload?.wind) ? tierPayload.wind : []);
+            metadata = {
+              ...metadata,
+              ...(tierPayload?.meta || {}),
+              fetchMode: `background_${tierConfig.tier}`,
+            };
+            await upsertWeatherCacheRecords({
+              provider,
+              sourceYear,
+              wkt,
+              timeZone: cachedTimeZone,
+              weatherPayload: tierPayload,
+              solarRecords: mergedSolar,
+              windRecords: mergedWind,
+            });
+            completedTiers.push(tierConfig.tier);
+            writeOpenMeteoCoverageRunState(currentProject.id, {
+              runId,
+              status: "active",
+              activeTier: tierConfig.tier,
+              pendingTiers: OPEN_METEO_EXPANSION_PLAN.map((entry) => entry.tier).filter((tier) => !completedTiers.includes(tier)),
+              completedTiers,
+              provider,
+              projectId: currentProject.id,
+            });
+            broadcastOpenMeteoSyncEvent("weather_coverage_upsert", {
+              projectId: currentProject.id,
+              provider,
+              runId,
+              expansionTier: tierConfig.tier,
+            });
+          } catch (error) {
+            broadcastOpenMeteoSyncEvent("weather_sync_error", {
+              projectId: currentProject.id,
+              provider,
+              runId,
+              expansionTier: tierConfig.tier,
+              error: String(error?.message || error),
+            });
+          }
+        }
+
+        writeOpenMeteoCoverageRunState(currentProject.id, {
+          runId,
+          status: "complete",
+          activeTier: null,
+          pendingTiers: [],
+          completedTiers,
+          provider,
+          projectId: currentProject.id,
+          finishedAt: new Date().toISOString(),
+        });
+        broadcastOpenMeteoSyncEvent("weather_sync_complete", {
+          projectId: currentProject.id,
+          provider,
+          runId,
+        });
+      };
+
+      if (backgroundSync) {
+        void runBackgroundExpansion();
+      }
+
+      return {
+        provider,
+        rawSolarRecords: mergedSolar,
+        rawWindRecords: mergedWind,
+        timeZone: cachedTimeZone,
+        metadata,
+      };
     }
 
     const weatherResponse = await fetch(
@@ -1542,47 +1850,22 @@
     const weatherPayload = await weatherResponse.json();
     const rawSolarRecords = weatherPayload?.solar || [];
     const rawWindRecords = weatherPayload?.wind || [];
-    const timeZone = await fetchTimeZone({ lat: currentProject.lat, lng: currentProject.lng });
-    const fetchedAt = new Date().toISOString();
 
-    try {
-      await Promise.all([
-        supabaseService.upsertWeatherCache({
-          projectId: currentProject.id,
-          provider,
-          dataset: "solar",
-          dateKey: WEATHER_CACHE_DATE_KEY,
-          sourceYear,
-          intervalMinutes: WEATHER_INTERVAL_MINUTES,
-          wkt,
-          timezone: timeZone,
-          source: weatherPayload?.meta?.provider || provider,
-          fetchedAt,
-          payload: rawSolarRecords,
-        }),
-        supabaseService.upsertWeatherCache({
-          projectId: currentProject.id,
-          provider,
-          dataset: "wind",
-          dateKey: WEATHER_CACHE_DATE_KEY,
-          sourceYear,
-          intervalMinutes: WEATHER_INTERVAL_MINUTES,
-          wkt,
-          timezone: timeZone,
-          source: weatherPayload?.meta?.provider || provider,
-          fetchedAt,
-          payload: rawWindRecords,
-        }),
-      ]);
-    } catch (cacheError) {
-      console.warn("[Generation] Weather cache write failed; continuing with fetched payload.", cacheError);
-    }
+    await upsertWeatherCacheRecords({
+      provider,
+      sourceYear,
+      wkt,
+      timeZone: cachedTimeZone,
+      weatherPayload,
+      solarRecords: rawSolarRecords,
+      windRecords: rawWindRecords,
+    });
 
     return {
       provider,
       rawSolarRecords,
       rawWindRecords,
-      timeZone,
+      timeZone: cachedTimeZone,
       metadata: weatherPayload?.meta || {
         fetchMode: "load_default",
         requestStartDate: null,
@@ -1590,7 +1873,6 @@
       },
     };
   };
-
   const fetchWeatherForDay = async (options = {}) => {
     const { forceRefresh = false } = options;
     if (!currentProject || currentProject.lat == null || currentProject.lng == null) {
@@ -2438,6 +2720,59 @@
     savedAssets.forEach((asset) => addAsset(asset.type, asset.model, asset.id, { persist: false }));
   };
 
+  let weatherSyncUnsubscribe = null;
+  let weatherLiveUpdateTimer = null;
+  let weatherLiveUpdateInFlight = false;
+
+  const scheduleWeatherLiveRefresh = (reason = "sync") => {
+    if (!currentProject || currentProject.weatherProvider !== "open_meteo") {
+      return;
+    }
+    if (weatherLiveUpdateTimer) {
+      clearTimeout(weatherLiveUpdateTimer);
+    }
+    weatherLiveUpdateTimer = setTimeout(async () => {
+      if (weatherLiveUpdateInFlight) {
+        return;
+      }
+      weatherLiveUpdateInFlight = true;
+      try {
+        await fetchWeatherForDay({ forceRefresh: false, backgroundSync: false });
+        renderDebugData({
+          weatherLiveUpdate: {
+            reason,
+            at: new Date().toISOString(),
+          },
+        });
+      } catch (error) {
+      } finally {
+        weatherLiveUpdateInFlight = false;
+      }
+    }, 180);
+  };
+
+  const bindWeatherSyncEvents = () => {
+    if (typeof weatherSyncBus?.subscribe !== "function") {
+      return;
+    }
+    if (weatherSyncUnsubscribe) {
+      weatherSyncUnsubscribe();
+      weatherSyncUnsubscribe = null;
+    }
+    weatherSyncUnsubscribe = weatherSyncBus.subscribe((event) => {
+      const payload = event || {};
+      if (!currentProject || String(payload.projectId || "") !== String(currentProject.id || "")) {
+        return;
+      }
+      if ((currentProject.weatherProvider || "nrel") !== "open_meteo") {
+        return;
+      }
+      if (!["weather_coverage_upsert", "weather_sync_complete"].includes(String(payload.type || ""))) {
+        return;
+      }
+      scheduleWeatherLiveRefresh(String(payload.type || "sync"));
+    });
+  };
   const initProject = async () => {
     await supabaseService.migrateLegacyLocalData();
     if (!selectedProjectId || !isValidProjectId(selectedProjectId)) {
@@ -2452,13 +2787,13 @@
     }
 
     if (headerSettingsLink) {
-      headerSettingsLink.href = `/projects/location.html?projectId=${encodeURIComponent(currentProject.id)}`;
+      headerSettingsLink.href = `/projects/weather.html?projectId=${encodeURIComponent(currentProject.id)}`;
     }
     if (sidebarStorageLink) {
       sidebarStorageLink.href = `/projects/storage.html?projectId=${encodeURIComponent(currentProject.id)}`;
     }
     if (sidebarRatesLink) {
-      sidebarRatesLink.href = `/projects/rates.html?projectId=${encodeURIComponent(currentProject.id)}`;
+      sidebarRatesLink.href = `/projects/rates-v4.html?projectId=${encodeURIComponent(currentProject.id)}`;
     }
 
     selectedDateKey = currentProject.selectedDate || DEFAULT_DATE_KEY;
@@ -2494,7 +2829,7 @@
     const checkBackendStatus = () => {
       const status = supabaseService.getBackendStatus();
       
-      if (status.type === 'localStorage' && status.lastError) {
+      if (status?.isWorking === false && status?.lastError) {
         // Show error banner
         message.textContent = status.lastError;
         code.textContent = `Error Code: ${status.errorCode}`;
@@ -2524,3 +2859,20 @@
 
   void initProject();
 })();
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

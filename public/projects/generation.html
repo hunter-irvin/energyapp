@@ -107,17 +107,27 @@
         sidebar: {
           ariaLabel: "Project navigation",
           items: [
-            { key: "location", label: "Location", href: "/projects/location.html", id: "header-settings-link" },
+            { key: "weather", label: "Weather", href: "/projects/weather.html", id: "header-settings-link" },
             { key: "generation", label: "Generation", href: "/projects/generation.html", active: true },
             { key: "storage", label: "Storage", href: "/projects/storage.html", id: "sidebar-storage-link" },
-            { key: "rates", label: "Rates", href: "/projects/rates.html", id: "sidebar-rates-link" },
+            { key: "rates", label: "Rates", href: "/projects/rates-v4.html", id: "sidebar-rates-link" },
           ],
         },
       });
     </script>
     <script src="/assets/js/core/shared-cache.js"></script>
+    <script src="/assets/js/features/weather-coverage-engine.js"></script>
+    <script src="/assets/js/features/weather-sync-bus.js"></script>
     <script src="/assets/js/core/models.js"></script>
     <script src="/assets/js/features/generation.js"></script>
     <script src="/assets/js/pages/generation.js"></script>
   </body>
 </html>
+
+
+
+
+
+
+
+

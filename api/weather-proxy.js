@@ -15,7 +15,7 @@ const SOLAR_ENDPOINT =
 const WIND_ENDPOINT =
   "https://developer.nrel.gov/api/wind-toolkit/v2/wind/wtk-download.csv";
 const OPEN_METEO_FORECAST_ENDPOINT = "https://api.open-meteo.com/v1/forecast";
-const OPEN_METEO_HISTORY_ENDPOINT = "https://historical-forecast-api.open-meteo.com/v1/forecast";
+const OPEN_METEO_HISTORY_ENDPOINT = "https://archive-api.open-meteo.com/v1/archive";
 const ALLOW_INSECURE_OPEN_METEO_TLS = process.env.ENERGYAPP_ALLOW_INSECURE_OPEN_METEO_TLS === "1";
 const ALLOW_INSECURE_NREL_TLS = process.env.ENERGYAPP_ALLOW_INSECURE_NREL_TLS !== "0";
 
@@ -44,7 +44,7 @@ const sendJson = (res, status, payload, extraHeaders = {}) => {
 };
 
 const isOpenMeteoHost = (hostname) =>
-  hostname === "api.open-meteo.com" || hostname === "historical-forecast-api.open-meteo.com";
+  hostname === "api.open-meteo.com" || hostname === "historical-forecast-api.open-meteo.com" || hostname === "archive-api.open-meteo.com";
 
 const isNrelHost = (hostname) => hostname === "developer.nrel.gov";
 
@@ -57,6 +57,8 @@ const isTlsIssuerError = (error) =>
   ].includes(error?.code);
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+const UPSTREAM_REQUEST_TIMEOUT_MS = 12000;
 
 const fetchBuffer = (targetUrl, redirectsRemaining = 5, options = {}) =>
   new Promise((resolve, reject) => {
@@ -74,58 +76,80 @@ const fetchBuffer = (targetUrl, redirectsRemaining = 5, options = {}) =>
       },
     };
 
-    https
-      .get(requestOptions, (upstream) => {
-        const { statusCode = 0, headers } = upstream;
-        const location = headers.location;
-        const isRedirect = statusCode >= 300 && statusCode < 400 && Boolean(location);
+    let settled = false;
+    const settleResolve = (value) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(absoluteTimeout);
+      resolve(value);
+    };
+    const settleReject = (error) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(absoluteTimeout);
+      reject(error);
+    };
 
-        if (isRedirect) {
-          upstream.resume();
-          if (redirectsRemaining <= 0) {
-            reject(new Error("Too many redirects from upstream API."));
-            return;
-          }
-          const nextUrl = new URL(location, targetUrl).toString();
-          fetchBuffer(nextUrl, redirectsRemaining - 1, {
-            rejectUnauthorized,
-            tlsRetryAttempted,
-          })
-            .then(resolve)
-            .catch(reject);
+    const request = https.get(requestOptions, (upstream) => {
+      const { statusCode = 0, headers } = upstream;
+      const location = headers.location;
+      const isRedirect = statusCode >= 300 && statusCode < 400 && Boolean(location);
+
+      if (isRedirect) {
+        upstream.resume();
+        if (redirectsRemaining <= 0) {
+          settleReject(new Error("Too many redirects from upstream API."));
           return;
         }
+        const nextUrl = new URL(location, targetUrl).toString();
+        fetchBuffer(nextUrl, redirectsRemaining - 1, {
+          rejectUnauthorized,
+          tlsRetryAttempted,
+        })
+          .then(settleResolve)
+          .catch(settleReject);
+        return;
+      }
 
-        const chunks = [];
-        upstream.on("data", (chunk) => chunks.push(chunk));
-        upstream.on("end", () => {
-          resolve({
-            statusCode,
-            headers,
-            body: Buffer.concat(chunks),
-          });
+      const chunks = [];
+      upstream.on("data", (chunk) => chunks.push(chunk));
+      upstream.on("end", () => {
+        settleResolve({
+          statusCode,
+          headers,
+          body: Buffer.concat(chunks),
         });
-      })
-      .on("error", (error) => {
-        const shouldRetryInsecure =
-          !tlsRetryAttempted &&
-          rejectUnauthorized &&
-          ((ALLOW_INSECURE_OPEN_METEO_TLS && isOpenMeteoHost(parsedUrl.hostname)) ||
-            (ALLOW_INSECURE_NREL_TLS && isNrelHost(parsedUrl.hostname))) &&
-          isTlsIssuerError(error);
-
-        if (shouldRetryInsecure) {
-          fetchBuffer(targetUrl, redirectsRemaining, {
-            rejectUnauthorized: false,
-            tlsRetryAttempted: true,
-          })
-            .then(resolve)
-            .catch(reject);
-          return;
-        }
-
-        reject(error);
       });
+      upstream.on("error", settleReject);
+    });
+
+    const absoluteTimeout = setTimeout(() => {
+      request.destroy(new Error(`Upstream request timed out after ${UPSTREAM_REQUEST_TIMEOUT_MS}ms.`));
+    }, UPSTREAM_REQUEST_TIMEOUT_MS);
+    request.setTimeout(UPSTREAM_REQUEST_TIMEOUT_MS, () => {
+      request.destroy(new Error(`Upstream request timed out after ${UPSTREAM_REQUEST_TIMEOUT_MS}ms.`));
+    });
+
+    request.on("error", (error) => {
+      const shouldRetryInsecure =
+        !tlsRetryAttempted &&
+        rejectUnauthorized &&
+        ((ALLOW_INSECURE_OPEN_METEO_TLS && isOpenMeteoHost(parsedUrl.hostname)) ||
+          (ALLOW_INSECURE_NREL_TLS && isNrelHost(parsedUrl.hostname))) &&
+        isTlsIssuerError(error);
+
+      if (shouldRetryInsecure) {
+        fetchBuffer(targetUrl, redirectsRemaining, {
+          rejectUnauthorized: false,
+          tlsRetryAttempted: true,
+        })
+          .then(settleResolve)
+          .catch(settleReject);
+        return;
+      }
+
+      settleReject(error);
+    });
   });
 
 const pad2 = (value) => String(value).padStart(2, "0");
@@ -137,6 +161,104 @@ const parseDateInput = (value) => {
   if (!match) return null;
   const [, year, month, day] = match;
   return new Date(Date.UTC(Number(year), Number(month) - 1, Number(day)));
+};
+
+const parseOpenMeteoRangeLimit = (text) => {
+  const source = String(text || "");
+  const match = source.match(/from\s+(\d{4}-\d{2}-\d{2})\s+to\s+(\d{4}-\d{2}-\d{2})/i);
+  if (!match) return null;
+  return {
+    minDate: match[1],
+    maxDate: match[2],
+  };
+};
+
+class OpenMeteoRangeLimitError extends Error {
+  constructor(message, rangeLimit, statusCode = 400) {
+    super(message || "Open-Meteo date range limit reached.");
+    this.name = "OpenMeteoRangeLimitError";
+    this.code = "OPEN_METEO_RANGE_LIMIT";
+    this.rangeLimit = rangeLimit || null;
+    this.statusCode = statusCode;
+  }
+}
+
+const toIsoOrNull = (value) => {
+  if (!value) return null;
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? null : date.toISOString();
+};
+
+const buildCoverageWindowFromRows = (rows = []) => {
+  if (!Array.isArray(rows) || rows.length === 0) {
+    return { start: null, end: null };
+  }
+  const timestamps = rows
+    .map((row) => toIsoOrNull(row?.normalized_timestamp))
+    .filter(Boolean)
+    .sort((a, b) => a.localeCompare(b));
+  if (!timestamps.length) {
+    return { start: null, end: null };
+  }
+  return {
+    start: timestamps[0],
+    end: timestamps[timestamps.length - 1],
+  };
+};
+
+const buildCoverageGaps = ({ requestedWindow, servedWindow }) => {
+  const requestedStart = toIsoOrNull(requestedWindow?.start);
+  const requestedEnd = toIsoOrNull(requestedWindow?.end);
+  const servedStart = toIsoOrNull(servedWindow?.start);
+  const servedEnd = toIsoOrNull(servedWindow?.end);
+
+  if (!requestedStart || !requestedEnd) {
+    return [];
+  }
+  if (!servedStart || !servedEnd) {
+    return [{ start: requestedStart, end: requestedEnd, reason: "no_served_data" }];
+  }
+
+  const gaps = [];
+  if (servedStart > requestedStart) {
+    gaps.push({ start: requestedStart, end: servedStart, reason: "before_served_window" });
+  }
+  if (servedEnd < requestedEnd) {
+    gaps.push({ start: servedEnd, end: requestedEnd, reason: "after_served_window" });
+  }
+  return gaps;
+};
+
+const withOpenMeteoMeta = ({
+  baseMeta = {},
+  records = [],
+  requestedStartDate = null,
+  requestedEndDate = null,
+  expansionTier = "window",
+  runId = "",
+  rangeLimit = null,
+} = {}) => {
+  const servedWindow = buildCoverageWindowFromRows(records);
+  const requestedWindow = {
+    start: requestedStartDate ? toIsoOrNull(`${requestedStartDate}T00:00:00Z`) : null,
+    end: requestedEndDate ? toIsoOrNull(`${requestedEndDate}T23:59:59Z`) : null,
+  };
+  const coverageWindow = {
+    start: servedWindow.start,
+    end: servedWindow.end,
+  };
+
+  return {
+    ...baseMeta,
+    requestedWindow,
+    servedWindow,
+    coverageWindow,
+    coverageGaps: buildCoverageGaps({ requestedWindow, servedWindow }),
+    expansionTier,
+    rangeLimit: rangeLimit || null,
+    runId: String(runId || ""),
+    updatedAt: new Date().toISOString(),
+  };
 };
 
 const parseIsoUtcParts = (timestamp) => {
@@ -272,12 +394,44 @@ const fetchAndNormalizeNrel = async ({ lat, lng }) => {
 
 const fetchOpenMeteoJson = async (targetUrl) => {
   const upstream = await fetchBuffer(targetUrl);
+  const raw = upstream.body.toString("utf8");
+
   if (upstream.statusCode < 200 || upstream.statusCode >= 300) {
-    throw new Error(upstream.body.toString() || "Unable to fetch Open-Meteo payload.");
+    try {
+      const parsed = JSON.parse(raw);
+      const reason = String(parsed?.reason || parsed?.error || "");
+      const rangeLimit = parseOpenMeteoRangeLimit(reason);
+      if (rangeLimit) {
+        throw new OpenMeteoRangeLimitError(reason, rangeLimit, upstream.statusCode);
+      }
+      throw new Error(reason || `Open-Meteo returned HTTP ${upstream.statusCode}.`);
+    } catch (error) {
+      if (error instanceof OpenMeteoRangeLimitError) {
+        throw error;
+      }
+      const rangeLimit = parseOpenMeteoRangeLimit(raw);
+      if (rangeLimit) {
+        throw new OpenMeteoRangeLimitError(raw, rangeLimit, upstream.statusCode);
+      }
+      throw new Error(cleanText(raw) || `Open-Meteo returned HTTP ${upstream.statusCode}.`);
+    }
   }
-  const parsed = JSON.parse(upstream.body.toString("utf8"));
-  if (!parsed?.minutely_15?.time || !Array.isArray(parsed.minutely_15.time)) {
-    throw new Error("Open-Meteo response missing minutely_15 time series.");
+
+  let parsed = null;
+  try {
+    parsed = JSON.parse(raw);
+  } catch (_parseError) {
+    throw new Error(`Open-Meteo returned non-JSON payload: ${cleanText(raw).slice(0, 200)}`);
+  }
+  const hasMinutely = Array.isArray(parsed?.minutely_15?.time);
+  const hasHourly = Array.isArray(parsed?.hourly?.time);
+  if (!hasMinutely && !hasHourly) {
+    const reason = String(parsed?.reason || parsed?.error || "");
+    const rangeLimit = parseOpenMeteoRangeLimit(reason);
+    if (rangeLimit) {
+      throw new OpenMeteoRangeLimitError(reason || "Open-Meteo range limited.", rangeLimit, upstream.statusCode || 400);
+    }
+    return { minutely_15: { time: [] } };
   }
   return parsed;
 };
@@ -298,25 +452,39 @@ const fetchOpenMeteoJsonWithRetry = async (targetUrl, { retries = 2, delayMs = 8
   throw lastError;
 };
 
-const buildOpenMeteoUrl = (baseUrl, { lat, lng, startDate, endDate, forecastDays = null }) => {
+const OPEN_METEO_MINUTELY_FIELDS = [
+  "shortwave_radiation",
+  "direct_normal_irradiance",
+  "diffuse_radiation",
+  "temperature_2m",
+  "wind_speed_80m",
+  "wind_direction_80m",
+  "temperature_80m",
+  "surface_pressure",
+];
+
+const OPEN_METEO_HOURLY_FIELDS = [
+  "shortwave_radiation",
+  "direct_normal_irradiance",
+  "diffuse_radiation",
+  "temperature_2m",
+  "wind_speed_80m",
+  "wind_direction_80m",
+  "temperature_80m",
+  "surface_pressure",
+];
+
+const buildOpenMeteoUrl = (baseUrl, { lat, lng, startDate, endDate, forecastDays = null, cadence = "minutely_15" }) => {
   const url = new URL(baseUrl);
   url.searchParams.set("latitude", String(lat));
   url.searchParams.set("longitude", String(lng));
   url.searchParams.set("timezone", "UTC");
   url.searchParams.set("wind_speed_unit", "ms");
-  url.searchParams.set(
-    "minutely_15",
-    [
-      "shortwave_radiation",
-      "direct_normal_irradiance",
-      "diffuse_radiation",
-      "temperature_2m",
-      "wind_speed_80m",
-      "wind_direction_80m",
-      "temperature_80m",
-      "surface_pressure",
-    ].join(",")
-  );
+  if (cadence === "hourly") {
+    url.searchParams.set("hourly", OPEN_METEO_HOURLY_FIELDS.join(","));
+  } else {
+    url.searchParams.set("minutely_15", OPEN_METEO_MINUTELY_FIELDS.join(","));
+  }
   if (forecastDays != null) {
     url.searchParams.set("forecast_days", String(forecastDays));
   }
@@ -330,7 +498,15 @@ const buildOpenMeteoUrl = (baseUrl, { lat, lng, startDate, endDate, forecastDays
 };
 
 const normalizeOpenMeteoPayload = (payload) => {
-  const { minutely_15: series } = payload;
+  const minutelySeries = payload?.minutely_15 || null;
+  const hourlySeries = payload?.hourly || null;
+  const series =
+    minutelySeries && Array.isArray(minutelySeries.time) && minutelySeries.time.length
+      ? minutelySeries
+      : hourlySeries;
+  if (!series || !Array.isArray(series.time) || !series.time.length) {
+    return [];
+  }
   const rows = [];
   for (let i = 0; i < series.time.length; i += 1) {
     const parts = parseIsoUtcParts(series.time[i]);
@@ -377,108 +553,356 @@ const mergeUniqueByTimestamp = (rows) => {
   });
 };
 
-const fetchAndNormalizeOpenMeteo = async ({ lat, lng, startDate = null, endDate = null }) => {
+const fetchAndNormalizeOpenMeteo = async ({
+  lat,
+  lng,
+  startDate = null,
+  endDate = null,
+  expansionTier = "window",
+  runId = "",
+  allowRangeClamp = true,
+} = {}) => {
   const today = new Date();
   const todayUtc = new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate()));
   const windowStart = startDate ? parseDateInput(startDate) : null;
   const windowEnd = endDate ? parseDateInput(endDate) : null;
   const useWindow = Boolean(windowStart && windowEnd && windowStart <= windowEnd);
+  const requestedStartDate = useWindow ? formatDate(windowStart) : null;
+  const requestedEndDate = useWindow ? formatDate(windowEnd) : null;
 
-  const requestPlan = [];
-  if (useWindow) {
-    if (windowStart <= todayUtc) {
-      const historyEnd = windowEnd <= todayUtc ? windowEnd : todayUtc;
-      requestPlan.push({
-        endpoint: OPEN_METEO_HISTORY_ENDPOINT,
-        startDate: formatDate(windowStart),
-        endDate: formatDate(historyEnd),
-      });
-    }
-    if (windowEnd >= todayUtc) {
-      const forecastStart = windowStart >= todayUtc ? windowStart : todayUtc;
-      requestPlan.push({
-        endpoint: OPEN_METEO_FORECAST_ENDPOINT,
-        startDate: formatDate(forecastStart),
-        endDate: formatDate(windowEnd),
-      });
-    }
-  } else {
-    const historyStart = new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate()));
-    historyStart.setUTCDate(historyStart.getUTCDate() - OPEN_METEO_HISTORY_DAYS);
-    requestPlan.push({
-      endpoint: OPEN_METEO_HISTORY_ENDPOINT,
-      startDate: formatDate(historyStart),
-      endDate: formatDate(todayUtc),
-    });
-    requestPlan.push({
-      endpoint: OPEN_METEO_FORECAST_ENDPOINT,
-      forecastDays: OPEN_METEO_FORECAST_DAYS,
-    });
-  }
+  const buildResponseFromRows = (rows, fetchMode, rangeLimit = null) => {
+    const downsampled = downsampleTo30Minutes(rows);
+    const solar = downsampled.map((row) => ({
+      year: row.year,
+      month: row.month,
+      day: row.day,
+      hour: row.hour,
+      minute: row.minute,
+      ghi: row.ghi,
+      dni: row.dni,
+      dhi: row.dhi,
+      air_temperature: row.air_temperature,
+      wind_speed: row.windspeed_80m,
+      normalized_timestamp: row.normalized_timestamp,
+    }));
+    const wind = downsampled.map((row) => ({
+      year: row.year,
+      month: row.month,
+      day: row.day,
+      hour: row.hour,
+      minute: row.minute,
+      windspeed_80m: row.windspeed_80m,
+      winddirection_80m: row.winddirection_80m,
+      temperature_80m: row.temperature_80m,
+      pressure_surface: row.pressure_surface,
+      windspeed_100m: row.windspeed_100m,
+      winddirection_100m: row.winddirection_100m,
+      temperature_100m: row.temperature_100m,
+      pressure_100m: row.pressure_100m,
+      normalized_timestamp: row.normalized_timestamp,
+    }));
 
-  const payloads = await Promise.all(
-    requestPlan.map((request) =>
-      fetchOpenMeteoJsonWithRetry(
-        buildOpenMeteoUrl(request.endpoint, {
-          lat,
-          lng,
-          startDate: request.startDate || null,
-          endDate: request.endDate || null,
-          forecastDays: request.forecastDays ?? null,
-        })
-      )
-    )
-  );
-
-  const merged = mergeUniqueByTimestamp(payloads.flatMap((payload) => normalizeOpenMeteoPayload(payload)));
-
-  const downsampled = downsampleTo30Minutes(merged);
-  const solar = downsampled.map((row) => ({
-    year: row.year,
-    month: row.month,
-    day: row.day,
-    hour: row.hour,
-    minute: row.minute,
-    ghi: row.ghi,
-    dni: row.dni,
-    dhi: row.dhi,
-    air_temperature: row.air_temperature,
-    wind_speed: row.windspeed_80m,
-    normalized_timestamp: row.normalized_timestamp,
-  }));
-  const wind = downsampled.map((row) => ({
-    year: row.year,
-    month: row.month,
-    day: row.day,
-    hour: row.hour,
-    minute: row.minute,
-    windspeed_80m: row.windspeed_80m,
-    winddirection_80m: row.winddirection_80m,
-    temperature_80m: row.temperature_80m,
-    pressure_surface: row.pressure_surface,
-    windspeed_100m: row.windspeed_100m,
-    winddirection_100m: row.winddirection_100m,
-    temperature_100m: row.temperature_100m,
-    pressure_100m: row.pressure_100m,
-    normalized_timestamp: row.normalized_timestamp,
-  }));
-
-  return {
-    solar,
-    wind,
-    meta: {
-      provider: "open_meteo",
-      sourceYear: null,
-      intervalMinutes: NREL_INTERVAL_MINUTES,
-      timezone: "UTC",
-      fetchMode: useWindow ? "window_minutely_15" : "historical+forecast_minutely_15",
-      historyDays: OPEN_METEO_HISTORY_DAYS,
-      forecastDays: OPEN_METEO_FORECAST_DAYS,
-      upstreamIntervalMinutes: OPEN_METEO_INTERVAL_MINUTES,
-      requestStartDate: useWindow ? formatDate(windowStart) : null,
-      requestEndDate: useWindow ? formatDate(windowEnd) : null,
-    },
+    return {
+      solar,
+      wind,
+      meta: withOpenMeteoMeta({
+        baseMeta: {
+          provider: "open_meteo",
+          sourceYear: null,
+          intervalMinutes: NREL_INTERVAL_MINUTES,
+          timezone: "UTC",
+          fetchMode,
+          historyDays: OPEN_METEO_HISTORY_DAYS,
+          forecastDays: OPEN_METEO_FORECAST_DAYS,
+          upstreamIntervalMinutes: OPEN_METEO_INTERVAL_MINUTES,
+          requestStartDate: requestedStartDate,
+          requestEndDate: requestedEndDate,
+        },
+        records: downsampled,
+        requestedStartDate,
+        requestedEndDate,
+        expansionTier,
+        runId,
+        rangeLimit,
+      }),
+    };
   };
+
+  const buildRangeLimitedResponse = (rangeLimit, reason) => ({
+    solar: [],
+    wind: [],
+    meta: withOpenMeteoMeta({
+      baseMeta: {
+        provider: "open_meteo",
+        sourceYear: null,
+        intervalMinutes: NREL_INTERVAL_MINUTES,
+        timezone: "UTC",
+        fetchMode: useWindow ? "window_minutely_15_range_limited" : "historical_range_limited",
+        historyDays: OPEN_METEO_HISTORY_DAYS,
+        forecastDays: OPEN_METEO_FORECAST_DAYS,
+        upstreamIntervalMinutes: OPEN_METEO_INTERVAL_MINUTES,
+        requestStartDate: requestedStartDate,
+        requestEndDate: requestedEndDate,
+        userError: reason || "Requested window is outside Open-Meteo allowed range.",
+      },
+      records: [],
+      requestedStartDate,
+      requestedEndDate,
+      expansionTier,
+      runId,
+      rangeLimit,
+    }),
+  });
+
+  const addUtcDays = (value, dayDelta) => {
+    const date = parseDateInput(value);
+    if (!date) return null;
+    date.setUTCDate(date.getUTCDate() + dayDelta);
+    return formatDate(date);
+  };
+
+  const buildWindowRequestPlan = (windowStartDate, windowEndDate, rangeLimit = null) => {
+    const plan = [];
+    const start = parseDateInput(windowStartDate);
+    const end = parseDateInput(windowEndDate);
+    if (!start || !end || start > end) {
+      return plan;
+    }
+
+    if (!rangeLimit?.minDate || !rangeLimit?.maxDate) {
+      plan.push({
+        endpoint: OPEN_METEO_FORECAST_ENDPOINT,
+        startDate: windowStartDate,
+        endDate: windowEndDate,
+        cadence: "minutely_15",
+      });
+      return plan;
+    }
+
+    const allowedStart = parseDateInput(rangeLimit.minDate);
+    const allowedEnd = parseDateInput(rangeLimit.maxDate);
+    if (!allowedStart || !allowedEnd || allowedStart > allowedEnd) {
+      plan.push({
+        endpoint: OPEN_METEO_HISTORY_ENDPOINT,
+        startDate: windowStartDate,
+        endDate: windowEndDate,
+        cadence: "hourly",
+      });
+      return plan;
+    }
+
+    const intersectionStartDate = start > allowedStart ? formatDate(start) : formatDate(allowedStart);
+    const intersectionEndDate = end < allowedEnd ? formatDate(end) : formatDate(allowedEnd);
+    const hasForecastIntersection = parseDateInput(intersectionStartDate) <= parseDateInput(intersectionEndDate);
+
+    if (!hasForecastIntersection) {
+      plan.push({
+        endpoint: OPEN_METEO_HISTORY_ENDPOINT,
+        startDate: windowStartDate,
+        endDate: windowEndDate,
+        cadence: "hourly",
+      });
+      return plan;
+    }
+
+    if (start < allowedStart) {
+      const archiveEndDate = addUtcDays(intersectionStartDate, -1);
+      if (archiveEndDate && parseDateInput(windowStartDate) <= parseDateInput(archiveEndDate)) {
+        plan.push({
+          endpoint: OPEN_METEO_HISTORY_ENDPOINT,
+          startDate: windowStartDate,
+          endDate: archiveEndDate,
+          cadence: "hourly",
+        });
+      }
+    }
+
+    plan.push({
+      endpoint: OPEN_METEO_FORECAST_ENDPOINT,
+      startDate: intersectionStartDate,
+      endDate: intersectionEndDate,
+        cadence: "minutely_15",
+    });
+
+    if (end > allowedEnd) {
+      const archiveStartDate = addUtcDays(intersectionEndDate, 1);
+      if (archiveStartDate && parseDateInput(archiveStartDate) <= parseDateInput(windowEndDate)) {
+        plan.push({
+          endpoint: OPEN_METEO_HISTORY_ENDPOINT,
+          startDate: archiveStartDate,
+          endDate: windowEndDate,
+          cadence: "hourly",
+        });
+      }
+    }
+
+    return plan;
+  };
+
+  const fetchFromRequestPlan = async (requestPlan, fetchMode, rangeLimit = null) => {
+    const isTimeoutLikeError = (error) => /(timeoutReached|timed out|timeout)/i.test(String(error?.message || ""));
+
+    const splitRequestWindow = (request) => {
+      if (!request?.startDate || !request?.endDate) {
+        return null;
+      }
+      const start = parseDateInput(request.startDate);
+      const end = parseDateInput(request.endDate);
+      if (!start || !end || start >= end) {
+        return null;
+      }
+
+      const spanDays = Math.floor((end.getTime() - start.getTime()) / (24 * 60 * 60 * 1000)) + 1;
+      if (spanDays <= 2) {
+        return null;
+      }
+
+      const leftEnd = new Date(start);
+      leftEnd.setUTCDate(leftEnd.getUTCDate() + Math.floor(spanDays / 2) - 1);
+      const rightStart = new Date(leftEnd);
+      rightStart.setUTCDate(rightStart.getUTCDate() + 1);
+
+      return [
+        {
+          ...request,
+          startDate: formatDate(start),
+          endDate: formatDate(leftEnd),
+        },
+        {
+          ...request,
+          startDate: formatDate(rightStart),
+          endDate: formatDate(end),
+        },
+      ];
+    };
+
+    const fetchRequestPayloads = async (request, splitDepth = 0) => {
+      try {
+        const payload = await fetchOpenMeteoJsonWithRetry(
+          buildOpenMeteoUrl(request.endpoint, {
+            lat,
+            lng,
+            startDate: request.startDate || null,
+            endDate: request.endDate || null,
+            forecastDays: request.forecastDays ?? null,
+            cadence: request.cadence || "minutely_15",
+          }),
+          { retries: 0, delayMs: 250 }
+        );
+        return [payload];
+      } catch (error) {
+        if (error instanceof OpenMeteoRangeLimitError) {
+          throw error;
+        }
+        if (!isTimeoutLikeError(error) || splitDepth >= 5) {
+          throw error;
+        }
+        const split = splitRequestWindow(request);
+        if (!split) {
+          throw error;
+        }
+        const [leftPayloads, rightPayloads] = await Promise.all([
+          fetchRequestPayloads(split[0], splitDepth + 1),
+          fetchRequestPayloads(split[1], splitDepth + 1),
+        ]);
+        return [...leftPayloads, ...rightPayloads];
+      }
+    };
+
+    const payloadGroups = await Promise.all(requestPlan.map((request) => fetchRequestPayloads(request)));
+    const payloads = payloadGroups.flat();
+    const merged = mergeUniqueByTimestamp(payloads.flatMap((payload) => normalizeOpenMeteoPayload(payload)));
+    return buildResponseFromRows(merged, fetchMode, rangeLimit);
+  };
+
+  const fetchClampedWindow = async (rangeLimit, reason) => {
+    if (!allowRangeClamp || !useWindow || !rangeLimit?.minDate || !rangeLimit?.maxDate) {
+      return buildRangeLimitedResponse(rangeLimit, reason);
+    }
+
+    const clampedStartDate = requestedStartDate < rangeLimit.minDate ? rangeLimit.minDate : requestedStartDate;
+    const clampedEndDate = requestedEndDate > rangeLimit.maxDate ? rangeLimit.maxDate : requestedEndDate;
+
+    if (!clampedStartDate || !clampedEndDate || clampedStartDate > clampedEndDate) {
+      return buildRangeLimitedResponse(rangeLimit, reason);
+    }
+
+    if (clampedStartDate === requestedStartDate && clampedEndDate === requestedEndDate) {
+      return buildRangeLimitedResponse(rangeLimit, reason);
+    }
+
+    const clampedResult = await fetchAndNormalizeOpenMeteo({
+      lat,
+      lng,
+      startDate: clampedStartDate,
+      endDate: clampedEndDate,
+      expansionTier,
+      runId,
+      allowRangeClamp: false,
+    });
+
+    return {
+      ...clampedResult,
+      meta: {
+        ...(clampedResult?.meta || {}),
+        fetchMode: "window_minutely_15_clamped",
+        requestStartDate: requestedStartDate,
+        requestEndDate: requestedEndDate,
+        rangeLimit,
+        userError: reason || null,
+        requestedWindow: {
+          start: `${requestedStartDate}T00:00:00.000Z`,
+          end: `${requestedEndDate}T23:59:59.000Z`,
+        },
+      },
+    };
+  };
+
+  try {
+    if (useWindow) {
+      const windowPlan = buildWindowRequestPlan(requestedStartDate, requestedEndDate);
+      return await fetchFromRequestPlan(windowPlan, "window_minutely_15");
+    }
+
+    const historyStart = new Date(todayUtc);
+    historyStart.setUTCDate(historyStart.getUTCDate() - OPEN_METEO_HISTORY_DAYS);
+    const historyStartDate = formatDate(historyStart);
+    const forecastEnd = new Date(todayUtc);
+    forecastEnd.setUTCDate(forecastEnd.getUTCDate() + OPEN_METEO_FORECAST_DAYS);
+
+    const requestPlan = [
+      {
+        endpoint: OPEN_METEO_HISTORY_ENDPOINT,
+        startDate: historyStartDate,
+        endDate: formatDate(todayUtc),
+        cadence: "hourly",
+      },
+      {
+        endpoint: OPEN_METEO_FORECAST_ENDPOINT,
+        startDate: formatDate(todayUtc),
+        endDate: formatDate(forecastEnd),
+        cadence: "minutely_15",
+      },
+    ];
+
+    return await fetchFromRequestPlan(requestPlan, "historical+forecast_minutely_15");
+  } catch (error) {
+    if (error instanceof OpenMeteoRangeLimitError) {
+      if (useWindow) {
+        const hybridPlan = buildWindowRequestPlan(requestedStartDate, requestedEndDate, error.rangeLimit);
+        if (hybridPlan.length > 0) {
+          try {
+            return await fetchFromRequestPlan(hybridPlan, "window_hybrid_forecast_archive", error.rangeLimit);
+          } catch (_hybridError) {
+            // fall through to clamped fallback
+          }
+        }
+        return fetchClampedWindow(error.rangeLimit, error.message);
+      }
+      return buildRangeLimitedResponse(error.rangeLimit, error.message);
+    }
+    throw error;
+  }
 };
 
 const handleNrelCsvProxy = async (req, res) => {
@@ -517,6 +941,8 @@ const handleWeatherProxy = async (req, res) => {
   const requestSinceDate = cleanText(url.searchParams.get("sinceDate") || "");
   const requestStartDate = cleanText(url.searchParams.get("startDate") || "");
   const requestEndDate = cleanText(url.searchParams.get("endDate") || "");
+  const requestExpansionTier = cleanText(url.searchParams.get("expansionTier") || "window") || "window";
+  const requestRunId = cleanText(url.searchParams.get("runId") || "") || `weather_${Date.now().toString(36)}`;
   const lat = Number(url.searchParams.get("lat"));
   const lng = Number(url.searchParams.get("lng"));
 
@@ -535,8 +961,9 @@ const handleWeatherProxy = async (req, res) => {
       (mode === "load_delta" && (requestSinceDate || requestEndDate)))
       ? `-${mode}-${requestSinceDate || requestStartDate || ""}-${requestEndDate || ""}`
       : "";
+  const bypassCache = Boolean(cleanText(url.searchParams.get("cacheBust") || ""));
   const cacheKey = `${provider}-${lat.toFixed(4)}-${lng.toFixed(4)}${cacheSuffix}`;
-  const cachedEntry = weatherJsonCache.get(cacheKey);
+  const cachedEntry = bypassCache ? null : weatherJsonCache.get(cacheKey);
   if (cachedEntry) {
     const ttlMs = WEATHER_JSON_CACHE_TTL_MS[provider] || WEATHER_JSON_CACHE_TTL_MS.nrel;
     const ageMs = Date.now() - Number(cachedEntry.savedAt || 0);
@@ -557,6 +984,8 @@ const handleWeatherProxy = async (req, res) => {
                 lng,
                 startDate: requestStartDate || null,
                 endDate: requestEndDate || null,
+                expansionTier: requestExpansionTier,
+                runId: requestRunId,
               });
             }
             if (mode === "load_delta") {
@@ -574,6 +1003,8 @@ const handleWeatherProxy = async (req, res) => {
                 lng,
                 startDate: deltaStart,
                 endDate: deltaEnd,
+                expansionTier: requestExpansionTier,
+                runId: requestRunId,
               }).then((result) => ({
                 ...result,
                 meta: {
@@ -590,12 +1021,16 @@ const handleWeatherProxy = async (req, res) => {
               lng,
               startDate: null,
               endDate: null,
+              expansionTier: requestExpansionTier,
+              runId: requestRunId,
             });
           })()
         : await fetchAndNormalizeNrel({ lat, lng });
 
-    weatherJsonCache.set(cacheKey, { payload, savedAt: Date.now() });
-    sendJson(res, 200, payload, { "X-Cache": "MISS" });
+    if (!bypassCache) {
+      weatherJsonCache.set(cacheKey, { payload, savedAt: Date.now() });
+    }
+    sendJson(res, 200, payload, { "X-Cache": bypassCache ? "BYPASS" : "MISS" });
   } catch (error) {
     sendJsonError(res, 502, error.message || "Weather proxy error.");
   }
@@ -604,3 +1039,13 @@ const handleWeatherProxy = async (req, res) => {
 module.exports = handleWeatherProxy;
 module.exports.handleWeatherProxy = handleWeatherProxy;
 module.exports.handleNrelCsvProxy = handleNrelCsvProxy;
+module.exports.fetchAndNormalizeOpenMeteo = fetchAndNormalizeOpenMeteo;
+module.exports.fetchAndNormalizeNrel = fetchAndNormalizeNrel;
+
+module.exports.__internal = {
+  parseOpenMeteoRangeLimit,
+  buildCoverageWindowFromRows,
+  buildCoverageGaps,
+  withOpenMeteoMeta,
+  OpenMeteoRangeLimitError,
+};

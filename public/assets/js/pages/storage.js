@@ -2028,11 +2028,11 @@
     viewState.interval = loadPersistedInterval(viewState.interval);
     normalizeIntervalForPeriod({ persist: true });
 
-    if (storageSettingsLink) storageSettingsLink.href = `/projects/location.html?projectId=${encodeURIComponent(currentProject.id)}`;
+    if (storageSettingsLink) storageSettingsLink.href = `/projects/weather.html?projectId=${encodeURIComponent(currentProject.id)}`;
     if (storageAssetsLink) storageAssetsLink.href = `/projects/generation.html?projectId=${encodeURIComponent(currentProject.id)}`;
-    if (storageRatesLink) storageRatesLink.href = `/projects/rates.html?projectId=${encodeURIComponent(currentProject.id)}`;
+    if (storageRatesLink) storageRatesLink.href = `/projects/rates-v4.html?projectId=${encodeURIComponent(currentProject.id)}`;
     if (storageAssetsHeaderLink) storageAssetsHeaderLink.href = `/projects/generation.html?projectId=${encodeURIComponent(currentProject.id)}`;
-    if (storageBackToFacility) storageBackToFacility.href = `/projects/location.html?projectId=${encodeURIComponent(currentProject.id)}`;
+    if (storageBackToFacility) storageBackToFacility.href = `/projects/weather.html?projectId=${encodeURIComponent(currentProject.id)}`;
 
     setProjectNameDisplay(currentProject.name);
     setProjectNameEditorMode(false);
@@ -2098,3 +2098,8 @@
 
   void initProject();
 })();
+
+
+
+
+

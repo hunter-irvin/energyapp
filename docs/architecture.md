@@ -2,91 +2,57 @@
 
 ## Runtime
 
-- Static pages and assets are served by `server.js` from `public/`.
-- Weather API requests route through `api/weather-proxy.js` (with `api/nrel-proxy.js` compatibility wrapper).
-- Rates API requests route through `api/rates-proxy.js` and `api/v2/rates/timeseries.js`.
-- Runtime config and diagnostics are exposed by `api/runtime-config.js` and `api/diagnostics.js`.
+- Static pages/assets are served by `server.js` from `public/`.
+- Serverless routing is consolidated through `api/[...path].js`.
+- Shared active API handlers:
+  - `api/weather-proxy.js` (`/api/weather-proxy`, `/api/nrel-proxy`)
+  - `api/location-proxy.js` (`/api/location/reverse`)
+  - `api/v4-rates-proxy.js` (`/api/v4/rates/provider`, `/api/v4/rates/series`)
+  - `api/runtime-config.js`, `api/diagnostics.js`
 
 ## Route Map
 
 - `/` -> project landing/list page
-- `/projects/location.html` -> location + weather chart
+- `/projects/weather.html` -> weather + map + weather chart
 - `/projects/generation.html` -> generation asset modeling + chart
 - `/projects/storage.html` -> storage asset modeling + chart
-- `/projects/rates.html` -> rates chart + source health
+- `/projects/rates-v4.html` -> rates v4 (Residential, DA, RT)
 
-## Frontend Module Boundaries
+## Frontend Modules
 
 - `public/assets/js/core/`
-  - Supabase client/config, shared cache, data/model utilities, legacy chart helpers
+  - Supabase client/config, shared cache, data/model utilities
 - `public/assets/js/features/`
-  - Domain compute helpers (`generation.js`)
+  - Domain helpers (`generation.js`, `rates-v4-cache-engine.js`, `weather-coverage-engine.js`, `weather-sync-bus.js`)
 - `public/assets/js/components/`
-  - React bridge components
-  - `project-shell.js`: shared project header + sidebar shell
-  - `chart-ui.js`: time window controls, legend toggles, asset editor cards
-  - `time-series-chart.js`: reusable Chart.js React wrapper
+  - `project-shell.js`, `chart-ui.js`, `time-series-chart.js`
 - `public/assets/js/pages/`
-  - Page orchestration, data fetching, persistence wiring
+  - Page orchestration (`weather`, `generation`, `storage`, `rates-v4`, `projects`)
 
-## React Migration Status
-
-Current UI architecture is "React islands" within static pages:
-
-- Shared shell (`ProjectHeader`, sidebar nav) mounts from `project-shell.js`.
-- Chart control strip + legend toggles mount from `chart-ui.js` on all project pages.
-- Chart canvas rendering is standardized through `time-series-chart.js` on all project pages.
-- Generation and Storage asset editors are React-rendered via `createAssetEditorsBridge`.
-
-Legacy HTML templates for generation/storage asset cards are removed; those cards are now fully component-driven.
-
-## Chart/Interval Behavior
-
-- Period and interval controls are separated on all chart pages.
-- Interval controls are right-aligned in the strip.
-- Allowed intervals are period-aware:
-  - `day`: sub-daily only (`half_hour`/`hourly`, and rates may include `five_min` when available)
-  - `week`: `half_hour`/`hourly`/`daily`
-  - `month`: `hourly`/`daily`
-  - `year`: `daily`
-- Rates intervals are cadence-aware and only expose resolutions supported by the source payload.
-
-## Caching and Recompute Invalidation
-
-- Shared client cache: `public/assets/js/core/shared-cache.js`
-- Revision keys are used to invalidate derived chart series:
-  - `weatherRevision`
-  - `assetsRevision`
-  - `storageRevision`
-  - generation schema version key for derived-series migrations
-- Asset edits trigger debounced recompute (200ms) on generation/storage.
-
-## Rates Backend Boundaries
+## Rates V4 Backend Boundaries
 
 - `lib/rates/provider-resolver.js`: utility/ISO/timezone inference
-- `lib/rates/lmp-adapters.js`: live LMP retrieval + modeled fallback
-- `lib/rates/tariff-adapters.js`: tariff-series adapters
-- `lib/rates/series-utils.js`: range normalization, interval fill, aggregation
-- `lib/rates/health-utils.js`: coverage and status summaries
+- `lib/rates/california-adapter.js`: CA unified adapter orchestration
+- `lib/rates/v4-caiso-adapter.js`: CAISO OASIS RT/DA retrieval + parsing
+- `docs/data/nem3-hourly-rates-2026.json`: residential NEM 3.0 hourly dataset
 
-Supabase tables used by rates flow:
-
-- `rate_series_cache`
-- `rate_region_health`
-- `rate_ingest_runs`
-- `rate_project_series` (project-consolidated historical/hot store)
-- `rate_backfill_jobs` (server-side backfill progress/status)
-
-## API Endpoints
+## Active API Endpoints
 
 - `/api/weather-proxy`
 - `/api/nrel-proxy`
-- `/api/rates/provider`
-- `/api/rates/timeseries`
-- `/api/v2/rates/timeseries`
-- `/api/rates/health`
-- `/api/rates/refresh`
-- `/api/rates/backfill/start`
-- `/api/rates/backfill/status`
+- `/api/location/reverse`
+- `/api/v4/rates/provider`
+- `/api/v4/rates/series`
 - `/api/runtime-config`
 - `/api/diagnostics`
+
+## Supabase (Current)
+
+Canonical app tables now used by active pages:
+
+- `projects`
+- `assets`
+- `weather_cache`
+
+Prototype rates/v3 sync tables and routes were retired in the v4 cutover.
+

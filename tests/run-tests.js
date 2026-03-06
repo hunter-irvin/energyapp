@@ -7,6 +7,16 @@ require(path.join(__dirname, "..", "public", "assets", "js", "core", "data-utils
 const { normalizeHeader, mapHeaders, mergeSeriesOnTimestamps } = global.window.EnergyDataUtils;
 const { runSolarComputeTests } = require(path.join(__dirname, "solar-compute.test.js"));
 const { runWindComputeTests } = require(path.join(__dirname, "wind-compute.test.js"));
+const { runSupabaseRequiredTests } = require(path.join(__dirname, "client", "supabase-required.test.js"));
+const { runNoLocalDomainFallbackTests } = require(path.join(__dirname, "client", "no-local-domain-fallback.test.js"));
+const { runRatesV4UiStateTests } = require(path.join(__dirname, "frontend", "rates-v4-ui-state.test.js"));
+const { runRatesV4CacheEngineTests } = require(path.join(__dirname, "frontend", "rates-v4-cache-engine.test.js"));
+const { runWeatherCoverageEngineTests } = require(path.join(__dirname, "frontend", "weather-coverage-engine.test.js"));
+const { runWeatherSyncBusTests } = require(path.join(__dirname, "frontend", "weather-sync-bus.test.js"));
+const { runV4RatesAggregationTests } = require(path.join(__dirname, "rates", "v4-aggregation.test.js"));
+const { runV4RatesContractTests } = require(path.join(__dirname, "api", "v4", "rates-contracts.test.js"));
+const { runV4RoutesRetirementTests } = require(path.join(__dirname, "api", "v4", "routes-retirement.test.js"));
+const { runWeatherProxyContractTests } = require(path.join(__dirname, "api", "weather-proxy-contracts.test.js"));
 
 const runDataUtilsTests = () => {
   assert.strictEqual(normalizeHeader(" GHI (W/m^2) "), "ghi");
@@ -46,7 +56,26 @@ const runDataUtilsTests = () => {
   assert.strictEqual(merged.solar[0].ghi, 0);
 };
 
-runDataUtilsTests();
-runSolarComputeTests();
-runWindComputeTests();
-console.log("All tests passed.");
+const run = async () => {
+  runDataUtilsTests();
+  runSolarComputeTests();
+  runWindComputeTests();
+  runSupabaseRequiredTests();
+  runNoLocalDomainFallbackTests();
+  runRatesV4UiStateTests();
+  runRatesV4CacheEngineTests();
+  runWeatherCoverageEngineTests();
+  runWeatherSyncBusTests();
+  runV4RatesAggregationTests();
+  await runV4RatesContractTests();
+  await runV4RoutesRetirementTests();
+  runWeatherProxyContractTests();
+  console.log("All tests passed.");
+};
+
+run().catch((error) => {
+  console.error(error);
+  process.exit(1);
+});
+
+

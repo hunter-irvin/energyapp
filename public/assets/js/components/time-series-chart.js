@@ -17,8 +17,11 @@
       axisTitle: getCssValue(styles, "--color-text-secondary", "#d0d7dc"),
       gridPrimary: getCssValue(styles, "--chart-grid-primary", "rgba(120,120,120,0.2)"),
       gridSecondary: getCssValue(styles, "--chart-grid-secondary", "rgba(120,120,120,0.15)"),
+      zeroLine: getCssValue(styles, "--chart-zero-line", "#ffffff"),
       seriesDefault: getCssValue(styles, "--color-chart-total", "#a8b4be"),
       nowIndicator: getCssValue(styles, "--color-now-indicator", "#68d37f"),
+      missingFill: getCssValue(styles, "--chart-missing-fill", "rgba(220, 38, 38, 0.14)"),
+      missingStroke: getCssValue(styles, "--chart-missing-stroke", "rgba(239, 68, 68, 0.55)"),
     };
   };
 
@@ -41,6 +44,80 @@
       ctx.strokeStyle = pluginOptions.color || "#68d37f";
       ctx.globalAlpha = Number.isFinite(pluginOptions.alpha) ? Math.min(Math.max(pluginOptions.alpha, 0), 1) : 0.95;
       ctx.stroke();
+      ctx.restore();
+    },
+  };
+
+  const missingRangesPlugin = {
+    id: "missingRanges",
+    beforeDatasetsDraw(chart, args, pluginOptions) {
+      const ranges = toArray(pluginOptions?.ranges);
+      if (!pluginOptions?.enabled || !ranges.length) return;
+      const area = chart?.chartArea;
+      const xScale = chart?.scales?.x;
+      const labels = toArray(chart?.data?.labels);
+      if (!area || !xScale || !labels.length || area.left >= area.right || area.top >= area.bottom) {
+        return;
+      }
+
+      const centerForIndex = (index) => xScale.getPixelForValue(index);
+      const leftBoundaryForIndex = (index) => {
+        if (index <= 0) return centerForIndex(0);
+        return (centerForIndex(index - 1) + centerForIndex(index)) / 2;
+      };
+      const rightBoundaryForIndex = (index) => {
+        if (index >= labels.length - 1) return centerForIndex(labels.length - 1);
+        return (centerForIndex(index) + centerForIndex(index + 1)) / 2;
+      };
+
+      const normalizedRanges = ranges
+        .map((range) => {
+          const rawStart = Number(range?.startIndex);
+          const rawEnd = Number(range?.endIndex);
+          if (!Number.isFinite(rawStart) || !Number.isFinite(rawEnd)) return null;
+          const startIndex = Math.max(0, Math.min(labels.length - 1, Math.floor(Math.min(rawStart, rawEnd))));
+          const endIndex = Math.max(0, Math.min(labels.length - 1, Math.ceil(Math.max(rawStart, rawEnd))));
+          return { startIndex, endIndex };
+        })
+        .filter(Boolean)
+        .sort((a, b) => a.startIndex - b.startIndex)
+        .reduce((acc, range) => {
+          const previous = acc[acc.length - 1];
+          if (previous && range.startIndex <= previous.endIndex + 1) {
+            previous.endIndex = Math.max(previous.endIndex, range.endIndex);
+            return acc;
+          }
+          acc.push({ ...range });
+          return acc;
+        }, []);
+
+      const spacing = Number.isFinite(pluginOptions?.spacing)
+        ? Math.max(6, Number(pluginOptions.spacing))
+        : 8;
+      const hatchHeight = area.bottom - area.top;
+      const ctx = chart.ctx;
+      ctx.save();
+
+      normalizedRanges.forEach((range) => {
+        let left = leftBoundaryForIndex(range.startIndex);
+        let right = rightBoundaryForIndex(range.endIndex);
+        left = Math.max(area.left, left);
+        right = Math.min(area.right, right);
+        if (!(right > left)) return;
+
+        ctx.fillStyle = pluginOptions?.fillColor || "rgba(220, 38, 38, 0.14)";
+        ctx.fillRect(left, area.top, right - left, hatchHeight);
+
+        ctx.strokeStyle = pluginOptions?.strokeColor || "rgba(239, 68, 68, 0.55)";
+        ctx.lineWidth = 1;
+        for (let x = left - hatchHeight; x < right + hatchHeight; x += spacing) {
+          ctx.beginPath();
+          ctx.moveTo(x, area.bottom);
+          ctx.lineTo(x + hatchHeight, area.top);
+          ctx.stroke();
+        }
+      });
+
       ctx.restore();
     },
   };
@@ -70,7 +147,16 @@
       },
       y: {
         min: props.minY ?? 0,
-        grid: { color: palette.gridPrimary },
+        grid: {
+          color: (ctx) => {
+            const tickValue = Number(ctx?.tick?.value);
+            return Number.isFinite(tickValue) && Math.abs(tickValue) < 1e-9 ? palette.zeroLine : palette.gridPrimary;
+          },
+          lineWidth: (ctx) => {
+            const tickValue = Number(ctx?.tick?.value);
+            return Number.isFinite(tickValue) && Math.abs(tickValue) < 1e-9 ? 1.5 : 1;
+          },
+        },
         ticks: { color: palette.axisTick },
         title: {
           display: Boolean(props.yTitle),
@@ -95,7 +181,15 @@
           width: props?.nowIndicator?.width || 1,
           alpha: props?.nowIndicator?.alpha,
         },
+        missingRanges: {
+          enabled: Array.isArray(props?.missingRanges) && props.missingRanges.length > 0,
+          ranges: toArray(props?.missingRanges),
+          fillColor: props?.missingRangeFill || palette.missingFill,
+          strokeColor: props?.missingRangeStroke || palette.missingStroke,
+          spacing: props?.missingRangeSpacing || 8,
+        },
         tooltip: {
+          enabled: props?.tooltipEnabled !== false,
           callbacks: {
             label: props.tooltipLabel || defaultTooltipLabel,
           },
@@ -145,7 +239,7 @@
           datasets: buildDatasets(props.datasets, palette),
         },
         options: buildOptions(props, palette),
-        plugins: [nowIndicatorPlugin],
+        plugins: [missingRangesPlugin, nowIndicatorPlugin],
       });
       chartRef.current = chart;
       if (typeof props.onChartReady === "function") {
@@ -165,7 +259,7 @@
       chart.data.datasets = buildDatasets(props.datasets, palette);
       chart.options = buildOptions(props, palette);
       chart.update();
-    }, [props.labels, props.datasets, props.yTitle, props.minY, props.tooltipLabel, props.type, props.scales, themeVersion]);
+    }, [props.labels, props.datasets, props.yTitle, props.minY, props.tooltipLabel, props.type, props.scales, props.missingRanges, themeVersion]);
 
     return e("canvas", {
       ref: canvasRef,
