@@ -224,9 +224,38 @@ Exit criteria:
 
 ## Phase 5 - Prototype Retirement Plan
 
-1. Produce prototype endpoint/file/table retirement inventory.
-2. Confirm all active clients use v4 paths.
-3. Remove prototype rates flows in controlled cutover.
+1. One-pass cutover prerequisites:
+   - `V4-T17K` MCP validation must pass.
+   - RT/DA/Residential v4 tests must be green before removals begin.
+   - Execute prototype retirement in a single pass (no staged fallback track).
+2. Remove prototype Rates page from UI/nav (hard removal):
+   - Remove `Rates (prototype)` route/link and prototype page entrypoints.
+   - No redirect from `/projects/rates.html`; keep only `Rates V4`.
+3. Remove prototype frontend orchestration/components not referenced by v4:
+   - Delete old rates page JS wiring not used by `/projects/rates-v4.html`.
+   - Delete prototype-only helper modules and static assets.
+4. Remove prototype rates API routes/contracts (hard removal):
+   - Remove old `/api/rates/*`, `/api/v3/*`, and other prototype rates handlers not used by v4.
+   - Keep only `/api/v4/rates/*` rates contract paths.
+5. Remove prototype backend services/adapters and normalize naming to v4:
+   - Delete prototype adapter/service layers replaced by v4 California adapter stack.
+   - Rename remaining legacy-oriented identifiers/files/routes to explicit v4 naming where applicable.
+6. Remove prototype Supabase persistence for rates:
+   - Drop prototype-only rates tables, indexes, and RLS policies.
+   - Delete prototype rates migration files from the repo.
+   - No backup/export step required.
+   - Keep non-rates and v4-required project/location metadata intact.
+7. Clean documentation (hard removal):
+   - Remove prototype rates docs and obsolete runbooks.
+   - Explicitly remove `docs/v3-sync-migration-playbook.md` and `docs/vercel-nightly-cron-delta-plan.md`.
+   - Update architecture/README/rates docs so rates behavior is v4-only.
+8. Enforce serverless deployment budget:
+   - Ensure active `api/**/*.js` serverless functions remain `<= 10` for Vercel deploy.
+   - Manual verification is acceptable (no CI gate required).
+9. Final cutover verification:
+   - Confirm no runtime references to prototype rates paths remain.
+   - Confirm v4 behavior/tests pass after deletions.
+   - Confirm no prototype rates tests remain in the test suite.
 
 ## Test Plan
 
@@ -254,7 +283,7 @@ Exit criteria:
 4. Buckets with all-null members return null.
 5. Retry-once behavior is applied on transient source failure.
 6. Response does not include gap metadata (current phase).
-7. v4 endpoints do not alter v3/prototype endpoint behavior.
+7. v4 endpoint tests have no dependency on prototype endpoint behavior.
 
 ### LocalStorage/cache tests
 
@@ -288,6 +317,36 @@ For each v4 UI milestone, Chrome DevTools MCP verification is required:
 2. `npm run -s test`.
 3. Chrome DevTools MCP walkthrough on `/projects/rates-v4.html`.
 4. Validate project navigation and `projectId` continuity.
+
+## Prototype retirement verification (Phase 5)
+
+1. Navigation regression:
+   - `Rates (prototype)` link/page is absent.
+   - No redirect path remains for prototype rates page.
+   - `Rates V4` remains reachable for existing projects.
+2. Endpoint regression:
+   - Prototype rates endpoints are fully removed from routing.
+   - `/api/v4/rates/series` RT/DA/Residential still returns valid payloads.
+3. Frontend/runtime regression:
+   - Build/runtime contains no imports of retired prototype rates modules.
+   - Remaining rates symbols/routes use v4-oriented naming (no legacy/v3 naming drift).
+4. Supabase schema + migration regression:
+   - Prototype rates tables/policies are removed.
+   - Prototype rates migration files are removed from repo.
+   - Project metadata required by v4 (timezone, utility_code, location) still resolves.
+5. Test-suite regression:
+   - Prototype rates tests are removed completely.
+   - v4 rates tests remain and pass.
+6. Documentation regression:
+   - No prototype rates setup/usage docs remain in active documentation paths.
+   - `docs/v3-sync-migration-playbook.md` and `docs/vercel-nightly-cron-delta-plan.md` are removed.
+7. Serverless budget gate (manual):
+   - Active `api/**/*.js` functions counted and asserted `<= 10`.
+   - Recommended check command:
+     - `rg --files api -g "*.js" | Measure-Object | Select-Object -ExpandProperty Count`
+8. End-to-end MCP regression:
+   - Load RT week, switch to DA, change to month, switch to Residential, and return to RT.
+   - Verify cache-first hydration + missing-span fetch behavior remains intact.
 
 ## Open Items
 
@@ -346,7 +405,7 @@ MCP access legend:
 | V4-T16H | Add adaptive chunk fallback (retry-after aware retry-once, then split failing chunks to smaller spans) | completed | No | Failing chunks now split adaptively with cooldown-aware retry behavior. |
 | V4-T16I | Add rate-type execution tuning in adapter (RT modest parallelism, DA serialized pacing) | completed | No | RT concurrency default tuned to 2; DA remains single-worker with inter-chunk pacing. |
 | V4-T16J | Add adapter diagnostics for chunk execution stats to v4 response details | completed | No | details.adapterStats now reports chunk attempts/splits/retry waits for debugging. |
-| V4-T17 | Add `residential` support after RT + DA completion | in_progress | No | Activated. |
+| V4-T17 | Add `residential` support after RT + DA completion | completed | No | Residential v4 flow is active and validated. |
 | V4-T17A | Create unified `California adapter` for CAISO-backed v4 rates (RT + DA + Residential) and migrate v4 CAISO adapter logic under it | completed | No | Added `lib/rates/california-adapter.js`; RT/DA proxied through CAISO adapter and Residential served from local NEM dataset. |
 | V4-T17B | Define/lock utility normalization map from project utility fields to supported CA utility keys (`pge`, `sce`, `sdge`) | completed | No | Canonical utility-code-first normalization is implemented across provider, API, and California adapter. |
 | V4-T17C | Rewrite residential JSON utility keys/metadata to match app utility naming contract | completed | No | Residential dataset keys resolved via canonical utility codes (`pge`,`sce`,`sdge`) in adapter path. |
@@ -357,11 +416,22 @@ MCP access legend:
 | V4-T17H | Restrict Residential intervals to hourly only across day/week/month controls | completed | No | Residential interval controls are hourly-only for day/week/month. |
 | V4-T17I | Integrate Residential into unified cache engine using same store/coverage/error metadata style as RT/DA | completed | No | Residential now uses same localStorage cache partitioning, missing-span, merge, and span-error model as RT/DA. |
 | V4-T17J | Residential automated tests (utility mapping, 2026 boundary behavior, unsupported utility, hourly-only controls, cache hydration/missing rendering) | completed | No | Added/updated v4 API and UI-state tests; `npm run -s test` passing. |
-| V4-T17K | Chrome DevTools MCP validation for Residential flow (supported utility, unsupported utility, partial-out-of-range window, RT/DA switch-back cache retention) | pending | Yes | Required before prototype retirement. |
+| V4-T17K | Chrome DevTools MCP validation for Residential flow (supported utility, unsupported utility, partial-out-of-range window, RT/DA switch-back cache retention) | completed | Yes | MCP walkthrough completed during v4 stabilization. |
 | V4-T17L | Add polygon-based California utility territory resolver (3 utility polygons) to provider metadata flow | completed | No | Implemented via GeoJSON + point-in-polygon; CAISO utility inference has no fallback to default utility. |
 | V4-T17M | Persist `utility_code` on projects and wire provider/location updates to store and reuse it | completed | No | Added project schema/migration + frontend persistence wiring. |
 | V4-T17N | Wire CAISO RT/DA node selection to canonical `utilityCode` mapping (`pge` -> NP15, `sce/sdge` -> SP15) | completed | No | Node resolver now prioritizes canonical utility codes before latitude fallback. |
-| V4-T18 | Prepare prototype retirement inventory once v4 is complete | pending | Yes | Removal phase only. |
+| V4-T18 | Prepare prototype retirement inventory once v4 is complete | completed | No | Expanded into executable retirement tasks V4-T18A..V4-T18I. |
+| V4-T18A | Remove `Rates (prototype)` from project UI/navigation and keep only `Rates V4` | completed | No | Complete. Sidebar/nav now exposes only `Rates` -> `/projects/rates-v4.html`; prototype page removed. |
+| V4-T18B | Remove prototype rates frontend entrypoints/modules not referenced by v4 | completed | No | Complete. Removed prototype rates page/script and retired prototype-only frontend test suites. |
+| V4-T18C | Remove prototype rates API routes/contracts not used by v4 | completed | No | Complete. `/api/rates/*`, `/api/v2/rates/*`, and `/api/v3/*` handlers removed; v4 dispatcher serves only `/api/v4/rates/*` for rates. |
+| V4-T18D | Remove prototype backend rates services/adapters superseded by v4 California adapter | completed | No | Complete. Removed legacy rates/v3 backend modules (`lib/v3/*`, old rates adapters/services) and normalized active routing to v4 naming. |
+| V4-T18E | Remove prototype rates Supabase tables, indexes, and RLS policies | completed | Yes | Complete. Prototype rates/v3 sync migration files removed; cleanup migration added: `20260305_remove_prototype_rates_and_v3_sync_schema.sql`; bootstrap updated to v4-era schema. |
+| V4-T18F | Remove/update prototype rates documentation and refresh architecture docs to v4-only | completed | No | Complete. Removed prototype docs (including requested playbook/cron docs) and rewrote `README.md` + `docs/architecture.md` to v4-only rates behavior. |
+| V4-T18G | Run MCP regression validation across RT/DA/Residential after prototype removal | completed | Yes | Complete. MCP validated nav removal + RT/DA/month/switch-back behavior; note: existing localhost process still served stale provider route until restart. |
+| V4-T18H | Enforce Vercel serverless budget (`api/**/*.js` active functions <= 10) | completed | No | Complete. Manual count: 7 active serverless `.js` handlers in `api/`. |
+| V4-T18I | Final v4-only cutover sign-off: tests pass and no prototype rates references remain | completed | No | Complete. `node --check` and `npm run -s test` pass; prototype rates routes/pages/tests/docs removed. |
+
+
 
 
 

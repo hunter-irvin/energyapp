@@ -253,7 +253,7 @@
                 <button class="project-card__menu-item project-card__menu-item--danger" data-project-action="delete" type="button">Delete</button>
               </div>
             </div>
-            <a class="project-card__open" href="/projects/location.html?projectId=${encodeURIComponent(project.id)}">
+            <a class="project-card__open" href="/projects/weather.html?projectId=${encodeURIComponent(project.id)}">
               <h2 class="project-card__name">${escapedName}</h2>
               ${buildSatelliteThumbnail(project)}
               <div class="project-card__meta">
@@ -308,7 +308,7 @@
           lat: null,
           lng: null,
         });
-        window.location.href = `/projects/location.html?projectId=${encodeURIComponent(newProject.id)}`;
+        window.location.href = `/projects/weather.html?projectId=${encodeURIComponent(newProject.id)}`;
       } catch (error) {
         setState({ error: error?.message || "Unable to create project." });
       } finally {
@@ -365,3 +365,4 @@
 
   void loadProjects();
 })();
+

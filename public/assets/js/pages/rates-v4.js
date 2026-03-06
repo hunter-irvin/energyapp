@@ -80,7 +80,6 @@
   const locationLink = document.getElementById("rates-v4-location-link");
   const generationLink = document.getElementById("rates-v4-generation-link");
   const storageLink = document.getElementById("rates-v4-storage-link");
-  const prototypeRatesLink = document.getElementById("rates-v4-rates-prototype-link");
 
   const rateCards = Array.from(document.querySelectorAll("[data-rate-type]"));
   const fetchButtons = Array.from(document.querySelectorAll("[data-rate-fetch]"));
@@ -1253,10 +1252,9 @@
     const params = new URLSearchParams({ projectId: String(projectId) }).toString();
     const withId = (path) => `${path}?${params}`;
 
-    if (locationLink) locationLink.href = withId("/projects/location.html");
+    if (locationLink) locationLink.href = withId("/projects/weather.html");
     if (generationLink) generationLink.href = withId("/projects/generation.html");
     if (storageLink) storageLink.href = withId("/projects/storage.html");
-    if (prototypeRatesLink) prototypeRatesLink.href = withId("/projects/rates.html");
   }
 
   async function resolveProject() {
@@ -1289,7 +1287,7 @@
     if (!Number.isFinite(lat) || !Number.isFinite(lng)) return fallback;
 
     try {
-      const url = new URL("/api/rates/provider", window.location.origin);
+      const url = new URL("/api/v4/rates/provider", window.location.origin);
       url.searchParams.set("lat", String(lat));
       url.searchParams.set("lng", String(lng));
       const response = await fetch(url.toString(), { method: "GET", headers: { Accept: "application/json" } });
@@ -1450,4 +1448,8 @@
 
   void init();
 })();
+
+
+
+
 

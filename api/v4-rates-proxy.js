@@ -119,6 +119,29 @@ const normalizeBasePoints = (points = []) =>
     }))
     .filter((point) => Boolean(point.ts));
 
+const handleV4RatesProvider = async (req, res) => {
+  if (req.method !== "GET") {
+    sendJsonError(res, 405, "Method not allowed.");
+    return;
+  }
+
+  const url = new URL(req.url, `http://${req.headers.host || "localhost"}`);
+  const lat = Number(url.searchParams.get("lat"));
+  const lng = Number(url.searchParams.get("lng"));
+  if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
+    sendJsonError(res, 400, "Missing required latitude/longitude.");
+    return;
+  }
+
+  try {
+    const provider = await resolveProviderMetadata({ lat, lng });
+    sendJson(res, 200, { provider, fetchedAt: new Date().toISOString(), apiVersion: "v4" });
+  } catch (error) {
+    sendJsonError(res, 502, error?.message || "Failed to resolve provider metadata.", {
+      code: "V4_PROVIDER_RESOLUTION_FAILED",
+    });
+  }
+};
 const handleV4RatesSeries = async (req, res) => {
   if (req.method !== "GET") {
     sendJsonError(res, 405, "Method not allowed.");
@@ -226,6 +249,7 @@ const handleV4RatesSeries = async (req, res) => {
 };
 
 module.exports = {
+  handleV4RatesProvider,
   handleV4RatesSeries,
   __internal: {
     aggregatePoints,
@@ -233,3 +257,5 @@ module.exports = {
     parseRetryAfterSeconds,
   },
 };
+
+

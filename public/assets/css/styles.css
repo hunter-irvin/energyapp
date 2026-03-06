@@ -2381,3 +2381,14 @@ textarea:focus-visible {
 .rates-v4-type-card .loading-bars {
   width: 100%;
 }
+
+.weather-loading-status {
+  border: none;
+  background: transparent;
+  padding: 0;
+  color: var(--color-text-secondary);
+}
+
+.weather-loading-status .status__text {
+  margin-bottom: 6px;
+}

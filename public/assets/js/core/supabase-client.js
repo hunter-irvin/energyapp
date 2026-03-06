@@ -194,8 +194,6 @@
     utility_code: project.utilityCode ?? project.utility_code ?? null,
     iso_region: project.isoRegion || null,
     timezone: project.timezone || null,
-    rates_service_type: project.ratesServiceType || null,
-    rates_market_mode: project.ratesMarketMode || null,
     map_state: project.mapState || null,
     created_at: project.created_at || project.createdAt || new Date().toISOString(),
     updated_at: new Date().toISOString(),
@@ -213,8 +211,6 @@
     utility_code: row.utility_code || null,
     isoRegion: row.iso_region || null,
     timezone: row.timezone || null,
-    ratesServiceType: row.rates_service_type || null,
-    ratesMarketMode: row.rates_market_mode || null,
     mapState: row.map_state || null,
     createdAt: row.created_at || null,
     updatedAt: row.updated_at || null,
@@ -288,12 +284,7 @@
       if (Object.prototype.hasOwnProperty.call(patch, "utilityCode")) updatePayload.utility_code = patch.utilityCode;
       if (Object.prototype.hasOwnProperty.call(patch, "utility_code")) updatePayload.utility_code = patch.utility_code;
       if (Object.prototype.hasOwnProperty.call(patch, "isoRegion")) updatePayload.iso_region = patch.isoRegion;
-      if (Object.prototype.hasOwnProperty.call(patch, "timezone")) updatePayload.timezone = patch.timezone;
-      if (Object.prototype.hasOwnProperty.call(patch, "ratesServiceType"))
-        updatePayload.rates_service_type = patch.ratesServiceType;
-      if (Object.prototype.hasOwnProperty.call(patch, "ratesMarketMode"))
-        updatePayload.rates_market_mode = patch.ratesMarketMode;
-      if (Object.prototype.hasOwnProperty.call(patch, "mapState")) updatePayload.map_state = patch.mapState;
+      if (Object.prototype.hasOwnProperty.call(patch, "timezone")) updatePayload.timezone = patch.timezone;      if (Object.prototype.hasOwnProperty.call(patch, "mapState")) updatePayload.map_state = patch.mapState;
       updatePayload.updated_at = new Date().toISOString();
       let { data, error } = await client.from("projects").update(updatePayload).eq("id", projectId).select().single();
       if (error && this._isMissingColumnError(error)) {
@@ -302,8 +293,6 @@
         delete fallbackPayload.utility_code;
         delete fallbackPayload.iso_region;
         delete fallbackPayload.timezone;
-        delete fallbackPayload.rates_service_type;
-        delete fallbackPayload.rates_market_mode;
         ({ data, error } = await client.from("projects").update(fallbackPayload).eq("id", projectId).select().single());
       }
       if (error) throw error;
@@ -321,15 +310,7 @@
       } else {
         const { error: legacyCacheCleanupError } = await client.from("nrel_cache").delete().eq("project_id", projectId);
         if (legacyCacheCleanupError && !this._isMissingTableError(legacyCacheCleanupError)) throw legacyCacheCleanupError;
-      }
-
-      const { error: rateSeriesError } = await client.from("rate_series_cache").delete().eq("project_id", projectId);
-      if (rateSeriesError && rateSeriesError.code !== "42P01") throw rateSeriesError;
-
-      const { error: rateHealthError } = await client.from("rate_region_health").delete().eq("project_id", projectId);
-      if (rateHealthError && rateHealthError.code !== "42P01") throw rateHealthError;
-
-      const { error: projectError } = await client.from("projects").delete().eq("id", projectId);
+      }      const { error: projectError } = await client.from("projects").delete().eq("id", projectId);
       if (projectError) throw projectError;
 
       const scopedPrefix = `energyapp.project.${projectId}.`;
@@ -438,157 +419,7 @@
     },
     async upsertNrelCache(payload) {
       return this.upsertWeatherCache({ ...payload, provider: "nrel" });
-    },
-    async getRateSeriesCache(projectId, { regionId, serviceType, marketMode, windowStart, windowEnd } = {}) {
-      let query = client
-        .from("rate_series_cache")
-        .select("*")
-        .eq("project_id", projectId)
-        .eq("window_start", windowStart)
-        .eq("window_end", windowEnd);
-      if (regionId) query = query.eq("region_id", regionId);
-      if (serviceType) query = query.eq("service_type", serviceType);
-      if (marketMode) query = query.eq("market_mode", marketMode);
-      const { data, error } = await query.order("fetched_at", { ascending: false }).limit(1).maybeSingle();
-      if (error) {
-        throw error;
-      }
-      return data || null;
-    },
-    async upsertRateSeriesCache(payload) {
-      const row = {
-        project_id: payload.projectId,
-        region_id: payload.regionId,
-        service_type: payload.serviceType,
-        market_mode: payload.marketMode,
-        window_start: payload.windowStart,
-        window_end: payload.windowEnd,
-        timezone: payload.timezone || null,
-        source: payload.source || "rates_proxy_phase1",
-        source_unit: payload.sourceUnit || null,
-        confidence: payload.confidence || null,
-        quality_status: payload.qualityStatus || "unknown",
-        api_version: payload.apiVersion || "v2",
-        ingest_notes: payload.ingestNotes || {},
-        fetched_at: payload.fetchedAt || new Date().toISOString(),
-        payload: payload.payload,
-        updated_at: new Date().toISOString(),
-      };
-      const { data, error } = await client
-        .from("rate_series_cache")
-        .upsert(row, { onConflict: "project_id,region_id,service_type,market_mode,window_start,window_end" })
-        .select()
-        .single();
-      if (error) {
-        throw error;
-      }
-      return data;
-    },
-    async clearRateSeriesCache(projectId, { regionId, serviceType, marketMode, windowStart, windowEnd } = {}) {
-      let query = client.from("rate_series_cache").delete().eq("project_id", projectId);
-      if (regionId) query = query.eq("region_id", regionId);
-      if (serviceType) query = query.eq("service_type", serviceType);
-      if (marketMode) query = query.eq("market_mode", marketMode);
-      if (windowStart) query = query.eq("window_start", windowStart);
-      if (windowEnd) query = query.eq("window_end", windowEnd);
-      const { error } = await query;
-      if (error) {
-        throw error;
-      }
-      return true;
-    },
-    async listRateRegionHealth(projectId, { windowStart, windowEnd } = {}) {
-      let query = client
-        .from("rate_region_health")
-        .select("*")
-        .eq("project_id", projectId)
-        .eq("window_start", windowStart)
-        .eq("window_end", windowEnd);
-      const { data, error } = await query
-        .order("region_id", { ascending: true })
-        .order("service_type", { ascending: true })
-        .order("market_mode", { ascending: true });
-      if (error) {
-        throw error;
-      }
-      return data || [];
-    },
-    async upsertRateRegionHealth(payload = {}) {
-      const rows = (Array.isArray(payload.rows) ? payload.rows : []).map((healthRow) => ({
-        project_id: payload.projectId,
-        region_id: healthRow.regionId,
-        service_type: healthRow.serviceType,
-        market_mode: healthRow.marketMode || (healthRow.serviceType === "tariff" ? "tariff" : "day_ahead"),
-        status: healthRow.status,
-        last_updated_at: healthRow.lastUpdatedAt || null,
-        source: healthRow.source || null,
-        source_unit: healthRow.sourceUnit || null,
-        confidence: healthRow.confidence || null,
-        api_version: payload.apiVersion || "v2",
-        window_start: payload.windowStart,
-        window_end: payload.windowEnd,
-        expected_hours: Number(healthRow.expectedHours || 0),
-        missing_hours: Number(healthRow.missingHours || 0),
-        details: healthRow.details || {},
-        updated_at: new Date().toISOString(),
-      }));
-      if (!rows.length) {
-        return [];
-      }
-      const { error } = await client
-        .from("rate_region_health")
-        .upsert(rows, { onConflict: "project_id,region_id,service_type,market_mode,window_start,window_end" });
-      if (error) {
-        throw error;
-      }
-      return this.listRateRegionHealth(payload.projectId, {
-        windowStart: payload.windowStart,
-        windowEnd: payload.windowEnd,
-      });
-    },
-    async insertRateIngestRun(payload = {}) {
-      const row = {
-        project_id: payload.projectId || null,
-        region_id: payload.regionId || "NON-ISO",
-        service_type: payload.serviceType || "lmp",
-        market_mode: payload.marketMode || "day_ahead",
-        source: payload.source || null,
-        source_unit: payload.sourceUnit || null,
-        api_version: payload.apiVersion || "v2",
-        status: payload.status || "failed",
-        row_count: Number(payload.rowCount || 0),
-        missing_hours: Number(payload.missingHours || 0),
-        message: payload.message || null,
-        details: payload.details || {},
-        window_start: payload.windowStart || null,
-        window_end: payload.windowEnd || null,
-        run_started_at: payload.runStartedAt || new Date().toISOString(),
-        run_finished_at: payload.runFinishedAt || new Date().toISOString(),
-      };
-      const { data, error } = await client.from("rate_ingest_runs").insert(row).select().single();
-      if (error) {
-        throw error;
-      }
-      return data;
-    },
-    async listRateIngestRuns(projectId, { regionId, serviceType, marketMode, status, limit = 500 } = {}) {
-      let query = client
-        .from("rate_ingest_runs")
-        .select("*")
-        .eq("project_id", projectId)
-        .order("run_finished_at", { ascending: false })
-        .limit(Math.max(1, Math.min(1000, Number(limit) || 500)));
-      if (regionId) query = query.eq("region_id", regionId);
-      if (serviceType) query = query.eq("service_type", serviceType);
-      if (marketMode) query = query.eq("market_mode", marketMode);
-      if (status) query = query.eq("status", status);
-      const { data, error } = await query;
-      if (error) {
-        throw error;
-      }
-      return data || [];
-    },
-  });
+    },  });
 
   const dataService = async () => {
     const client = await getClient();
@@ -617,15 +448,6 @@
   const getNrelCache = async (projectId, dataset, dateKey, options) =>
     (await dataService()).getNrelCache(projectId, dataset, dateKey, options);
   const upsertNrelCache = async (payload) => (await dataService()).upsertNrelCache(payload);
-  const getRateSeriesCache = async (projectId, options) => (await dataService()).getRateSeriesCache(projectId, options);
-  const upsertRateSeriesCache = async (payload) => (await dataService()).upsertRateSeriesCache(payload);
-  const clearRateSeriesCache = async (projectId, options) =>
-    (await dataService()).clearRateSeriesCache(projectId, options);
-  const listRateRegionHealth = async (projectId, options) => (await dataService()).listRateRegionHealth(projectId, options);
-  const upsertRateRegionHealth = async (payload) => (await dataService()).upsertRateRegionHealth(payload);
-  const insertRateIngestRun = async (payload) => (await dataService()).insertRateIngestRun(payload);
-  const listRateIngestRuns = async (projectId, options) => (await dataService()).listRateIngestRuns(projectId, options);
-
   const setLastOpenedProjectId = (projectId) => {
     if (projectId) {
       localStorage.setItem(LAST_PROJECT_STORAGE_KEY, projectId);
@@ -702,15 +524,7 @@
     getWeatherCache,
     upsertWeatherCache,
     getNrelCache,
-    upsertNrelCache,
-    getRateSeriesCache,
-    upsertRateSeriesCache,
-    clearRateSeriesCache,
-    listRateRegionHealth,
-    upsertRateRegionHealth,
-    insertRateIngestRun,
-    listRateIngestRuns,
-    getLastOpenedProjectId,
+    upsertNrelCache,    getLastOpenedProjectId,
     setLastOpenedProjectId,
     migrateLegacyLocalData,
     // Status reporting functions
@@ -744,4 +558,7 @@
     });
   }
 })();
+
+
+
 
