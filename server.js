@@ -23,7 +23,7 @@ loadEnvFile(path.resolve(__dirname, ".env.local"));
 
 const { handleWeatherProxy, handleNrelCsvProxy } = require("./api/weather-proxy");
 const { handleLocationReverse } = require("./api/location-proxy");
-const { handleV4RatesProvider, handleV4RatesSeries } = require("./api/v4-rates-proxy");
+const { handleV4RatesProvider, handleV4RatesSeries } = require("./lib/rates/v4-rates-handlers");
 
 const SUPABASE_URL = process.env.ENERGYAPP_SUPABASE_URL || process.env.SUPABASE_URL || "";
 const SUPABASE_ANON_KEY = process.env.ENERGYAPP_SUPABASE_ANON_KEY || process.env.SUPABASE_ANON_KEY || "";

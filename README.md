@@ -24,12 +24,11 @@ The legacy Rates prototype page has been retired.
 ## Backend Structure
 
 - `server.js` local static host + API routing
-- `api/[...path].js` consolidated serverless dispatcher
 - `api/weather-proxy.js` weather/NREL proxy handlers
 - `api/location-proxy.js` location reverse geocoding handler
-- `api/v4-rates-proxy.js` rates v4 handlers
-  - `GET /api/v4/rates/provider`
-  - `GET /api/v4/rates/series`
+- `api/v4/rates/provider.js` explicit Vercel provider route
+- `api/v4/rates/series.js` explicit Vercel series route
+- `lib/rates/v4-rates-handlers.js` shared rates handlers used by local and Vercel entrypoints
 
 ## Rates V4 Data Sources
 
@@ -59,5 +58,5 @@ Run test suite:
 
 - `npm run -s test`
 
-Current automated suite is focused on core compute + rates v4 contracts/state.
+Current automated suite covers core compute, rates v4 shared handlers, and explicit v4 route entrypoints.
 
