@@ -1,6 +1,6 @@
 const assert = require("assert");
 const path = require("path");
-const { __internal } = require(path.join(__dirname, "..", "..", "api", "v4-rates-proxy.js"));
+const { __internal } = require(path.join(__dirname, "..", "..", "lib", "rates", "v4-rates-handlers.js"));
 
 const runV4RatesAggregationTests = () => {
   const points = [

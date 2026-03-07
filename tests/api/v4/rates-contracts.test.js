@@ -1,6 +1,6 @@
 const assert = require("assert");
 const path = require("path");
-const { handleV4RatesSeries } = require(path.join(__dirname, "..", "..", "..", "api", "v4-rates-proxy.js"));
+const { handleV4RatesSeries } = require(path.join(__dirname, "..", "..", "..", "lib", "rates", "v4-rates-handlers.js"));
 
 const buildRes = () => {
   const out = { status: 0, body: "", headers: {} };

@@ -3,12 +3,14 @@
 ## Runtime
 
 - Static pages/assets are served by `server.js` from `public/`.
-- Serverless routing is consolidated through `api/[...path].js`.
+- Vercel routing uses explicit route files under `api/`.
 - Shared active API handlers:
   - `api/weather-proxy.js` (`/api/weather-proxy`, `/api/nrel-proxy`)
   - `api/location-proxy.js` (`/api/location/reverse`)
-  - `api/v4-rates-proxy.js` (`/api/v4/rates/provider`, `/api/v4/rates/series`)
+  - `api/v4/rates/provider.js` (`/api/v4/rates/provider`)
+  - `api/v4/rates/series.js` (`/api/v4/rates/series`)
   - `api/runtime-config.js`, `api/diagnostics.js`
+- Shared rates logic lives in `lib/rates/v4-rates-handlers.js` and is used by both `server.js` and the explicit Vercel route files.
 
 ## Route Map
 
