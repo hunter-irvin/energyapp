@@ -20,8 +20,9 @@
       zeroLine: getCssValue(styles, "--chart-zero-line", "#ffffff"),
       seriesDefault: getCssValue(styles, "--color-chart-total", "#a8b4be"),
       nowIndicator: getCssValue(styles, "--color-now-indicator", "#68d37f"),
-      missingFill: getCssValue(styles, "--chart-missing-fill", "rgba(220, 38, 38, 0.14)"),
-      missingStroke: getCssValue(styles, "--chart-missing-stroke", "rgba(239, 68, 68, 0.55)"),
+      missingFill: getCssValue(styles, "--chart-missing-fill", "rgba(139, 46, 46, 0.16)"),
+      missingStroke: getCssValue(styles, "--chart-missing-stroke", "rgba(139, 46, 46, 0.24)"),
+      missingBorder: getCssValue(styles, "--chart-missing-border", "rgba(139, 46, 46, 0.45)"),
     };
   };
 
@@ -50,7 +51,7 @@
 
   const missingRangesPlugin = {
     id: "missingRanges",
-    beforeDatasetsDraw(chart, args, pluginOptions) {
+    afterDatasetsDraw(chart, args, pluginOptions) {
       const ranges = toArray(pluginOptions?.ranges);
       if (!pluginOptions?.enabled || !ranges.length) return;
       const area = chart?.chartArea;
@@ -60,14 +61,13 @@
         return;
       }
 
-      const centerForIndex = (index) => xScale.getPixelForValue(index);
       const leftBoundaryForIndex = (index) => {
-        if (index <= 0) return centerForIndex(0);
-        return (centerForIndex(index - 1) + centerForIndex(index)) / 2;
+        if (index <= 0) return xScale.left;
+        return xScale.getPixelForValue(index);
       };
       const rightBoundaryForIndex = (index) => {
-        if (index >= labels.length - 1) return centerForIndex(labels.length - 1);
-        return (centerForIndex(index) + centerForIndex(index + 1)) / 2;
+        if (index >= labels.length - 1) return xScale.right;
+        return xScale.getPixelForValue(index + 1);
       };
 
       const normalizedRanges = ranges
@@ -91,34 +91,54 @@
           return acc;
         }, []);
 
+      const stripeWidth = Number.isFinite(pluginOptions?.stripeWidth)
+        ? Math.max(2, Number(pluginOptions.stripeWidth))
+        : 6;
       const spacing = Number.isFinite(pluginOptions?.spacing)
-        ? Math.max(6, Number(pluginOptions.spacing))
-        : 8;
+        ? Math.max(stripeWidth + 2, Number(pluginOptions.spacing))
+        : stripeWidth * 2;
+      const leftLimit = Math.max(area.left, xScale.left);
+      const rightLimit = Math.min(area.right, xScale.right);
       const hatchHeight = area.bottom - area.top;
       const ctx = chart.ctx;
-      ctx.save();
 
       normalizedRanges.forEach((range) => {
         let left = leftBoundaryForIndex(range.startIndex);
         let right = rightBoundaryForIndex(range.endIndex);
-        left = Math.max(area.left, left);
-        right = Math.min(area.right, right);
+        left = Math.max(leftLimit, left);
+        right = Math.min(rightLimit, right);
         if (!(right > left)) return;
+
+        ctx.save();
+        ctx.beginPath();
+        ctx.rect(left, area.top, right - left, hatchHeight);
+        ctx.clip();
 
         ctx.fillStyle = pluginOptions?.fillColor || "rgba(220, 38, 38, 0.14)";
         ctx.fillRect(left, area.top, right - left, hatchHeight);
 
-        ctx.strokeStyle = pluginOptions?.strokeColor || "rgba(239, 68, 68, 0.55)";
-        ctx.lineWidth = 1;
+        ctx.strokeStyle = pluginOptions?.strokeColor || "rgba(139, 46, 46, 0.24)";
+        ctx.lineWidth = stripeWidth;
         for (let x = left - hatchHeight; x < right + hatchHeight; x += spacing) {
           ctx.beginPath();
           ctx.moveTo(x, area.bottom);
           ctx.lineTo(x + hatchHeight, area.top);
           ctx.stroke();
         }
-      });
 
-      ctx.restore();
+        ctx.restore();
+
+        ctx.save();
+        ctx.strokeStyle = pluginOptions?.borderColor || "rgba(139, 46, 46, 0.45)";
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.moveTo(left + 0.5, area.top);
+        ctx.lineTo(left + 0.5, area.bottom);
+        ctx.moveTo(right - 0.5, area.top);
+        ctx.lineTo(right - 0.5, area.bottom);
+        ctx.stroke();
+        ctx.restore();
+      });
     },
   };
 
@@ -186,7 +206,9 @@
           ranges: toArray(props?.missingRanges),
           fillColor: props?.missingRangeFill || palette.missingFill,
           strokeColor: props?.missingRangeStroke || palette.missingStroke,
-          spacing: props?.missingRangeSpacing || 8,
+          borderColor: props?.missingRangeBorder || palette.missingBorder,
+          stripeWidth: props?.missingRangeStripeWidth || 6,
+          spacing: props?.missingRangeSpacing || 12,
         },
         tooltip: {
           enabled: props?.tooltipEnabled !== false,

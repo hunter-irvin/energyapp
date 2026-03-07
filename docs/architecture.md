@@ -12,6 +12,13 @@
   - `api/runtime-config.js`, `api/diagnostics.js`
 - Shared rates logic lives in `lib/rates/v4-rates-handlers.js` and is used by both `server.js` and the explicit Vercel route files.
 
+## Routing Invariants
+
+- Local and production API routes must mirror each other. Public endpoints exposed through `server.js` for local development must match the public endpoints exposed through Vercel `api/` files in production.
+- Local and production routes should delegate to the same shared handler modules under `lib/` whenever possible so local verification exercises the same behavior that will run after deployment.
+- Keep the total number of public serverless API routes under 10. The current target inventory is 7 route files under `api/`.
+- When replacing an API route, remove obsolete serverless entry files so they do not continue counting toward the Vercel function budget.
+
 ## Route Map
 
 - `/` -> project landing/list page
