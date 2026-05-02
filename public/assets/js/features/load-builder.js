@@ -74,59 +74,268 @@
 
   const flat = (value = 1) => buildTemplateValues(() => value);
 
+  const pulse = (center, spread, height = 1) => (hour) => height * Math.exp(-((hour - center) ** 2) / (2 * spread * spread));
+
+  const smoothWindow = (hour, start, end, ramp = 0.75) => {
+    const isWrapped = end < start;
+    const activeHour = isWrapped && hour < start ? hour + 24 : hour;
+    const activeEnd = isWrapped ? end + 24 : end;
+    if (activeHour < start || activeHour > activeEnd) return 0;
+    const up = clamp((activeHour - start) / Math.max(ramp, 0.01), 0, 1);
+    const down = clamp((activeEnd - activeHour) / Math.max(ramp, 0.01), 0, 1);
+    return Math.min(up, down, 1);
+  };
+
+  const windowShape = (start, end, base = 0.02, height = 0.95, ramp = 0.75) =>
+    buildTemplateValues((hour) => base + height * smoothWindow(hour, start, end, ramp));
+
+  const combinedShape = (...shapeFns) =>
+    buildTemplateValues((hour, index) => clamp(shapeFns.reduce((sum, shapeFn) => sum + shapeFn(hour, index), 0), 0, 1));
+
   const BUILT_IN_TEMPLATES = [
     {
-      id: "office-lighting",
-      name: "Office Lighting",
-      category: "Lighting",
-      defaultPeakKw: 42,
-      color: "#ffb84d",
-      normalizedValues: plateau(7, 19, 0.08, 0.82),
-    },
-    {
-      id: "hvac-cooling",
-      name: "HVAC Cooling",
-      category: "HVAC",
-      defaultPeakKw: 96,
-      color: "#55c7ff",
-      normalizedValues: bell(15, 4.5, 0.05),
-    },
-    {
-      id: "ev-charging",
-      name: "EV Charging",
-      category: "EV",
-      defaultPeakKw: 64,
-      color: "#b18cff",
-      normalizedValues: bell(20, 1.7, 0.02),
-    },
-    {
-      id: "base-load",
-      name: "Base Load",
-      category: "Base",
-      defaultPeakKw: 28,
+      id: "residential-base-load",
+      name: "Residential Base Load",
+      category: "Residential",
+      defaultPeakKw: 0.35,
       color: "#7ee787",
-      normalizedValues: flat(1),
+      normalizedValues: buildTemplateValues((hour) => 0.74 + 0.08 * Math.sin((hour / 24) * Math.PI * 4)),
     },
     {
-      id: "kitchen-equipment",
-      name: "Kitchen Equipment",
-      category: "Process",
-      defaultPeakKw: 74,
+      id: "residential-lighting",
+      name: "Residential Lighting",
+      category: "Residential",
+      defaultPeakKw: 0.8,
+      color: "#ffb84d",
+      normalizedValues: combinedShape(
+        () => 0.04,
+        pulse(6.8, 0.9, 0.22),
+        pulse(19.4, 2.1, 0.86)
+      ),
+    },
+    {
+      id: "residential-hvac-cooling",
+      name: "Residential HVAC Cooling",
+      category: "Residential",
+      defaultPeakKw: 3.5,
+      color: "#55c7ff",
+      normalizedValues: combinedShape(() => 0.04, pulse(16, 3.7, 0.96), pulse(21, 1.8, 0.28)),
+    },
+    {
+      id: "residential-heat-pump-heating",
+      name: "Residential Heat Pump Heating",
+      category: "Residential",
+      defaultPeakKw: 4.5,
+      color: "#ff9b73",
+      normalizedValues: combinedShape(() => 0.06, pulse(6.6, 1.5, 0.82), pulse(19.5, 2.2, 0.62)),
+    },
+    {
+      id: "residential-ev-level-2",
+      name: "Residential EV Level 2",
+      category: "Residential",
+      defaultPeakKw: 7.2,
+      color: "#b18cff",
+      normalizedValues: windowShape(21.5, 5.5, 0, 1, 0.35),
+    },
+    {
+      id: "residential-electric-water-heater",
+      name: "Electric Water Heater",
+      category: "Residential",
+      defaultPeakKw: 4.5,
+      color: "#5eead4",
+      normalizedValues: combinedShape(() => 0.03, pulse(6.5, 0.7, 1), pulse(19, 0.9, 0.58), pulse(12, 0.7, 0.2)),
+    },
+    {
+      id: "residential-clothes-dryer",
+      name: "Clothes Dryer",
+      category: "Residential",
+      defaultPeakKw: 5,
+      color: "#f97316",
+      normalizedValues: combinedShape(() => 0.01, pulse(19.8, 0.55, 1), pulse(14, 0.55, 0.28)),
+    },
+    {
+      id: "residential-dishwasher",
+      name: "Dishwasher",
+      category: "Residential",
+      defaultPeakKw: 1.5,
+      color: "#60a5fa",
+      normalizedValues: combinedShape(() => 0.01, pulse(21.2, 0.8, 0.82), pulse(22.4, 0.5, 0.38)),
+    },
+    {
+      id: "residential-electric-range",
+      name: "Electric Range / Oven",
+      category: "Residential",
+      defaultPeakKw: 7,
+      color: "#fb7185",
+      normalizedValues: combinedShape(() => 0.01, pulse(7.2, 0.35, 0.25), pulse(18.4, 0.85, 1)),
+    },
+    {
+      id: "residential-pool-pump",
+      name: "Pool Pump",
+      category: "Residential",
+      defaultPeakKw: 1.5,
+      color: "#38bdf8",
+      normalizedValues: windowShape(10, 16, 0.01, 0.92, 0.4),
+    },
+    {
+      id: "commercial-office-lighting",
+      name: "Office Lighting",
+      category: "Commercial",
+      defaultPeakKw: 12,
+      color: "#facc15",
+      normalizedValues: windowShape(7, 18.5, 0.04, 0.94, 1),
+    },
+    {
+      id: "commercial-plug-loads",
+      name: "Office Plug Loads",
+      category: "Commercial",
+      defaultPeakKw: 8,
+      color: "#a3e635",
+      normalizedValues: combinedShape(() => 0.06, pulse(10.5, 2.4, 0.55), pulse(14.8, 2.6, 0.5)),
+    },
+    {
+      id: "commercial-rtu-cooling",
+      name: "Packaged RTU Cooling",
+      category: "Commercial",
+      defaultPeakKw: 25,
+      color: "#55c7ff",
+      normalizedValues: combinedShape(() => 0.05, pulse(14.5, 3.9, 0.9), pulse(8, 1.1, 0.2)),
+    },
+    {
+      id: "commercial-rtu-heating",
+      name: "Packaged RTU Heating",
+      category: "Commercial",
+      defaultPeakKw: 18,
+      color: "#fb923c",
+      normalizedValues: combinedShape(() => 0.05, pulse(6.5, 1, 1), pulse(11, 2.5, 0.38)),
+    },
+    {
+      id: "commercial-ventilation-fan",
+      name: "Ventilation Fan",
+      category: "Commercial",
+      defaultPeakKw: 5,
+      color: "#93c5fd",
+      normalizedValues: windowShape(6.5, 19, 0.08, 0.78, 0.5),
+    },
+    {
+      id: "commercial-elevator",
+      name: "Elevator / Vertical Transport",
+      category: "Commercial",
+      defaultPeakKw: 15,
+      color: "#c084fc",
+      normalizedValues: combinedShape(() => 0.02, pulse(8.3, 0.8, 0.88), pulse(12.2, 0.65, 0.52), pulse(17.2, 0.9, 0.72)),
+    },
+    {
+      id: "commercial-refrigeration",
+      name: "Commercial Refrigeration",
+      category: "Commercial",
+      defaultPeakKw: 6,
+      color: "#67e8f9",
+      normalizedValues: buildTemplateValues((hour) => 0.68 + 0.18 * smoothWindow(hour, 8, 22, 1) + 0.06 * Math.sin((hour / 24) * Math.PI * 8)),
+    },
+    {
+      id: "commercial-kitchen-line",
+      name: "Commercial Kitchen Line",
+      category: "Commercial",
+      defaultPeakKw: 30,
       color: "#ff7b72",
-      normalizedValues: buildTemplateValues((hour) => {
-        const breakfast = Math.exp(-((hour - 7.5) ** 2) / 1.6);
-        const lunch = Math.exp(-((hour - 12.5) ** 2) / 1.2);
-        const dinner = Math.exp(-((hour - 18.5) ** 2) / 1.8);
-        return 0.04 + Math.max(breakfast, lunch, dinner);
-      }),
+      normalizedValues: combinedShape(() => 0.03, pulse(7.5, 0.8, 0.55), pulse(12.1, 1, 1), pulse(18.4, 1.2, 0.82)),
     },
     {
-      id: "server-room",
-      name: "Server Room",
-      category: "Process",
-      defaultPeakKw: 55,
+      id: "commercial-retail-display-lighting",
+      name: "Retail Display Lighting",
+      category: "Commercial",
+      defaultPeakKw: 10,
+      color: "#f59e0b",
+      normalizedValues: windowShape(9, 21.5, 0.05, 0.92, 0.6),
+    },
+    {
+      id: "commercial-server-rack",
+      name: "Server Rack / IT Closet",
+      category: "Commercial",
+      defaultPeakKw: 12,
       color: "#a5d6ff",
-      normalizedValues: buildTemplateValues((hour) => 0.72 + 0.08 * Math.sin((hour / 24) * Math.PI * 6)),
+      normalizedValues: buildTemplateValues((hour) => 0.82 + 0.07 * Math.sin((hour / 24) * Math.PI * 6)),
+    },
+    {
+      id: "industrial-process-base",
+      name: "Continuous Process Base",
+      category: "Industrial",
+      defaultPeakKw: 50,
+      color: "#94a3b8",
+      normalizedValues: flat(0.95),
+    },
+    {
+      id: "industrial-production-line",
+      name: "Shift Production Line",
+      category: "Industrial",
+      defaultPeakKw: 120,
+      color: "#ef4444",
+      normalizedValues: windowShape(6, 18, 0.04, 0.96, 0.35),
+    },
+    {
+      id: "industrial-conveyor-motors",
+      name: "Conveyor Motors",
+      category: "Industrial",
+      defaultPeakKw: 35,
+      color: "#f97316",
+      normalizedValues: windowShape(5.5, 17.5, 0.06, 0.82, 0.25),
+    },
+    {
+      id: "industrial-compressed-air",
+      name: "Compressed Air Compressor",
+      category: "Industrial",
+      defaultPeakKw: 75,
+      color: "#22c55e",
+      normalizedValues: buildTemplateValues((hour) => 0.18 + 0.64 * smoothWindow(hour, 6, 18, 0.4) + 0.1 * Math.max(0, Math.sin(hour * Math.PI * 2))),
+    },
+    {
+      id: "industrial-process-heating",
+      name: "Process Heating",
+      category: "Industrial",
+      defaultPeakKw: 150,
+      color: "#dc2626",
+      normalizedValues: combinedShape(() => 0.03, pulse(8, 1.4, 0.85), pulse(13.5, 2.2, 1)),
+    },
+    {
+      id: "industrial-process-chiller",
+      name: "Process Chiller",
+      category: "Industrial",
+      defaultPeakKw: 100,
+      color: "#06b6d4",
+      normalizedValues: combinedShape(() => 0.18, pulse(14.5, 4.5, 0.78)),
+    },
+    {
+      id: "industrial-cold-storage",
+      name: "Cold Storage Refrigeration",
+      category: "Industrial",
+      defaultPeakKw: 60,
+      color: "#38bdf8",
+      normalizedValues: buildTemplateValues((hour) => 0.66 + 0.18 * pulse(15, 5, 1)(hour) + 0.07 * Math.sin(hour * Math.PI * 1.5)),
+    },
+    {
+      id: "industrial-welding-station",
+      name: "Welding Station",
+      category: "Industrial",
+      defaultPeakKw: 40,
+      color: "#e879f9",
+      normalizedValues: combinedShape(() => 0.01, pulse(9.4, 0.55, 0.72), pulse(11.2, 0.45, 0.9), pulse(14.6, 0.6, 1), pulse(16.3, 0.45, 0.62)),
+    },
+    {
+      id: "industrial-cnc-machine",
+      name: "CNC Machine",
+      category: "Industrial",
+      defaultPeakKw: 25,
+      color: "#818cf8",
+      normalizedValues: combinedShape(() => 0.04, pulse(9.5, 1.4, 0.7), pulse(13.5, 1.7, 0.84), pulse(16.2, 1, 0.45)),
+    },
+    {
+      id: "industrial-irrigation-pump",
+      name: "Irrigation Pump",
+      category: "Industrial",
+      defaultPeakKw: 30,
+      color: "#2dd4bf",
+      normalizedValues: windowShape(4.5, 10.5, 0, 1, 0.4),
     },
   ].map((template) => ({
     ...template,
@@ -205,6 +414,14 @@
     (Array.isArray(rows) ? rows : []).map((row) =>
       String(row.id) === String(rowId) ? { ...row, locked: !row.locked } : row
     );
+
+  const renameRow = (rows = [], rowId, name = "") => {
+    const trimmedName = String(name || "").trim();
+    if (!trimmedName) return Array.isArray(rows) ? rows : [];
+    return (Array.isArray(rows) ? rows : []).map((row) =>
+      String(row.id) === String(rowId) ? { ...row, name: trimmedName } : row
+    );
+  };
 
   const reorderRows = (rows = [], sourceId, targetIndex) => {
     const currentRows = Array.isArray(rows) ? rows : [];
@@ -321,7 +538,7 @@
 
   const findProminentExtrema = (values = [], amplitude = 0) => {
     if (!values.length || amplitude <= 0) return [];
-    const prominenceThreshold = amplitude * 0.18;
+    const prominenceThreshold = amplitude * 0.08;
     const candidates = [];
     for (let index = 1; index < values.length - 1; index += 1) {
       const previous = values[index - 1];
@@ -331,6 +548,24 @@
       const isTrough = current <= previous && current <= next && (Math.max(previous, next) - current) >= prominenceThreshold;
       if (isPeak || isTrough) candidates.push(index);
     }
+    return clusterIndices(candidates, 3);
+  };
+
+  const findSlopeChangeIndices = (values = [], amplitude = 0) => {
+    if (!values.length || amplitude <= 0) return [];
+    const slopes = values.slice(1).map((value, index) => value - values[index]);
+    const threshold = amplitude * 0.03;
+    const candidates = [];
+    for (let index = 1; index < slopes.length; index += 1) {
+      const previous = slopes[index - 1];
+      const current = slopes[index];
+      const change = Math.abs(current - previous);
+      const signChange = previous * current < 0;
+      const entersPlateau = Math.abs(previous) >= threshold && Math.abs(current) < threshold * 0.5;
+      const leavesPlateau = Math.abs(previous) < threshold * 0.5 && Math.abs(current) >= threshold;
+      if (signChange || entersPlateau || leavesPlateau || change >= threshold * 1.6) candidates.push(index);
+    }
+    if (candidates.length > 20) return [];
     return clusterIndices(candidates, 3);
   };
 
@@ -352,7 +587,8 @@
     const activeSegments = countActiveSegments(smoothed, activeThreshold);
     const activeEdges = findActiveEdgeIndices(smoothed, activeThreshold);
     const extrema = findProminentExtrema(smoothed, amplitude);
-    const preferredCount = clamp(2 + activeSegments * 2 + extrema.length, minPoints, Math.min(maxPoints, 10));
+    const slopeChanges = findSlopeChangeIndices(source, amplitude);
+    const preferredCount = clamp(2 + activeSegments * 2 + extrema.length + slopeChanges.length, minPoints, maxPoints);
     const points = smoothed.map((value, index) => ({
       x: index / Math.max(INTERVALS_PER_DAY - 1, 1),
       y: value / maxValue,
@@ -378,7 +614,7 @@
         Math.round((slot / Math.max(minPoints - 1, 1)) * (INTERVALS_PER_DAY - 1))
       );
     }
-    indices = clusterIndices([...indices, ...activeEdges.starts, ...activeEdges.ends], 3);
+    indices = clusterIndices([...indices, ...activeEdges.starts, ...activeEdges.ends, ...extrema, ...slopeChanges], 3);
     if (!indices.includes(0)) indices = [0, ...indices];
     if (!indices.includes(INTERVALS_PER_DAY - 1)) indices = [...indices, INTERVALS_PER_DAY - 1];
     indices = Array.from(new Set(indices)).sort((left, right) => left - right).slice(0, maxPoints);
@@ -481,10 +717,12 @@
 
   const createEditSession = (row = {}, options = {}) => {
     const originalValues = normalizeValues(row?.values);
-    const points = deriveEditPoints(originalValues, options);
+    const savedPoints = Array.isArray(row?.editPoints) && row.editPoints.length ? normalizeEditPoints(row.editPoints) : [];
+    const points = savedPoints.length >= MIN_EDIT_POINTS ? savedPoints : deriveEditPoints(originalValues, options);
     return {
       rowId: String(row?.id || ""),
       originalValues,
+      originalPoints: points.map((point) => ({ ...point })),
       draftValues: originalValues.slice(),
       points,
       selectedPointIds: [],
@@ -545,6 +783,9 @@
       minDelta = Math.max(minDelta, lowerBound - point.index);
       maxDelta = Math.min(maxDelta, upperBound - point.index);
     });
+    if (minDelta > maxDelta) {
+      return { minDelta: 0, maxDelta: 0 };
+    }
     return {
       minDelta: Number.isFinite(minDelta) ? minDelta : 0,
       maxDelta: Number.isFinite(maxDelta) ? maxDelta : 0,
@@ -558,13 +799,13 @@
     const previousPoint = sourcePoints[index - 1] || null;
     const nextNeighbor = sourcePoints[index + 1] || null;
     const isEndpoint = index === 0 || index === sourcePoints.length - 1;
+    const lowerBound = (previousPoint?.index ?? 0) + 1;
+    const upperBound = (nextNeighbor?.index ?? INTERVALS_PER_DAY - 1) - 1;
     const nextIndex = isEndpoint
       ? sourcePoints[index].index
-      : clamp(
-          Math.round(toNumber(nextPoint.index, sourcePoints[index].index)),
-          (previousPoint?.index ?? 0) + 1,
-          (nextNeighbor?.index ?? INTERVALS_PER_DAY - 1) - 1
-        );
+      : lowerBound > upperBound
+        ? sourcePoints[index].index
+        : clamp(Math.round(toNumber(nextPoint.index, sourcePoints[index].index)), lowerBound, upperBound);
     const updatedPoints = sourcePoints.map((point, pointIndex) =>
       pointIndex === index
         ? {
@@ -617,7 +858,8 @@
     const proximityThreshold = Math.max(1, Math.round(toNumber(options?.minIntervalGap, 1)));
     const duplicateNearby = sourcePoints.some((point) => Math.abs(point.index - snappedIndex) <= proximityThreshold);
     if (duplicateNearby) return session;
-    const valueKw = Math.max(0, toNumber(nextPoint?.valueKw, 0));
+    const currentValues = normalizeValues(session?.draftValues || sampleEditPoints(sourcePoints));
+    const valueKw = Math.max(0, toNumber(currentValues[snappedIndex], nextPoint?.valueKw || 0));
     const newPoint = {
       id: createPointId(`${snappedIndex}-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`),
       index: snappedIndex,
@@ -629,7 +871,7 @@
       points,
       selectedPointIds: [newPoint.id],
       mode: "point",
-      draftValues: sampleEditPoints(points),
+      draftValues: currentValues,
     };
   };
 
@@ -637,7 +879,10 @@
     const sourcePoints = normalizeEditPoints(session?.points);
     const idsToDelete = new Set(toArray(pointIds).map((pointId) => String(pointId)));
     if (!idsToDelete.size) return session;
-    const remaining = sourcePoints.filter((point) => !idsToDelete.has(String(point.id)));
+    const remaining = sourcePoints.filter((point, index) => {
+      const isEndpoint = index === 0 || index === sourcePoints.length - 1;
+      return isEndpoint || !idsToDelete.has(String(point.id));
+    });
     if (remaining.length < MIN_EDIT_POINTS) return session;
     const points = normalizeEditPoints(remaining);
     return {
@@ -663,26 +908,42 @@
 
   const transformEditSession = (session = {}, transform = {}) => {
     const baseValues = normalizeValues(transform?.baseValues || session?.draftValues || session?.originalValues);
-    const shiftedValues = wrapArray(baseValues, transform?.shiftIntervals);
-    const draftValues = scaleValues(shiftedValues, transform?.scaleFactor);
-    const points = deriveEditPoints(draftValues, {
-      minPoints: MIN_EDIT_POINTS,
-      maxPoints: MAX_EDIT_POINTS,
+    const shiftIntervals = Math.round(toNumber(transform?.shiftIntervals, 0));
+    const scaleFactor = Math.max(0, toNumber(transform?.scaleFactor, 1));
+    const shiftedValues = wrapArray(baseValues, shiftIntervals);
+    const draftValues = scaleValues(shiftedValues, scaleFactor);
+    const sourcePoints = normalizeEditPoints(session?.points);
+    const shiftedPoints = sourcePoints.map((point) => {
+      const shiftedIndex = ((point.index + shiftIntervals) % INTERVALS_PER_DAY + INTERVALS_PER_DAY) % INTERVALS_PER_DAY;
+      return {
+        ...point,
+        index: shiftedIndex,
+        valueKw: Math.max(0, point.valueKw > 0 ? point.valueKw * scaleFactor : 0),
+      };
     });
+    const points = normalizeEditPoints(shiftedPoints.length ? shiftedPoints : deriveEditPoints(draftValues));
     return {
       ...session,
       points,
-      selectedPointIds: [],
+      selectedPointIds: normalizeSelectedPointIds(points, session?.selectedPointIds),
       mode: "transform",
       draftValues,
     };
   };
 
-  const commitEditSession = (row = {}, session = {}) =>
-    updateRowStats({
+  const commitEditSession = (row = {}, session = {}) => {
+    const values = normalizeValues(session?.draftValues || row?.values);
+    const points = normalizeEditPoints(session?.points || row?.editPoints || []);
+    return updateRowStats({
       ...row,
-      values: normalizeValues(session?.draftValues || row?.values),
+      values,
+      editPoints: points.map((point) => ({
+        id: point.id,
+        index: point.index,
+        valueKw: Math.max(0, toNumber(values[point.index], point.valueKw)),
+      })),
     });
+  };
 
   const createEmptyProfileModel = (name = "Untitled Load Profile") => ({
     name: String(name || "Untitled Load Profile").trim() || "Untitled Load Profile",
@@ -724,6 +985,7 @@
     duplicateRow,
     deleteRow,
     toggleRowLocked,
+    renameRow,
     reorderRows,
     getInsertionIndexFromPoint,
     deriveEditPoints,

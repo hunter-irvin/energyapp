@@ -145,12 +145,14 @@
       onCreateProfile: createProfile,
       onOpenProfile: openProfile,
       onReturnToProfiles: returnToProfiles,
+      onRenameProfile: renameProfile,
       onSelectRow: selectRow,
       onDropTemplate: dropTemplate,
       onReorderRow: reorderRow,
       onDuplicateRow: duplicateRow,
       onDeleteRow: deleteRow,
       onToggleLock: toggleLock,
+      onRenameRow: renameRow,
       onEnterEditRow: enterEditRow,
       onCancelEditRow: cancelEditRow,
       onDoneEditRow: doneEditRow,
@@ -280,6 +282,21 @@
     render();
   };
 
+  const renameProfile = (name) => {
+    const profile = getCurrentProfile();
+    const trimmedName = String(name || "").trim();
+    if (!profile || !trimmedName || trimmedName === profile.name) return;
+    profiles = profiles.map((candidate) =>
+      String(candidate.id) === String(profile.id) ? { ...candidate, name: trimmedName } : candidate
+    );
+    currentModel = loadBuilder.validateProfileModel({
+      ...currentModel,
+      name: trimmedName,
+    });
+    render();
+    scheduleAutosave();
+  };
+
   const selectRow = (rowId) => {
     if (editSession?.rowId && String(editSession.rowId) !== String(rowId)) return;
     commitModel({
@@ -344,6 +361,17 @@
     commitModel({
       ...currentModel,
       rows: loadBuilder.toggleRowLocked(currentModel.rows, rowId),
+    });
+  };
+
+  const renameRow = (rowId, name) => {
+    if (isEditingRow()) return;
+    const row = currentModel.rows.find((candidate) => String(candidate.id) === String(rowId));
+    const trimmedName = String(name || "").trim();
+    if (!row || row.locked || !trimmedName || trimmedName === row.name) return;
+    commitModel({
+      ...currentModel,
+      rows: loadBuilder.renameRow(currentModel.rows, rowId, trimmedName),
     });
   };
 

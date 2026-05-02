@@ -30,6 +30,19 @@ const runLoadBuilderStaticTests = () => {
   assert.ok(pageScript.includes("load-builder-current-link"), "Load Builder should preserve projectId on its active nav link.");
   assert.ok(pageScript.includes("profileId"), "Load Builder should support profileId URLs.");
   assert.ok(pageScript.includes("replaceState"), "Load Builder should update the URL when opening profiles.");
+  assert.ok(pageScript.includes("onRenameProfile"), "Load Builder should wire profile rename actions.");
+  assert.ok(pageScript.includes("onRenameRow"), "Load Builder should wire layer rename actions.");
+
+  const uiScript = read("public", "assets", "js", "components", "load-builder-ui.js");
+  assert.ok(uiScript.includes("EditableProfileTitle"), "Load Builder should expose inline profile title renaming.");
+  assert.ok(uiScript.includes("load-builder-profile-name-input"), "Load Builder profile rename should use an inline input.");
+  assert.ok(uiScript.includes("load-builder-row-name-input"), "Load Builder rows should expose inline layer renaming.");
+  assert.ok(uiScript.includes("getAggregateLayerRows"), "Aggregate chart should derive its own layer order.");
+  assert.ok(uiScript.includes("rows: aggregateRows"), "Aggregate chart should use the same order as the legend.");
+  assert.ok(uiScript.includes("SelectedPointValueGuide"), "Load Builder should show a selected-point value guide during curve editing.");
+  assert.ok(uiScript.includes("guidePoint.valueKw, 1"), "Selected-point value guide should format kW with one decimal place.");
+  assert.ok(uiScript.includes("XAxisTicks"), "Aggregate chart should render sub-hour x-axis tick marks.");
+  assert.ok(uiScript.includes("showXTicks: true"), "Aggregate chart should opt into x-axis tick marks.");
 };
 
 module.exports = { runLoadBuilderStaticTests };

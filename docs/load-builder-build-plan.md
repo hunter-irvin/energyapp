@@ -21,6 +21,10 @@
 | 15 | Completed | Whole-shape transform | Dragging the chart body now shifts the whole shape horizontally with wrap-around and scales it vertically while preserving zero-valued samples. | Unit tests cover wrap-around shift, proportional scaling, zero preservation, and non-negative output. |
 | 16 | Completed | Multi-point selection | `Shift+click` multi-select, grouped point dragging, point add-on-double-click, and keyboard delete for selected points are now supported for the extracted control points. | Unit tests cover additive selection state, grouped movement, point insertion, near-duplicate rejection, and delete guardrails. |
 | 17 | Future work | Advanced handles | True design-tool bezier-style handles remain deferred until the extracted-point workflow proves usable. | Keep deferred until the next product pass. |
+| 18 | Completed | Stable point insertion | Adding a control point now preserves the current 96-sample curve until the user moves that point; insertion adds a handle on the existing curve instead of resampling the whole profile from sparse points. | Unit tests prove add-point is visually no-op for `draftValues`, creates one selected point at the snapped interval, rejects near-duplicates without changing values, and still commits 96 non-negative samples. Browser smoke verifies double-click add does not shift the curve. |
+| 19 | Completed | Stable point identity and deletion | Existing edit points are protected from disappearing because of collision, normalization, transform, or endpoint deletion. Point movement stops before colliding with neighbors, endpoints remain protected, and delete removes only explicitly selected interior points. | Unit tests cover collision-bounded single and grouped movement, endpoint delete protection, selected-only delete behavior, and transform preserving point ids/count where possible. Browser smoke verifies moving/adding/deleting points does not silently remove unrelated points. |
+| 20 | Completed | Denser curve-aware extraction | Initial edit mode now exposes more points for multi-curve profiles: endpoints, active segment boundaries, local peaks/troughs, and meaningful slope/curvature changes, while still honoring the `2..24` guardrail. | Unit tests use representative load shapes with multiple ramps/plateaus/peaks and assert expected interior control points are present. Regression tests cover flat, sinusoidal, noisy, and screenshot-like lighting curves. Browser smoke verifies the shown point set matches visible bends. |
+| 21 | Completed | Persistent layer edit points | Layer rows now persist their edit-point handles inside the profile JSON so re-entering edit mode restores user-authored point structure instead of re-deriving points from values every time. | Unit tests verify edit sessions restore saved `editPoints`, `Done` persists current handles with committed 96-value samples, and legacy rows without points still derive handles on first edit. Browser smoke verifies points survive `Done` and edit re-entry. |
 
 ## Merged MVP State
 
@@ -268,12 +272,12 @@ The Library contains reusable load templates. These templates are previewed as n
 - Search field
 - Filter chips:
   - All
-  - HVAC
-  - Lighting
-  - Process
-  - EV
-  - Base
+  - Residential
+  - Commercial
+  - Industrial
 - Load cards
+
+Seed library starts with 30 hardcoded templates, split evenly across the three primary categories. Templates remain normalized 96-point shapes with a single-device/default-system `defaultPeakKw` magnitude that scales the row into absolute `kW` values when added to a profile.
 
 ### Load card design
 
@@ -479,6 +483,11 @@ type LoadProfile = {
   selected?: boolean;
   values: number[]; // length 96 for 15-minute intervals
   sourceTemplateId?: string;
+  editPoints?: Array<{
+    id: string;
+    index: number; // 0..95, snapped to 15-minute intervals
+    valueKw: number;
+  }>;
 };
 ```
 
@@ -609,6 +618,74 @@ Complexity note:
   - resample back to 96 values
 - In ambiguous cases, the heuristic should underfit slightly rather than overfit, so users see fewer, more meaningful points.
 - The `2..24` guardrail should make the experience more predictable across both extremely simple and very noisy rows.
+
+## Corrective Tasks For Precision Curve Editing
+
+These tasks address observed behavior where adding a point can dramatically reshape the load curve, existing points can disappear while editing, and multi-curve profiles can enter edit mode with too few interior control points.
+
+### Task 18: Stable point insertion
+
+Implementation status:
+
+- Completed in the current build.
+
+- Treat `draftValues` as the edit-session source of truth during point insertion.
+- Adding a point should sample the current curve/value at the snapped 15-minute interval and insert a handle there.
+- Adding a point should not immediately regenerate the whole curve from the sparse control-point set.
+- The curve should visually remain unchanged until the user moves the new point.
+- Near-duplicate insertion should be rejected without changing `points`, `selectedPointIds`, or `draftValues`.
+- The newly inserted point becomes the only selected point when insertion succeeds.
+
+Tests / verification:
+
+- Unit test: adding a point to a representative curve keeps `draftValues` byte-for-byte or numerically equivalent before movement.
+- Unit test: added point index snaps to the nearest 15-minute interval and `valueKw` matches the current curve at that index.
+- Unit test: near-duplicate add returns the original session unchanged.
+- Unit test: `Done` after point insertion still commits exactly 96 non-negative samples.
+- Browser smoke: double-click add on a visible curve does not shift the rendered profile or aggregate preview.
+
+### Task 19: Stable point identity and deletion
+
+Implementation status:
+
+- Completed in the current build.
+
+- Stop silently deleting points during normalization when a move/add collides with an existing point.
+- Clamp point movement before the selected point or selected group reaches neighboring unselected points.
+- Preserve point ids and selection state across point movement and whole-shape transforms where possible.
+- Keep endpoints non-deletable so the edit-session boundary remains stable.
+- Delete should remove only explicitly selected interior points.
+- Whole-shape transform should transform existing points with the shape rather than re-derive a replacement point set from the transformed values.
+
+Tests / verification:
+
+- Unit test: moving a point into a neighbor clamps before collision and preserves both points.
+- Unit test: grouped movement clamps before colliding with unselected neighbors.
+- Unit test: endpoint delete requests are ignored while selected interior points can still be deleted.
+- Unit test: delete does not remove unselected points.
+- Unit test: transform preserves point ids/count unless a documented wrap boundary rule requires otherwise.
+- Browser smoke: add, move, transform, and delete operations do not make unrelated points disappear.
+
+### Task 20: Denser curve-aware extraction
+
+Implementation status:
+
+- Completed in the current build.
+
+- Improve initial point extraction so visible curve structure is represented by editable points.
+- Include endpoints, active segment starts/ends, local peaks/troughs, and meaningful slope or curvature changes.
+- Raise or remove the current practical preference for very sparse point sets when the row has multiple visible curve events.
+- Keep the hard maximum of `24` points and the minimum of `2` points.
+- Continue to simplify genuinely noisy input, but do not collapse multi-ramp or multi-plateau shapes into a single middle point.
+
+Tests / verification:
+
+- Unit test: flat/base-load rows still produce the minimum useful point set.
+- Unit test: sinusoidal rows include peak/trough control points.
+- Unit test: multi-ramp lighting-like rows include points around each visible ramp, plateau, and drop.
+- Unit test: noisy rows still simplify under the `24` point maximum without producing visually useless density.
+- Unit test: extraction never returns fewer than `2` or more than `24` points.
+- Browser smoke: entering edit mode on a multi-curve layer shows handles at the visible bends shown in the chart.
 
 ## Recommended MVP Editing Scope
 
@@ -759,7 +836,9 @@ Notes:
 
 - `originalValues` powers `Cancel`.
 - `draftValues` powers live aggregate preview during editing.
-- `points` supports smooth-curve manipulation without changing the persistence schema yet.
+- `points` supports smooth-curve manipulation during editing.
+- On `Done`, the current points are persisted back to the row as `editPoints` alongside the committed 96-sample `values`.
+- On re-entering edit mode, saved `editPoints` are restored first; rows without saved points still derive handles from their current values.
 - `points.length` should always stay within the `2..24` extraction guardrail in MVP.
 
 ## Interaction Rules
@@ -791,4 +870,4 @@ Notes:
 
 ## Remaining Clarifying Questions
 
-- None at the planning level right now. The next decisions are implementation details, not product-scope blockers.
+- None at the planning level right now. Chart-body drag remains the whole-shape transform gesture.

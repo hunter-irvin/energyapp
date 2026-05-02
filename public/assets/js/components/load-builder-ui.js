@@ -9,6 +9,7 @@
   const HOURS = Array.from({ length: 25 }, (_, index) => index);
 
   const toArray = (value) => (Array.isArray(value) ? value : []);
+  const getAggregateLayerRows = (rows) => toArray(rows).slice().reverse();
   const formatNumber = (value, digits = 0) => {
     const numeric = Number(value);
     if (!Number.isFinite(numeric)) return "0";
@@ -147,6 +148,30 @@
     );
   };
 
+  const XAxisTicks = ({ count = 96, activeIndex = null }) => {
+    const tickCount = Math.max(1, Number(count) || 96);
+    const active = Number.isInteger(activeIndex) ? activeIndex : null;
+    return e(
+      "div",
+      { className: "load-builder-x-ticks", "aria-hidden": "true" },
+      ...Array.from({ length: tickCount }, (_, index) =>
+        e("span", {
+          key: index,
+          className: `load-builder-x-tick${active === index ? " is-active" : ""}`,
+          style: { left: `${(index / Math.max(1, tickCount - 1)) * 100}%` },
+        })
+      )
+    );
+  };
+
+  const YAxisLabels = ({ maxValue }) =>
+    e(
+      "div",
+      { className: "load-builder-y-axis", "aria-hidden": "true" },
+      e("span", null, formatNumber(Math.ceil(Math.max(Number(maxValue) || 1, 1)), 0)),
+      e("span", null, "0")
+    );
+
   const EditControls = ({ onDone, onCancel }) =>
     e(
       "div",
@@ -173,6 +198,30 @@
         })
       )
     );
+
+  const SelectedPointValueGuide = ({ points, selectedPointIds, values, maxValue }) => {
+    const selected = new Set(toArray(selectedPointIds).map((pointId) => String(pointId)));
+    const selectedPoints = toArray(points).filter((point) => selected.has(String(point.id)));
+    if (!selectedPoints.length) return null;
+    const source = toArray(values);
+    const selectedWithValues = selectedPoints.map((point) => {
+      const index = Math.min(source.length - 1, Math.max(0, Math.round(Number(point.index) || 0)));
+      const valueKw = Math.max(0, Number(source[index]) || 0);
+      return { ...point, valueKw };
+    });
+    const guidePoint = selectedWithValues.reduce((maximum, point) => (point.valueKw > maximum.valueKw ? point : maximum), selectedWithValues[0]);
+    const top = (valueToChartY(guidePoint.valueKw, 88, maxValue) / 88) * 100;
+    return e(
+      "div",
+      {
+        className: "load-builder-selected-value-guide",
+        style: { top: `${top}%` },
+        "aria-hidden": "true",
+      },
+      e("span", { className: "load-builder-selected-value-guide__line" }),
+      e("span", { className: "load-builder-selected-value-guide__label" }, `${formatNumber(guidePoint.valueKw, 1)} kW`)
+    );
+  };
 
   const MiniArea = ({ rowId, values, color, name, selected, maxValue, editSession, onEnterEditRow, onCancelEditRow, onDoneEditRow, onUpdateEditPoint }) => {
     const [clipId] = ReactRef.useState(() => `load-builder-mini-plot-clip-${Math.random().toString(36).slice(2)}`);
@@ -344,22 +393,24 @@
             },
           })
         : null,
+      isEditing ? e(SelectedPointValueGuide, { points: controlPoints, selectedPointIds, values: editSession?.draftValues || source, maxValue }) : null,
       !isEditing ? e(ChartTooltip, { hover, rows: hoverRows }) : null,
       isEditing ? e(EditControls, { onDone: onDoneEditRow, onCancel: onCancelEditRow }) : null,
-      e(
-        "div",
-        { className: "load-builder-y-axis", "aria-hidden": "true" },
-        e("span", null, Math.ceil(Math.max(Number(maxValue) || 1, 1))),
-        e("span", null, "0")
-      )
+      e(YAxisLabels, { maxValue })
     );
   };
 
-  const StackedArea = ({ rows, showTooltip = false }) => {
+  const StackedArea = ({ rows, showTooltip = false, showYAxis = false, showXTicks = false }) => {
     const activeRows = toArray(rows).filter((row) => !row?.muted);
     const layers = calculateStackedPaths(activeRows);
     const [hover, setHover] = ReactRef.useState(null);
     const valueCount = Math.max(...activeRows.map((row) => toArray(row.values).length), 96);
+    const axisMax = Math.max(
+      ...Array.from({ length: valueCount }, (_, index) =>
+        activeRows.reduce((sum, row) => sum + (Number(row?.values?.[index]) || 0), 0)
+      ),
+      1
+    );
     const hoverRows = showTooltip && hover
       ? [
           {
@@ -409,6 +460,8 @@
           })
         )
       ),
+      showYAxis ? e(YAxisLabels, { maxValue: axisMax }) : null,
+      showXTicks ? e(XAxisTicks, { count: valueCount, activeIndex: hover?.index ?? null }) : null,
       showTooltip ? e(ChartTooltip, { hover, rows: hoverRows }) : null
     );
   };
@@ -450,7 +503,7 @@
   const LibraryPanel = ({ templates, canEdit, onDropTemplate }) => {
     const [query, setQuery] = ReactRef.useState("");
     const [category, setCategory] = ReactRef.useState("All");
-    const categories = ["All", "HVAC", "Lighting", "Process", "EV", "Base"];
+    const categories = ["All", "Residential", "Commercial", "Industrial"];
     const filteredTemplates = toArray(templates).filter((template) => {
       const matchesCategory = category === "All" || template.category === category;
       const text = `${template.name} ${template.category}`.toLowerCase();
@@ -518,7 +571,7 @@
     );
   };
 
-  const RowMenu = ({ row, isEditingAnyRow, isEditing, onEnterEditRow, onDuplicateRow, onDeleteRow, onToggleLock }) => {
+  const RowMenu = ({ row, isEditingAnyRow, isEditing, onRequestRename, onEnterEditRow, onDuplicateRow, onDeleteRow, onToggleLock }) => {
     const [open, setOpen] = ReactRef.useState(false);
     const menuRef = ReactRef.useRef(null);
 
@@ -558,6 +611,7 @@
       e(
         "div",
         { className: "load-builder-row-menu__panel" },
+        e("button", { type: "button", disabled: row.locked || isEditingAnyRow, onClick: () => runAction(onRequestRename) }, "Rename"),
         e("button", { type: "button", disabled: row.locked || isEditingAnyRow, onClick: () => runAction(onEnterEditRow) }, "Edit"),
         e("button", { type: "button", disabled: row.locked, onClick: () => runAction(onDuplicateRow) }, "Duplicate"),
         e("button", { type: "button", onClick: () => runAction(onToggleLock) }, row.locked ? "Unlock" : "Lock"),
@@ -566,8 +620,41 @@
     );
   };
 
-  const RowHeader = ({ row, isEditingAnyRow, isEditing, onEnterEditRow, onDuplicateRow, onDeleteRow, onToggleLock }) =>
-    e(
+  const RowHeader = ({ row, isEditingAnyRow, isEditing, onRenameRow, onEnterEditRow, onDuplicateRow, onDeleteRow, onToggleLock }) => {
+    const [renaming, setRenaming] = ReactRef.useState(false);
+    const [draftName, setDraftName] = ReactRef.useState(row.name || "Load");
+    const inputRef = ReactRef.useRef(null);
+
+    ReactRef.useEffect(() => {
+      if (!renaming) setDraftName(row.name || "Load");
+    }, [renaming, row.name]);
+
+    ReactRef.useEffect(() => {
+      if (!renaming) return undefined;
+      inputRef.current?.focus();
+      inputRef.current?.select();
+      return undefined;
+    }, [renaming]);
+
+    const startRename = () => {
+      if (row.locked || isEditingAnyRow) return;
+      setDraftName(row.name || "Load");
+      setRenaming(true);
+    };
+
+    const cancelRename = () => {
+      setDraftName(row.name || "Load");
+      setRenaming(false);
+    };
+
+    const commitRename = () => {
+      const trimmedName = draftName.trim();
+      if (trimmedName && trimmedName !== row.name) onRenameRow?.(row.id, trimmedName);
+      setDraftName(trimmedName || row.name || "Load");
+      setRenaming(false);
+    };
+
+    return e(
       "div",
       { className: "load-builder-row-info" },
       e("span", { className: "load-builder-grip", "aria-hidden": "true" }, "⋮⋮"),
@@ -578,7 +665,43 @@
           "div",
           { className: "load-builder-row-title" },
           e("i", { style: { background: row.color || "currentColor" }, "aria-hidden": "true" }),
-          e("strong", null, row.name || "Load"),
+          renaming
+            ? e("input", {
+                ref: inputRef,
+                className: "load-builder-row-name-input",
+                value: draftName,
+                maxLength: 80,
+                "aria-label": "Layer name",
+                onClick: (event) => event.stopPropagation(),
+                onPointerDown: (event) => event.stopPropagation(),
+                onChange: (event) => setDraftName(event.target.value),
+                onBlur: commitRename,
+                onKeyDown: (event) => {
+                  if (event.key === "Enter") {
+                    event.preventDefault();
+                    commitRename();
+                  }
+                  if (event.key === "Escape") {
+                    event.preventDefault();
+                    cancelRename();
+                  }
+                },
+              })
+            : e(
+                "button",
+                {
+                  className: "load-builder-row-name",
+                  type: "button",
+                  disabled: row.locked || isEditingAnyRow,
+                  title: row.locked ? "Unlock this layer to rename it" : "Rename layer",
+                  onClick: (event) => {
+                    event.stopPropagation();
+                    startRename();
+                  },
+                  onDoubleClick: (event) => event.stopPropagation(),
+                },
+                row.name || "Load"
+              ),
           row.locked ? e("span", { className: "load-builder-lock", title: "Locked" }, "LOCKED") : null
         ),
         e("span", { className: "load-builder-row-group" }, row.group || row.category || "Load"),
@@ -591,8 +714,18 @@
           e("b", null, `${formatNumber(row.kwh, 0)} kWh`)
         )
       ),
-      e(RowMenu, { row, isEditingAnyRow, isEditing, onEnterEditRow, onDuplicateRow, onDeleteRow, onToggleLock })
+      e(RowMenu, {
+        row,
+        isEditingAnyRow,
+        isEditing,
+        onRequestRename: startRename,
+        onEnterEditRow,
+        onDuplicateRow,
+        onDeleteRow,
+        onToggleLock,
+      })
     );
+  };
 
   const LoadRows = (props) => {
     const rows = toArray(props.model?.rows);
@@ -697,6 +830,7 @@
             onDuplicateRow: props.onDuplicateRow,
             onDeleteRow: props.onDeleteRow,
             onToggleLock: props.onToggleLock,
+            onRenameRow: props.onRenameRow,
           }),
           e(
             "div",
@@ -796,6 +930,74 @@
     );
   };
 
+  const EditableProfileTitle = ({ name, disabled, onRenameProfile }) => {
+    const resolvedName = name || "Untitled Load Profile";
+    const [renaming, setRenaming] = ReactRef.useState(false);
+    const [draftName, setDraftName] = ReactRef.useState(resolvedName);
+    const inputRef = ReactRef.useRef(null);
+
+    ReactRef.useEffect(() => {
+      if (!renaming) setDraftName(resolvedName);
+    }, [renaming, resolvedName]);
+
+    ReactRef.useEffect(() => {
+      if (!renaming) return undefined;
+      inputRef.current?.focus();
+      inputRef.current?.select();
+      return undefined;
+    }, [renaming]);
+
+    const startRename = () => {
+      if (disabled) return;
+      setDraftName(resolvedName);
+      setRenaming(true);
+    };
+
+    const cancelRename = () => {
+      setDraftName(resolvedName);
+      setRenaming(false);
+    };
+
+    const commitRename = () => {
+      const trimmedName = draftName.trim();
+      if (trimmedName && trimmedName !== resolvedName) onRenameProfile?.(trimmedName);
+      setDraftName(trimmedName || resolvedName);
+      setRenaming(false);
+    };
+
+    return renaming
+      ? e("input", {
+          ref: inputRef,
+          className: "load-builder-profile-name-input",
+          value: draftName,
+          maxLength: 100,
+          "aria-label": "Load profile name",
+          onChange: (event) => setDraftName(event.target.value),
+          onBlur: commitRename,
+          onKeyDown: (event) => {
+            if (event.key === "Enter") {
+              event.preventDefault();
+              commitRename();
+            }
+            if (event.key === "Escape") {
+              event.preventDefault();
+              cancelRename();
+            }
+          },
+        })
+      : e(
+          "button",
+          {
+            className: "load-builder-profile-name",
+            type: "button",
+            disabled,
+            title: disabled ? "Finish editing the layer before renaming the profile" : "Rename profile",
+            onClick: startRename,
+          },
+          resolvedName
+        );
+  };
+
   const ProfilePreview = ({ profile }) => {
     const model = window.EnergyLoadBuilder?.validateProfileModel
       ? window.EnergyLoadBuilder.validateProfileModel(profile?.model || {})
@@ -884,6 +1086,7 @@
     const [newOpen, setNewOpen] = ReactRef.useState(false);
     const [profilesOpen, setProfilesOpen] = ReactRef.useState(false);
     const rows = toArray(props.model?.rows);
+    const aggregateRows = getAggregateLayerRows(rows);
     const aggregateStats = props.aggregateStats || {};
     const loadCountText = `${rows.length}/${window.EnergyLoadBuilder?.MAX_LOAD_ROWS || 25}`;
 
@@ -928,7 +1131,11 @@
                 e(
                   "div",
                   { className: "load-builder-title-row" },
-                  e("h2", null, props.currentProfile?.name || "No Profile Selected"),
+                  e(EditableProfileTitle, {
+                    name: props.currentProfile?.name || "No Profile Selected",
+                    disabled: !props.currentProfile || Boolean(props.editSession?.rowId),
+                    onRenameProfile: props.onRenameProfile,
+                  }),
                   e(
                     "span",
                     {
@@ -939,8 +1146,7 @@
                     },
                     props.autosaveStatus || "Idle"
                   )
-                ),
-                e("p", null, "Generic day - absolute kW - wrap-around time shifts - aggregate is read-only")
+                )
               ),
               e(
                 "div",
@@ -961,8 +1167,8 @@
                   "aside",
                   { className: "load-builder-legend" },
                   e("span", null, "Legend"),
-                  rows.length
-                    ? rows.map((row) =>
+                  aggregateRows.length
+                    ? aggregateRows.map((row) =>
                         e(
                           "p",
                           { key: row.id },
@@ -972,7 +1178,7 @@
                       )
                     : e("p", { className: "load-builder-muted" }, "No loads")
                 ),
-                e("div", { className: "load-builder-aggregate-chart" }, e(StackedArea, { rows, showTooltip: true }), e(ChartAxis))
+                e("div", { className: "load-builder-aggregate-chart" }, e(StackedArea, { rows: aggregateRows, showTooltip: true, showYAxis: true, showXTicks: true }), e(ChartAxis))
               )
             ),
             e(
