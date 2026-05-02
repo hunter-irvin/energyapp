@@ -36,6 +36,14 @@
       y: Math.min(100, Math.max(0, ((event.clientY - rect.top) / Math.max(1, rect.height)) * 100)),
     };
   };
+  const valueToChartY = (value = 0, height = 88, maxValue = 1) =>
+    height - (Math.max(0, Number(value) || 0) / Math.max(Number(maxValue) || 1, 1)) * (height - CHART_VERTICAL_PADDING * 2) - CHART_VERTICAL_PADDING;
+  const pointValueFromClientY = (clientY, rect, maxValue, height = 88) => {
+    const ratio = Math.min(1, Math.max(0, (clientY - rect.top) / Math.max(1, rect.height)));
+    const y = ratio * height;
+    const normalized = (height - CHART_VERTICAL_PADDING - y) / Math.max(1, height - CHART_VERTICAL_PADDING * 2);
+    return Math.max(0, normalized * Math.max(Number(maxValue) || 1, 1));
+  };
 
   const pointsFromValues = (values, height = 88, width = 100, maxValue = null) => {
     const source = toArray(values);
@@ -139,10 +147,42 @@
     );
   };
 
-  const MiniArea = ({ values, color, name, selected, maxValue }) => {
+  const EditControls = ({ onDone, onCancel }) =>
+    e(
+      "div",
+      { className: "load-builder-edit-controls" },
+      e("button", { className: "btn btn--primary", type: "button", onClick: onDone }, "Done"),
+      e("button", { className: "btn", type: "button", onClick: onCancel }, "Cancel")
+    );
+
+  const EditPointOverlay = ({ points, selectedPointIds, maxValue, onPointerDown }) =>
+    e(
+      "div",
+      { className: "load-builder-edit-points" },
+      ...toArray(points).map((point) =>
+        e("button", {
+          key: point.id,
+          className: `load-builder-edit-point${toArray(selectedPointIds).includes(point.id) ? " is-selected" : ""}`,
+          type: "button",
+          style: {
+            left: `${(point.index / 95) * 100}%`,
+            top: `${(valueToChartY(point.valueKw, 88, maxValue) / 88) * 100}%`,
+          },
+          onPointerDown: (event) => onPointerDown?.(event, point.id),
+          "aria-label": `${point.id} control point`,
+        })
+      )
+    );
+
+  const MiniArea = ({ rowId, values, color, name, selected, maxValue, editSession, onEnterEditRow, onCancelEditRow, onDoneEditRow, onUpdateEditPoint }) => {
     const [clipId] = ReactRef.useState(() => `load-builder-mini-plot-clip-${Math.random().toString(36).slice(2)}`);
+    const chartRef = ReactRef.useRef(null);
+    const dragStateRef = ReactRef.useRef(null);
     const [hover, setHover] = ReactRef.useState(null);
     const source = toArray(values);
+    const isEditing = Boolean(editSession?.rowId) && String(editSession.rowId) === String(rowId);
+    const controlPoints = toArray(editSession?.points);
+    const selectedPointIds = toArray(editSession?.selectedPointIds);
     const hoverRows = hover
       ? [
           {
@@ -162,12 +202,91 @@
         time: formatTimeAtIndex(index),
       });
     };
+    ReactRef.useEffect(() => {
+      if (!isEditing) {
+        dragStateRef.current = null;
+        return undefined;
+      }
+      const handlePointerMove = (event) => {
+        if (!dragStateRef.current || !chartRef.current) return;
+        const rect = chartRef.current.getBoundingClientRect();
+        const dragState = dragStateRef.current;
+        if (dragState.type === "points") {
+          const deltaIndex = Math.round(((event.clientX - dragState.startX) / Math.max(1, rect.width)) * 95);
+          const startValueKw = pointValueFromClientY(dragState.startY, rect, maxValue, 88);
+          const currentValueKw = pointValueFromClientY(event.clientY, rect, maxValue, 88);
+          onUpdateEditPoint?.("points", {
+            baseSession: dragState.baseSession,
+            pointId: dragState.pointId,
+            deltaIndex,
+            deltaValueKw: currentValueKw - startValueKw,
+          });
+          return;
+        }
+        const shiftIntervals = Math.round(((event.clientX - dragState.startX) / Math.max(1, rect.width)) * 95);
+        const verticalRatio = (dragState.startY - event.clientY) / Math.max(1, rect.height);
+        onUpdateEditPoint?.("transform", {
+          baseSession: dragState.baseSession,
+          shiftIntervals,
+          scaleFactor: Math.max(0, 1 + verticalRatio * 2),
+        });
+      };
+      const handlePointerUp = () => {
+        dragStateRef.current = null;
+      };
+      window.addEventListener("pointermove", handlePointerMove);
+      window.addEventListener("pointerup", handlePointerUp);
+      return () => {
+        window.removeEventListener("pointermove", handlePointerMove);
+        window.removeEventListener("pointerup", handlePointerUp);
+      };
+    }, [isEditing, maxValue, onUpdateEditPoint]);
+    ReactRef.useEffect(() => {
+      if (!isEditing) return undefined;
+      const handleKeyDown = (event) => {
+        if (event.key !== "Backspace" && event.key !== "Delete") return;
+        if (!selectedPointIds.length) return;
+        const targetTag = String(event.target?.tagName || "").toLowerCase();
+        if (targetTag === "input" || targetTag === "textarea") return;
+        event.preventDefault();
+        onUpdateEditPoint?.("delete", { pointIds: selectedPointIds });
+      };
+      window.addEventListener("keydown", handleKeyDown);
+      return () => window.removeEventListener("keydown", handleKeyDown);
+    }, [isEditing, onUpdateEditPoint, selectedPointIds]);
     return e(
       "div",
       {
-        className: `load-builder-mini-area${selected ? " is-selected" : ""}`,
-        onPointerMove: handlePointerMove,
-        onPointerLeave: () => setHover(null),
+        ref: chartRef,
+        className: `load-builder-mini-area${selected ? " is-selected" : ""}${isEditing ? " is-editing" : ""}`,
+        onPointerMove: isEditing ? undefined : handlePointerMove,
+        onPointerLeave: isEditing ? undefined : () => setHover(null),
+        onDoubleClick: (event) => {
+          if (!isEditing) {
+            onEnterEditRow?.(rowId);
+            return;
+          }
+          if (event.target?.closest?.(".load-builder-edit-point") || event.target?.closest?.(".load-builder-edit-controls")) return;
+          const rect = chartRef.current?.getBoundingClientRect();
+          if (!rect) return;
+          const ratio = Math.min(1, Math.max(0, (event.clientX - rect.left) / Math.max(1, rect.width)));
+          onUpdateEditPoint?.("add", {
+            index: Math.round(ratio * 95),
+            valueKw: pointValueFromClientY(event.clientY, rect, maxValue, 88),
+          });
+        },
+        onPointerDown: isEditing
+          ? (event) => {
+              if (event.target?.closest?.(".load-builder-edit-point") || event.target?.closest?.(".load-builder-edit-controls")) return;
+              event.preventDefault();
+              dragStateRef.current = {
+                type: "transform",
+                startX: event.clientX,
+                startY: event.clientY,
+                baseSession: editSession,
+              };
+            }
+          : undefined,
       },
       e("div", { className: "load-builder-grid", "aria-hidden": "true" }),
       e(
@@ -192,7 +311,41 @@
         ),
         e("line", { className: "load-builder-zero-line", x1: 0, x2: 100, y1: zeroY(88), y2: zeroY(88), vectorEffect: "non-scaling-stroke" }),
       ),
-      e(ChartTooltip, { hover, rows: hoverRows }),
+      isEditing
+        ? e(EditPointOverlay, {
+            points: controlPoints,
+            selectedPointIds,
+            maxValue,
+            onPointerDown: (event, pointId) => {
+              event.preventDefault();
+              event.stopPropagation();
+              if (event.shiftKey) {
+                const nextSession = window.EnergyLoadBuilder?.toggleEditPointSelection
+                  ? window.EnergyLoadBuilder.toggleEditPointSelection(editSession, pointId)
+                  : editSession;
+                onUpdateEditPoint?.("session", { session: nextSession });
+                dragStateRef.current = null;
+                return;
+              }
+              const preserveSelection = selectedPointIds.includes(pointId);
+              const baseSession = preserveSelection
+                ? editSession
+                : window.EnergyLoadBuilder?.setSelectedEditPoints
+                  ? window.EnergyLoadBuilder.setSelectedEditPoints(editSession, [pointId])
+                  : editSession;
+              onUpdateEditPoint?.("session", { session: baseSession });
+              dragStateRef.current = {
+                type: "points",
+                pointId,
+                startX: event.clientX,
+                startY: event.clientY,
+                baseSession,
+              };
+            },
+          })
+        : null,
+      !isEditing ? e(ChartTooltip, { hover, rows: hoverRows }) : null,
+      isEditing ? e(EditControls, { onDone: onDoneEditRow, onCancel: onCancelEditRow }) : null,
       e(
         "div",
         { className: "load-builder-y-axis", "aria-hidden": "true" },
@@ -365,7 +518,7 @@
     );
   };
 
-  const RowMenu = ({ row, onDuplicateRow, onDeleteRow, onToggleLock }) => {
+  const RowMenu = ({ row, isEditingAnyRow, isEditing, onEnterEditRow, onDuplicateRow, onDeleteRow, onToggleLock }) => {
     const [open, setOpen] = ReactRef.useState(false);
     const menuRef = ReactRef.useRef(null);
 
@@ -405,6 +558,7 @@
       e(
         "div",
         { className: "load-builder-row-menu__panel" },
+        e("button", { type: "button", disabled: row.locked || isEditingAnyRow, onClick: () => runAction(onEnterEditRow) }, "Edit"),
         e("button", { type: "button", disabled: row.locked, onClick: () => runAction(onDuplicateRow) }, "Duplicate"),
         e("button", { type: "button", onClick: () => runAction(onToggleLock) }, row.locked ? "Unlock" : "Lock"),
         e("button", { type: "button", disabled: row.locked, onClick: () => runAction(onDeleteRow) }, "Delete")
@@ -412,7 +566,7 @@
     );
   };
 
-  const RowHeader = ({ row, onDuplicateRow, onDeleteRow, onToggleLock }) =>
+  const RowHeader = ({ row, isEditingAnyRow, isEditing, onEnterEditRow, onDuplicateRow, onDeleteRow, onToggleLock }) =>
     e(
       "div",
       { className: "load-builder-row-info" },
@@ -437,13 +591,14 @@
           e("b", null, `${formatNumber(row.kwh, 0)} kWh`)
         )
       ),
-      e(RowMenu, { row, onDuplicateRow, onDeleteRow, onToggleLock })
+      e(RowMenu, { row, isEditingAnyRow, isEditing, onEnterEditRow, onDuplicateRow, onDeleteRow, onToggleLock })
     );
 
   const LoadRows = (props) => {
     const rows = toArray(props.model?.rows);
     const [activeDropIndex, setActiveDropIndex] = ReactRef.useState(null);
     const axisMax = window.EnergyLoadBuilder?.getIndividualAxisMax ? window.EnergyLoadBuilder.getIndividualAxisMax(rows) : 1;
+    const isEditingAnyRow = Boolean(props.editSession?.rowId);
     const getDropIndex = (event) => {
       const rowRects = Array.from(event.currentTarget.querySelectorAll(".load-builder-row")).map((row) => {
         const rect = row.getBoundingClientRect();
@@ -463,14 +618,14 @@
       if (rowId) props.onReorderRow?.(rowId, index);
     };
     const handleListDragOver = (event) => {
-      if (!props.canEdit) return;
+      if (!props.canEdit || isEditingAnyRow) return;
       event.preventDefault();
       const types = Array.from(event.dataTransfer?.types || []);
       event.dataTransfer.dropEffect = types.includes("application/x-load-row") ? "move" : "copy";
       setActiveDropIndex(getDropIndex(event));
     };
     const handleListDrop = (event) => {
-      if (!props.canEdit) return;
+      if (!props.canEdit || isEditingAnyRow) return;
       event.preventDefault();
       const index = getDropIndex(event);
       setActiveDropIndex(null);
@@ -480,7 +635,7 @@
       if (!event.currentTarget.contains(event.relatedTarget)) setActiveDropIndex(null);
     };
 
-    if (!props.canEdit) {
+    if (!props.canEdit && !isEditingAnyRow) {
       return e(
         "div",
         { className: "load-builder-empty" },
@@ -527,7 +682,7 @@
             key: row.id,
             className: `load-builder-row${row.selected ? " is-selected" : ""}`,
             style: { gridTemplateColumns: `${INFO_PANEL_WIDTH}px minmax(0, 1fr)` },
-            draggable: true,
+            draggable: !isEditingAnyRow,
             onDragStart: (event) => {
               event.dataTransfer.setData("application/x-load-row", row.id);
               event.dataTransfer.effectAllowed = "move";
@@ -536,6 +691,9 @@
           },
           e(RowHeader, {
             row,
+            isEditingAnyRow,
+            isEditing: String(props.editSession?.rowId || "") === String(row.id),
+            onEnterEditRow: props.onEnterEditRow,
             onDuplicateRow: props.onDuplicateRow,
             onDeleteRow: props.onDeleteRow,
             onToggleLock: props.onToggleLock,
@@ -543,7 +701,19 @@
           e(
             "div",
             { className: "load-builder-row-chart" },
-            e(MiniArea, { values: row.values, color: row.color, name: row.name, selected: row.selected, maxValue: axisMax })
+            e(MiniArea, {
+              rowId: row.id,
+              values: row.values,
+              color: row.color,
+              name: row.name,
+              selected: row.selected,
+              maxValue: axisMax,
+              editSession: props.editSession,
+              onEnterEditRow: props.onEnterEditRow,
+              onCancelEditRow: props.onCancelEditRow,
+              onDoneEditRow: props.onDoneEditRow,
+              onUpdateEditPoint: props.onUpdateEditPoint,
+            })
           )
         ),
       ]),

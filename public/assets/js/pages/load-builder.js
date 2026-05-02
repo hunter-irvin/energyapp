@@ -29,6 +29,7 @@
   let bridge = null;
   let autosaveTimer = null;
   let saveInFlight = null;
+  let editSession = null;
 
   const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -89,6 +90,21 @@
 
   const getCurrentProfile = () => profiles.find((profile) => String(profile.id) === String(currentProfileId)) || null;
   const isBuilderOpen = () => Boolean(getCurrentProfile());
+  const isEditingRow = () => Boolean(editSession?.rowId);
+
+  const buildRenderedModel = () => {
+    if (!editSession?.rowId) return currentModel;
+    const rows = currentModel.rows.map((row) =>
+      String(row.id) === String(editSession.rowId)
+        ? loadBuilder.commitEditSession({ ...row, selected: true }, editSession)
+        : { ...row, selected: false }
+    );
+    return loadBuilder.validateProfileModel({
+      ...currentModel,
+      rows,
+      selectedRowId: editSession.rowId,
+    });
+  };
 
   const buildLoadBuilderUrl = (profileId = "") => {
     const params = new URLSearchParams({ projectId: currentProject.id });
@@ -113,16 +129,18 @@
       bridge = window.EnergyLoadBuilderUI.createBridge();
       bridge.mount(root, {});
     }
-    const stats = loadBuilder.getAggregateStats(currentModel.rows || []);
+    const renderedModel = buildRenderedModel();
+    const stats = loadBuilder.getAggregateStats(renderedModel.rows || []);
     bridge.update({
       templates: loadBuilder.BUILT_IN_TEMPLATES,
       profiles,
       currentProfile: getCurrentProfile(),
-      model: currentModel,
+      model: renderedModel,
       aggregateStats: stats,
       autosaveStatus,
       notice,
-      canEdit: Boolean(currentProfileId),
+      canEdit: Boolean(currentProfileId) && !isEditingRow(),
+      editSession,
       view: isBuilderOpen() ? "builder" : "landing",
       onCreateProfile: createProfile,
       onOpenProfile: openProfile,
@@ -133,6 +151,10 @@
       onDuplicateRow: duplicateRow,
       onDeleteRow: deleteRow,
       onToggleLock: toggleLock,
+      onEnterEditRow: enterEditRow,
+      onCancelEditRow: cancelEditRow,
+      onDoneEditRow: doneEditRow,
+      onUpdateEditPoint: updateEditPoint,
     });
   };
 
@@ -200,6 +222,7 @@
   const createProfile = async (name) => {
     if (!currentProject?.id) return;
     await flushAutosave();
+    editSession = null;
     const model = loadBuilder.createEmptyProfileModel(name);
     autosaveStatus = "Saving...";
     notice = "";
@@ -229,6 +252,7 @@
     await flushAutosave();
     const profile = profiles.find((candidate) => String(candidate.id) === String(profileId));
     if (!profile) return;
+    editSession = null;
     currentProfileId = profile.id;
     currentModel = loadBuilder.validateProfileModel(profile.model || loadBuilder.createEmptyProfileModel(profile.name));
     autosaveStatus = "Autosaved";
@@ -247,6 +271,7 @@
         saveInFlight = null;
       });
     }
+    editSession = null;
     currentProfileId = null;
     currentModel = loadBuilder.createEmptyProfileModel("No Profile Selected");
     autosaveStatus = profiles.length ? "Select a profile" : "No profile";
@@ -256,6 +281,7 @@
   };
 
   const selectRow = (rowId) => {
+    if (editSession?.rowId && String(editSession.rowId) !== String(rowId)) return;
     commitModel({
       ...currentModel,
       selectedRowId: rowId,
@@ -285,6 +311,7 @@
   };
 
   const reorderRow = (rowId, targetIndex) => {
+    if (isEditingRow()) return;
     commitModel({
       ...currentModel,
       rows: loadBuilder.reorderRows(currentModel.rows, rowId, targetIndex),
@@ -292,6 +319,7 @@
   };
 
   const duplicateRow = (rowId) => {
+    if (isEditingRow()) return;
     const result = loadBuilder.duplicateRow(currentModel.rows, rowId);
     if (!result.row) return;
     commitModel({
@@ -302,6 +330,7 @@
   };
 
   const deleteRow = (rowId) => {
+    if (isEditingRow()) return;
     const rows = loadBuilder.deleteRow(currentModel.rows, rowId);
     commitModel({
       ...currentModel,
@@ -311,16 +340,87 @@
   };
 
   const toggleLock = (rowId) => {
+    if (isEditingRow()) return;
     commitModel({
       ...currentModel,
       rows: loadBuilder.toggleRowLocked(currentModel.rows, rowId),
     });
   };
 
+  const enterEditRow = (rowId) => {
+    if (!currentProfileId) return;
+    const row = currentModel.rows.find((candidate) => String(candidate.id) === String(rowId));
+    if (!row || row.locked) return;
+    editSession = loadBuilder.createEditSession(row, {
+      minPoints: loadBuilder.MIN_EDIT_POINTS,
+      maxPoints: loadBuilder.MAX_EDIT_POINTS,
+    });
+    currentModel = loadBuilder.validateProfileModel({
+      ...currentModel,
+      rows: loadBuilder.selectRow(currentModel.rows, rowId),
+      selectedRowId: rowId,
+    });
+    notice = "";
+    render();
+  };
+
+  const cancelEditRow = () => {
+    if (!editSession) return;
+    editSession = null;
+    notice = "";
+    render();
+  };
+
+  const doneEditRow = () => {
+    if (!editSession?.rowId) return;
+    const rows = currentModel.rows.map((row) =>
+      String(row.id) === String(editSession.rowId) ? loadBuilder.commitEditSession(row, editSession) : row
+    );
+    const selectedRowId = editSession.rowId;
+    editSession = null;
+    commitModel({
+      ...currentModel,
+      rows,
+      selectedRowId,
+    });
+  };
+
+  const updateEditPoint = (action, payload) => {
+    if (!editSession) return;
+    if (action === "session" && payload?.session) {
+      editSession = payload.session;
+      render();
+      return;
+    }
+    if (action === "points") {
+      editSession = loadBuilder.moveEditPoints(payload?.baseSession || editSession, payload?.pointId, payload);
+      render();
+      return;
+    }
+    if (action === "transform") {
+      editSession = loadBuilder.transformEditSession(payload?.baseSession || editSession, payload);
+      render();
+      return;
+    }
+    if (action === "add") {
+      editSession = loadBuilder.addEditPoint(editSession, payload, { minIntervalGap: 1 });
+      render();
+      return;
+    }
+    if (action === "delete") {
+      editSession = loadBuilder.deleteEditPoints(editSession, payload?.pointIds || []);
+      render();
+      return;
+    }
+    editSession = loadBuilder.updateEditPoint(editSession, action, payload);
+    render();
+  };
+
   const restoreProfiles = async () => {
     profiles = await withRetry(() => supabaseService.listLoadProfiles(currentProject.id));
     const requestedProfile = profiles.find((profile) => String(profile.id) === String(requestedProfileId));
     currentProfileId = requestedProfile?.id || null;
+    editSession = null;
     currentModel = requestedProfile
       ? loadBuilder.validateProfileModel(requestedProfile.model || loadBuilder.createEmptyProfileModel(requestedProfile.name))
       : loadBuilder.createEmptyProfileModel("No Profile Selected");

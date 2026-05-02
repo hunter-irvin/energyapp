@@ -2465,6 +2465,13 @@ textarea:focus-visible {
 .load-builder-grid { position: absolute; inset: 0; border-radius: inherit; background-image: linear-gradient(to right, var(--chart-grid-secondary) 1px, transparent 1px); background-size: calc(100% / 6) 100%; overflow: hidden; }
 .load-builder-chart-svg { position: absolute; inset: 0; width: 100%; height: 100%; border-radius: inherit; overflow: hidden; }
 .load-builder-zero-line { stroke: color-mix(in srgb, var(--color-text-muted) 38%, transparent); stroke-width: 1; }
+.load-builder-edit-controls { position: absolute; top: 8px; right: 8px; z-index: 5; display: flex; gap: 6px; }
+.load-builder-edit-controls .btn { min-height: 28px; padding: 4px 8px; }
+.load-builder-edit-points { position: absolute; inset: 0; z-index: 4; pointer-events: none; }
+.load-builder-edit-point { position: absolute; width: 12px; height: 12px; min-width: 12px; min-height: 12px; aspect-ratio: 1 / 1; border: 1.5px solid var(--color-accent-primary); border-radius: 999px; background: var(--color-bg-panel); transform: translate(-50%, -50%); box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.08); cursor: grab; pointer-events: auto; }
+.load-builder-edit-point.is-selected { background: color-mix(in srgb, var(--color-accent-primary) 22%, var(--color-bg-panel)); box-shadow: 0 0 0 1px color-mix(in srgb, var(--color-accent-primary) 45%, transparent), 0 0 0 4px color-mix(in srgb, var(--color-accent-primary) 16%, transparent); }
+.load-builder-mini-area.is-editing { box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--color-accent-primary) 70%, transparent); cursor: move; }
+.load-builder-mini-area.is-editing .load-builder-chart-svg { cursor: move; }
 .load-builder-chart-tooltip { position: absolute; z-index: 4; min-width: 180px; max-width: 260px; transform: translate(-50%, calc(-100% - 10px)); border: 1px solid color-mix(in srgb, var(--color-accent-primary) 42%, var(--color-border-default)); border-radius: var(--radius-md); background: color-mix(in srgb, var(--color-bg-elevated) 94%, black); box-shadow: var(--shadow-md); padding: 8px 10px; color: var(--color-text-primary); pointer-events: none; }
 .load-builder-chart-tooltip::after { content: ""; position: absolute; left: 50%; bottom: -6px; width: 10px; height: 10px; transform: translateX(-50%) rotate(45deg); border-right: 1px solid color-mix(in srgb, var(--color-accent-primary) 42%, var(--color-border-default)); border-bottom: 1px solid color-mix(in srgb, var(--color-accent-primary) 42%, var(--color-border-default)); background: color-mix(in srgb, var(--color-bg-elevated) 94%, black); }
 .load-builder-chart-tooltip__time { margin-bottom: 6px; color: var(--color-text-muted); font-size: 0.68rem; font-weight: var(--font-weight-bold); text-transform: uppercase; }

@@ -7,6 +7,8 @@ const runLoadBuilderEngineTests = () => {
   assert.strictEqual(loadBuilder.INTERVALS_PER_DAY, 96);
   assert.strictEqual(loadBuilder.INTERVAL_HOURS, 0.25);
   assert.strictEqual(loadBuilder.MAX_LOAD_ROWS, 25);
+  assert.strictEqual(loadBuilder.MIN_EDIT_POINTS, 2);
+  assert.strictEqual(loadBuilder.MAX_EDIT_POINTS, 24);
 
   loadBuilder.BUILT_IN_TEMPLATES.forEach((template) => {
     assert.strictEqual(template.normalizedValues.length, 96, `${template.id} should have 96 values`);
@@ -119,6 +121,133 @@ const runLoadBuilderEngineTests = () => {
   assert.strictEqual(validated.rows[0].values.length, 96);
   assert.strictEqual(validated.rows[1].selected, true);
   assert.strictEqual(validated.rows[1].values[0], 0);
+
+  const flatPoints = loadBuilder.deriveEditPoints(Array.from({ length: 96 }, () => 10));
+  assert.strictEqual(flatPoints.length, 2);
+  assert.strictEqual(flatPoints[0].index, 0);
+  assert.strictEqual(flatPoints[1].index, 95);
+
+  const waveValues = Array.from({ length: 96 }, (_, index) => {
+    const radians = (index / 95) * Math.PI * 2;
+    return 20 + Math.sin(radians) * 10;
+  });
+  const wavePoints = loadBuilder.deriveEditPoints(waveValues);
+  assert.ok(wavePoints.length >= 4, "Wave should keep more than endpoints.");
+  assert.ok(wavePoints.length <= 10, "Wave points should stay meaningfully simplified.");
+
+  const noisyValues = Array.from({ length: 96 }, (_, index) => 20 + ((index * 17) % 9) - 4);
+  const noisyPoints = loadBuilder.deriveEditPoints(noisyValues);
+  assert.ok(noisyPoints.length <= 10, "Noisy curves should bias toward fewer points.");
+  assert.ok(noisyPoints.length >= 2, "Noisy curves should retain endpoint guardrail.");
+
+  const sampled = loadBuilder.sampleEditPoints([
+    { id: "start", index: 0, valueKw: 0 },
+    { id: "peak", index: 48, valueKw: 40 },
+    { id: "end", index: 95, valueKw: 0 },
+  ]);
+  assert.strictEqual(sampled.length, 96);
+  assert.strictEqual(sampled[0], 0);
+  assert.strictEqual(sampled[95], 0);
+  assert.ok(sampled[48] >= 39);
+
+  const editRow = {
+    id: "editable",
+    name: "Editable",
+    values: waveValues,
+  };
+  const editSession = loadBuilder.createEditSession(editRow, { minPoints: 2, maxPoints: 24 });
+  assert.strictEqual(editSession.rowId, "editable");
+  assert.strictEqual(editSession.originalValues.length, 96);
+  assert.strictEqual(editSession.draftValues.length, 96);
+  assert.ok(editSession.points.length >= 2 && editSession.points.length <= 24);
+
+  const middlePoint = editSession.points[Math.floor(editSession.points.length / 2)];
+  const movedSession = loadBuilder.updateEditPoint(editSession, middlePoint.id, {
+    index: middlePoint.index + 2,
+    valueKw: middlePoint.valueKw + 5,
+  });
+  const movedPoint = movedSession.points.find((point) => point.id === middlePoint.id);
+  assert.ok(movedPoint.index >= middlePoint.index, "Moved point should update index.");
+  assert.ok(movedPoint.valueKw >= middlePoint.valueKw, "Moved point should update value.");
+  assert.ok(movedSession.draftValues.every((value) => value >= 0), "Edited draft should remain non-negative.");
+
+  const selectedSession = loadBuilder.setSelectedEditPoints(editSession, editSession.points.slice(1, 3).map((point) => point.id));
+  assert.strictEqual(selectedSession.selectedPointIds.length, Math.min(2, Math.max(editSession.points.length - 2, 0)));
+
+  const toggledSelection = loadBuilder.toggleEditPointSelection(selectedSession, selectedSession.selectedPointIds[0]);
+  assert.strictEqual(toggledSelection.selectedPointIds.length, Math.max(selectedSession.selectedPointIds.length - 1, 0));
+
+  const multiMoveSource = loadBuilder.createEditSession({
+    id: "grouped",
+    name: "Grouped",
+    values: loadBuilder.BUILT_IN_TEMPLATES.find((candidate) => candidate.id === "office-lighting").normalizedValues.map((value) => value * 40),
+  });
+  const moveIds = multiMoveSource.points.slice(1, 3).map((point) => point.id);
+  const multiSelected = loadBuilder.setSelectedEditPoints(multiMoveSource, moveIds);
+  const multiMoved = loadBuilder.moveEditPoints(multiSelected, moveIds[0], { deltaIndex: 2, deltaValueKw: 3 });
+  const movedPoints = multiMoved.points.filter((point) => moveIds.includes(point.id));
+  movedPoints.forEach((point, index) => {
+    const original = multiSelected.points.find((candidate) => candidate.id === point.id);
+    assert.ok(point.index >= original.index, "Grouped move should push selected points together.");
+    assert.ok(point.valueKw >= original.valueKw, "Grouped move should increase selected point values together.");
+    assert.strictEqual(multiMoved.selectedPointIds[index], point.id, "Grouped selection should be preserved.");
+  });
+
+  const transformed = loadBuilder.transformEditSession(editSession, {
+    baseValues: editSession.draftValues,
+    shiftIntervals: 4,
+    scaleFactor: 1.5,
+  });
+  assert.strictEqual(transformed.draftValues.length, 96);
+  assert.strictEqual(transformed.draftValues[4], editSession.draftValues[0] * 1.5);
+  assert.ok(transformed.draftValues.every((value) => value >= 0), "Transform should remain non-negative.");
+
+  const zeroPreserving = loadBuilder.transformEditSession({
+    ...editSession,
+    draftValues: [0, 10, 0, 20, ...Array.from({ length: 92 }, () => 0)],
+  }, {
+    baseValues: [0, 10, 0, 20, ...Array.from({ length: 92 }, () => 0)],
+    shiftIntervals: 0,
+    scaleFactor: 0.5,
+  });
+  assert.strictEqual(zeroPreserving.draftValues[0], 0);
+  assert.strictEqual(zeroPreserving.draftValues[2], 0);
+  assert.strictEqual(zeroPreserving.draftValues[1], 5);
+  assert.strictEqual(zeroPreserving.draftValues[3], 10);
+
+  const addPointSource = loadBuilder.createEditSession({
+    id: "addable",
+    name: "Addable",
+    values: loadBuilder.BUILT_IN_TEMPLATES.find((candidate) => candidate.id === "office-lighting").normalizedValues.map((value) => value * 40),
+  });
+  const addedSession = loadBuilder.addEditPoint(addPointSource, { index: 37, valueKw: 12 }, { minIntervalGap: 1 });
+  assert.strictEqual(addedSession.points.length, addPointSource.points.length + 1, "Add should create one new control point.");
+  assert.strictEqual(addedSession.selectedPointIds.length, 1, "Newly added point should become the only selection.");
+  const addedPoint = addedSession.points.find((point) => point.id === addedSession.selectedPointIds[0]);
+  assert.strictEqual(addedPoint.index, 37);
+
+  const ignoredDuplicateAdd = loadBuilder.addEditPoint(addedSession, { index: 37, valueKw: 14 }, { minIntervalGap: 1 });
+  assert.strictEqual(ignoredDuplicateAdd.points.length, addedSession.points.length, "Near-duplicate add should be ignored.");
+
+  const deleteSource = loadBuilder.setSelectedEditPoints(addedSession, addedSession.points.slice(1, 3).map((point) => point.id));
+  const deletedSession = loadBuilder.deleteEditPoints(deleteSource, deleteSource.selectedPointIds);
+  assert.strictEqual(deletedSession.points.length, addedSession.points.length - deleteSource.selectedPointIds.length, "Delete should remove all selected points.");
+  assert.deepStrictEqual(deletedSession.selectedPointIds, [], "Delete should clear the selection.");
+
+  const minPointSession = {
+    ...loadBuilder.createEditSession({
+      id: "minimal",
+      name: "Minimal",
+      values: Array.from({ length: 96 }, () => 10),
+    }),
+    selectedPointIds: [],
+  };
+  const protectedDelete = loadBuilder.deleteEditPoints(minPointSession, minPointSession.points.map((point) => point.id));
+  assert.strictEqual(protectedDelete.points.length, 2, "Delete should respect the 2-point minimum.");
+
+  const committedRow = loadBuilder.commitEditSession(editRow, movedSession);
+  assert.strictEqual(committedRow.values.length, 96);
+  assert.ok(committedRow.peak >= 0);
 };
 
 module.exports = { runLoadBuilderEngineTests };
