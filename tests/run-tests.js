@@ -9,6 +9,9 @@ const { runSolarComputeTests } = require(path.join(__dirname, "solar-compute.tes
 const { runWindComputeTests } = require(path.join(__dirname, "wind-compute.test.js"));
 const { runSupabaseRequiredTests } = require(path.join(__dirname, "client", "supabase-required.test.js"));
 const { runNoLocalDomainFallbackTests } = require(path.join(__dirname, "client", "no-local-domain-fallback.test.js"));
+const { runLoadProfilesServiceTests } = require(path.join(__dirname, "client", "load-profiles-service.test.js"));
+const { runLoadBuilderEngineTests } = require(path.join(__dirname, "frontend", "load-builder-engine.test.js"));
+const { runLoadBuilderStaticTests } = require(path.join(__dirname, "frontend", "load-builder-static.test.js"));
 const { runRatesV4UiStateTests } = require(path.join(__dirname, "frontend", "rates-v4-ui-state.test.js"));
 const { runRatesV4CacheEngineTests } = require(path.join(__dirname, "frontend", "rates-v4-cache-engine.test.js"));
 const { runWeatherCoverageEngineTests } = require(path.join(__dirname, "frontend", "weather-coverage-engine.test.js"));
@@ -64,6 +67,9 @@ const run = async () => {
   runWindComputeTests();
   runSupabaseRequiredTests();
   runNoLocalDomainFallbackTests();
+  runLoadProfilesServiceTests();
+  runLoadBuilderEngineTests();
+  runLoadBuilderStaticTests();
   runRatesV4UiStateTests();
   runRatesV4CacheEngineTests();
   runWeatherCoverageEngineTests();

@@ -32,6 +32,7 @@
   const headerProjectNameCancelButton = document.getElementById("storage-header-project-name-cancel");
   const storageSettingsLink = document.getElementById("storage-settings-link");
   const storageAssetsLink = document.getElementById("storage-assets-link");
+  const storageLoadBuilderLink = document.getElementById("storage-load-builder-link");
   const storageRatesLink = document.getElementById("storage-rates-link");
   const storageAssetsHeaderLink = document.getElementById("storage-assets-header-link");
   const storageBackToFacility = document.getElementById("storage-back-to-facility");
@@ -2030,6 +2031,7 @@
 
     if (storageSettingsLink) storageSettingsLink.href = `/projects/weather.html?projectId=${encodeURIComponent(currentProject.id)}`;
     if (storageAssetsLink) storageAssetsLink.href = `/projects/generation.html?projectId=${encodeURIComponent(currentProject.id)}`;
+    if (storageLoadBuilderLink) storageLoadBuilderLink.href = `/projects/load-builder.html?projectId=${encodeURIComponent(currentProject.id)}`;
     if (storageRatesLink) storageRatesLink.href = `/projects/rates-v4.html?projectId=${encodeURIComponent(currentProject.id)}`;
     if (storageAssetsHeaderLink) storageAssetsHeaderLink.href = `/projects/generation.html?projectId=${encodeURIComponent(currentProject.id)}`;
     if (storageBackToFacility) storageBackToFacility.href = `/projects/weather.html?projectId=${encodeURIComponent(currentProject.id)}`;

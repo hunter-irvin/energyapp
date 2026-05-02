@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Load Profiles | Energy Explorer</title>
+    <link rel="stylesheet" href="/assets/css/styles.css" />
+  </head>
+  <body class="project-page-body">
+    <div id="project-header-root"></div>
+    <main class="page page--project assets-page load-builder-page">
+      <div id="project-sidebar-root"></div>
+      <section id="load-builder-root" class="load-builder-root" aria-label="Load Builder"></section>
+    </main>
+
+    <script src="/config.local.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/react@18/umd/react.production.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/react-dom@18/umd/react-dom.production.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+    <script src="/assets/js/core/supabase-config.js"></script>
+    <script src="/assets/js/core/supabase-client.js"></script>
+    <script src="/assets/js/components/project-shell.js"></script>
+    <script>
+      window.EnergyProjectShell?.mount({
+        headerRootId: "project-header-root",
+        sidebarRootId: "project-sidebar-root",
+        header: {
+          editor: {
+            editorId: "load-builder-project-name-editor",
+            displayId: "load-builder-header-project-name-display",
+            editButtonId: "load-builder-header-project-name-edit",
+            inputId: "load-builder-header-project-name",
+            saveButtonId: "load-builder-header-project-name-save",
+            cancelButtonId: "load-builder-header-project-name-cancel",
+          },
+          exitHref: "/",
+        },
+        sidebar: {
+          ariaLabel: "Project navigation",
+          items: [
+            { key: "weather", label: "Weather", href: "/projects/weather.html", id: "load-builder-weather-link" },
+            { key: "generation", label: "Generation", href: "/projects/generation.html", id: "load-builder-generation-link" },
+            { key: "load-builder", label: "Load Profiles", href: "/projects/load-builder.html", id: "load-builder-current-link", active: true },
+            { key: "storage", label: "Storage", href: "/projects/storage.html", id: "load-builder-storage-link" },
+            { key: "rates", label: "Rates", href: "/projects/rates-v4.html", id: "load-builder-rates-link" },
+          ],
+        },
+      });
+    </script>
+    <script src="/assets/js/features/load-builder.js"></script>
+    <script src="/assets/js/components/load-builder-ui.js"></script>
+    <script src="/assets/js/pages/load-builder.js"></script>
+  </body>
+</html>

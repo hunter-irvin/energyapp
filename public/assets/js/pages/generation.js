@@ -48,6 +48,7 @@
   const headerProjectNameSaveButton = document.getElementById("header-project-name-save");
   const headerProjectNameCancelButton = document.getElementById("header-project-name-cancel");
   const headerSettingsLink = document.getElementById("header-settings-link");
+  const sidebarLoadBuilderLink = document.getElementById("sidebar-load-builder-link");
   const sidebarStorageLink = document.getElementById("sidebar-storage-link");
   const sidebarRatesLink = document.getElementById("sidebar-rates-link");
   const assetFieldTooltip = document.getElementById("asset-field-tooltip");
@@ -2788,6 +2789,9 @@
 
     if (headerSettingsLink) {
       headerSettingsLink.href = `/projects/weather.html?projectId=${encodeURIComponent(currentProject.id)}`;
+    }
+    if (sidebarLoadBuilderLink) {
+      sidebarLoadBuilderLink.href = `/projects/load-builder.html?projectId=${encodeURIComponent(currentProject.id)}`;
     }
     if (sidebarStorageLink) {
       sidebarStorageLink.href = `/projects/storage.html?projectId=${encodeURIComponent(currentProject.id)}`;

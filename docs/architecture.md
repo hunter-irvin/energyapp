@@ -24,6 +24,7 @@
 - `/` -> project landing/list page
 - `/projects/weather.html` -> weather + map + weather chart
 - `/projects/generation.html` -> generation asset modeling + chart
+- `/projects/load-builder.html` -> named 24-hour load profile builder
 - `/projects/storage.html` -> storage asset modeling + chart
 - `/projects/rates-v4.html` -> rates v4 (Residential, DA, RT)
 
@@ -32,7 +33,7 @@
 - `public/assets/js/core/`
   - Supabase client/config, shared cache, data/model utilities
 - `public/assets/js/features/`
-  - Domain helpers (`generation.js`, `rates-v4-cache-engine.js`, `weather-coverage-engine.js`, `weather-sync-bus.js`)
+  - Domain helpers (`generation.js`, `load-builder.js`, `rates-v4-cache-engine.js`, `weather-coverage-engine.js`, `weather-sync-bus.js`)
 - `public/assets/js/components/`
   - `project-shell.js`, `chart-ui.js`, `time-series-chart.js`
 - `public/assets/js/pages/`
@@ -61,6 +62,7 @@ Canonical app tables now used by active pages:
 
 - `projects`
 - `assets`
+- `load_profiles`
 - `weather_cache`
 
 Prototype rates/v3 sync tables and routes were retired in the v4 cutover.

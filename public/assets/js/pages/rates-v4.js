@@ -79,6 +79,7 @@
 
   const locationLink = document.getElementById("rates-v4-location-link");
   const generationLink = document.getElementById("rates-v4-generation-link");
+  const loadBuilderLink = document.getElementById("rates-v4-load-builder-link");
   const storageLink = document.getElementById("rates-v4-storage-link");
 
   const rateCards = Array.from(document.querySelectorAll("[data-rate-type]"));
@@ -1254,6 +1255,7 @@
 
     if (locationLink) locationLink.href = withId("/projects/weather.html");
     if (generationLink) generationLink.href = withId("/projects/generation.html");
+    if (loadBuilderLink) loadBuilderLink.href = withId("/projects/load-builder.html");
     if (storageLink) storageLink.href = withId("/projects/storage.html");
   }
 

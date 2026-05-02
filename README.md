@@ -8,6 +8,7 @@ Active project pages:
 
 - `/projects/weather.html`
 - `/projects/generation.html`
+- `/projects/load-builder.html`
 - `/projects/storage.html`
 - `/projects/rates-v4.html`
 
@@ -17,7 +18,7 @@ The legacy Rates prototype page has been retired.
 
 - `public/assets/css/` shared styles
 - `public/assets/js/core/` shared runtime modules (`charting`, cache, models, Supabase client/config)
-- `public/assets/js/features/` feature helpers (`generation`, `rates-v4-cache-engine`, `weather-coverage-engine`, `weather-sync-bus`)
+- `public/assets/js/features/` feature helpers (`generation`, `load-builder`, `rates-v4-cache-engine`, `weather-coverage-engine`, `weather-sync-bus`)
 - `public/assets/js/components/` React bridge components (`project-shell`, `chart-ui`, `time-series-chart`)
 - `public/assets/js/pages/` page entry scripts (`projects`, `weather`, `generation`, `storage`, `rates-v4`)
 
@@ -42,6 +43,7 @@ Supabase-backed canonical tables used by active pages:
 
 - `projects`
 - `assets`
+- `load_profiles`
 - `weather_cache`
 
 Rates v4 browser caching is local (`localStorage`) via `rates-v4-cache-engine`.

@@ -234,6 +234,23 @@
     updatedAt: row.updated_at || null,
   });
 
+  const toLoadProfileRow = ({ id, projectId, name, model }) => ({
+    id,
+    project_id: projectId,
+    name: String(name || model?.name || "Untitled Load Profile").trim() || "Untitled Load Profile",
+    model: model || {},
+    updated_at: new Date().toISOString(),
+  });
+
+  const fromLoadProfileRow = (row) => ({
+    id: row.id,
+    projectId: row.project_id,
+    name: row.name || row.model?.name || "Untitled Load Profile",
+    model: row.model || {},
+    createdAt: row.created_at || null,
+    updatedAt: row.updated_at || null,
+  });
+
   const supabaseDb = (client) => ({
     _isMissingColumnError(error) {
       const message = String(error?.message || "").toLowerCase();
@@ -345,6 +362,31 @@
       if (error) throw error;
       return true;
     },
+    async listLoadProfiles(projectId) {
+      const { data, error } = await client
+        .from("load_profiles")
+        .select("*")
+        .eq("project_id", projectId)
+        .order("updated_at", { ascending: false });
+      if (error) throw error;
+      return (data || []).map(fromLoadProfileRow);
+    },
+    async getLoadProfile(profileId) {
+      const { data, error } = await client.from("load_profiles").select("*").eq("id", profileId).maybeSingle();
+      if (error) throw error;
+      return data ? fromLoadProfileRow(data) : null;
+    },
+    async upsertLoadProfile(payload) {
+      const row = toLoadProfileRow({ ...payload, id: payload.id || uid() });
+      const { data, error } = await client.from("load_profiles").upsert(row).select().single();
+      if (error) throw error;
+      return fromLoadProfileRow(data);
+    },
+    async deleteLoadProfile(profileId) {
+      const { error } = await client.from("load_profiles").delete().eq("id", profileId);
+      if (error) throw error;
+      return true;
+    },
     async getWeatherCache(projectId, provider, dataset, dateKey, options = {}) {
       const { sourceYear = null, intervalMinutes = null } = options;
       const runLookup = async (tableName) => {
@@ -442,6 +484,10 @@
   const listAssets = async (projectId) => (await dataService()).listAssets(projectId);
   const upsertAsset = async (payload) => (await dataService()).upsertAsset(payload);
   const deleteAsset = async (assetId) => (await dataService()).deleteAsset(assetId);
+  const listLoadProfiles = async (projectId) => (await dataService()).listLoadProfiles(projectId);
+  const getLoadProfile = async (profileId) => (await dataService()).getLoadProfile(profileId);
+  const upsertLoadProfile = async (payload) => (await dataService()).upsertLoadProfile(payload);
+  const deleteLoadProfile = async (profileId) => (await dataService()).deleteLoadProfile(profileId);
   const getWeatherCache = async (projectId, provider, dataset, dateKey, options) =>
     (await dataService()).getWeatherCache(projectId, provider, dataset, dateKey, options);
   const upsertWeatherCache = async (payload) => (await dataService()).upsertWeatherCache(payload);
@@ -521,6 +567,10 @@
     listAssets,
     upsertAsset,
     deleteAsset,
+    listLoadProfiles,
+    getLoadProfile,
+    upsertLoadProfile,
+    deleteLoadProfile,
     getWeatherCache,
     upsertWeatherCache,
     getNrelCache,

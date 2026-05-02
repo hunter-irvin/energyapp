@@ -31,6 +31,7 @@ const headerProjectNameEditButton = document.getElementById("header-project-name
 const headerProjectNameSaveButton = document.getElementById("header-project-name-save");
 const headerProjectNameCancelButton = document.getElementById("header-project-name-cancel");
 const headerAssetsLink = document.getElementById("header-assets-link");
+const headerLoadBuilderLink = document.getElementById("header-load-builder-link");
 const headerStorageLink = document.getElementById("header-storage-link");
 const headerRatesLink = document.getElementById("header-rates-link");
 const supabaseService = window.EnergySupabaseService;
@@ -2681,6 +2682,9 @@ const init = async () => {
 
   if (headerAssetsLink) {
     headerAssetsLink.href = `/projects/generation.html?projectId=${encodeURIComponent(project.id)}`;
+  }
+  if (headerLoadBuilderLink) {
+    headerLoadBuilderLink.href = `/projects/load-builder.html?projectId=${encodeURIComponent(project.id)}`;
   }
   if (headerStorageLink) {
     headerStorageLink.href = `/projects/storage.html?projectId=${encodeURIComponent(project.id)}`;

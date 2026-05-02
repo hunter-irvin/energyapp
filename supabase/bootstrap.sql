@@ -44,15 +44,28 @@ create table if not exists public.weather_cache (
   unique nulls not distinct (project_id, provider, dataset, date_key, interval_minutes, source_year)
 );
 
+create table if not exists public.load_profiles (
+  id text primary key,
+  project_id text not null references public.projects(id) on delete cascade,
+  name text not null,
+  model jsonb not null default '{}'::jsonb,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
 create index if not exists weather_cache_lookup_idx
   on public.weather_cache (project_id, provider, dataset, date_key, fetched_at desc);
 
 create index if not exists weather_cache_payload_gin_idx
   on public.weather_cache using gin (payload);
 
+create index if not exists load_profiles_project_updated_idx
+  on public.load_profiles (project_id, updated_at desc);
+
 alter table public.projects enable row level security;
 alter table public.assets enable row level security;
 alter table public.weather_cache enable row level security;
+alter table public.load_profiles enable row level security;
 
 drop policy if exists projects_anon_all on public.projects;
 create policy projects_anon_all on public.projects
@@ -70,6 +83,13 @@ create policy assets_anon_all on public.assets
 
 drop policy if exists weather_cache_anon_all on public.weather_cache;
 create policy weather_cache_anon_all on public.weather_cache
+  for all
+  to anon
+  using (true)
+  with check (true);
+
+drop policy if exists load_profiles_anon_all on public.load_profiles;
+create policy load_profiles_anon_all on public.load_profiles
   for all
   to anon
   using (true)
