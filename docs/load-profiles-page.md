@@ -1,10 +1,10 @@
-# Load Profiles Build Plan
+# Load Profiles Page
 
 ## Task Summary
 
 | Task # | Status | Area | Current State | Tests / Verification |
 | --- | --- | --- | --- |
-| 1 | Completed | Product decisions | MVP supports multiple named profiles per project, empty-start creation, autosave, hardcoded Library templates, drag/drop row adds, row delete/duplicate/lock, and isolated persistence. | Plan reconciled against implemented page behavior and updated PRD below. |
+| 1 | Completed | Product decisions | MVP supports multiple named profiles per project, empty-start creation, autosave, hardcoded Library templates, drag/drop row adds, row delete/copy, hidden lock controls, and isolated persistence. | Plan reconciled against implemented page behavior and updated PRD below. |
 | 2 | Completed | Persistence | `load_profiles` table and Supabase client helpers support per-project profile list/get/upsert/delete flows. | Migration/service tests plus browser persistence checks. |
 | 3 | Completed | Core logic | Pure Load Builder helpers exist for templates, rows, aggregate math, stats, validation, locking, duplication, deletion, reorder, and hover index math. | Unit tests cover helper behavior and 96-point / 25-row constraints. |
 | 4 | Completed | Static page | `/projects/load-builder.html` exists and mounts through the shared project shell. | Static test plus `node --check`. |
@@ -15,7 +15,7 @@
 | 9 | Completed | Autosave | Edits persist automatically and the manual save button has been removed from the MVP workflow. | Status pill and reload persistence verified in browser. |
 | 10 | Completed | Charts | Aggregate and layer charts render with aligned plot areas, shared axes behavior, zero-line treatment for layers, and hover tooltips. | Unit tests, syntax checks, and browser hover/alignment checks. |
 | 11 | Completed | Docs | Architecture docs and README were updated for the new page and persistence model. | Static doc review completed earlier in the implementation. |
-| 12 | Completed | Edit mode foundation | Single-row edit mode is live with overflow `Edit`, double-click entry, row-level `Done` / `Cancel`, lock protection, and transient edit-session state. | Unit tests plus browser smoke for menu and double-click entry, single active editor, and `Cancel` restore behavior. |
+| 12 | Completed | Edit mode foundation | Single-row edit mode is live with selected-row `Edit`, double-click entry, row-level `Done` / `Cancel`, lock protection, and transient edit-session state. | Unit tests plus browser smoke for button and double-click entry, single active editor, and `Cancel` restore behavior. |
 | 13 | Completed | Adaptive smooth-curve editing | Control points are derived from the current row shape, constrained to `2..24`, and simplified aggressively so clean curves stay legible. | Unit tests cover flat, sinusoidal, and irregular curve extraction, min/max guardrails, and simplification of noisy rows. |
 | 14 | Completed | Point editing and live preview | Point dragging now snaps to 15-minute intervals, clamps at zero, and updates the aggregate preview live during editing. | Unit tests for point-drag math, clamping, and 96-sample resampling; browser smoke verifies live aggregate updates. |
 | 15 | Completed | Whole-shape transform | Dragging the chart body now shifts the whole shape horizontally with wrap-around and scales it vertically while preserving zero-valued samples. | Unit tests cover wrap-around shift, proportional scaling, zero preservation, and non-negative output. |
@@ -25,36 +25,37 @@
 | 19 | Completed | Stable point identity and deletion | Existing edit points are protected from disappearing because of collision, normalization, transform, or endpoint deletion. Point movement stops before colliding with neighbors, endpoints remain protected, and delete removes only explicitly selected interior points. | Unit tests cover collision-bounded single and grouped movement, endpoint delete protection, selected-only delete behavior, and transform preserving point ids/count where possible. Browser smoke verifies moving/adding/deleting points does not silently remove unrelated points. |
 | 20 | Completed | Denser curve-aware extraction | Initial edit mode now exposes more points for multi-curve profiles: endpoints, active segment boundaries, local peaks/troughs, and meaningful slope/curvature changes, while still honoring the `2..24` guardrail. | Unit tests use representative load shapes with multiple ramps/plateaus/peaks and assert expected interior control points are present. Regression tests cover flat, sinusoidal, noisy, and screenshot-like lighting curves. Browser smoke verifies the shown point set matches visible bends. |
 | 21 | Completed | Persistent layer edit points | Layer rows now persist their edit-point handles inside the profile JSON so re-entering edit mode restores user-authored point structure instead of re-deriving points from values every time. | Unit tests verify edit sessions restore saved `editPoints`, `Done` persists current handles with committed 96-value samples, and legacy rows without points still derive handles on first edit. Browser smoke verifies points survive `Done` and edit re-entry. |
+| 22 | Completed | Editor visual polish | The editor now uses a flush two-panel layout, page-shell dark blue backgrounds, standard divider lines, thinner styled scrollbars, and no rounded outer editor containers. | Browser checks verified left rail/background colors, divider parity, page scrolling, and template-library scrolling after 8 cards. |
+| 23 | Completed | Layer selection layout | Layer rows now collapse when unselected, hide metrics/actions, and expand selected charts with a dedicated x-axis matching the aggregate chart. | Browser checks verified selected-row expansion, unselected-row collapse, chart/info height matching, and selected-only x-axis labels. |
+| 24 | Completed | Layer actions and labels | Layer titles wrap to two lines, selected rows show discrete edit/copy/delete icon buttons, rename is triggered by clicking the layer name, and lock controls are hidden. | Static tests and browser smoke verified no overflow menu, selected-only controls, icon actions, and long-name wrapping. |
+| 25 | Completed | Selection/deselect interaction | Selected rows remain selected after `Done`; single-click deselect waits 200 ms so double-click chart editing still works. | Static test checks the delay/cancel plumbing; browser smoke verified double-click edit and single-click collapse behavior. |
+| 26 | Completed | Page navigation and metrics polish | The editor no longer shows a redundant `Load Builder` title, the primary nav order places Load Profiles between Storage and Rates, the Profiles button is aligned with the Library title, and aggregate metrics now show larger `Peak`, `Daily Energy`, and `Load Layers: N` stats. | Static tests and browser checks verified nav order, button alignment, and updated metrics text. |
 
 ## Merged MVP State
 
 - The nav label is `Load Profiles`, not `Load Builder`.
 - The first view is a profile landing page with:
   - page title `Load Profiles`
-  - `New Profile` button
+  - `New Profile` button left-aligned below the header divider
   - profile table with `Name`, `Updated`, and aggregate preview
 - Opening or creating a profile transitions to the editor view.
-- The editor keeps the title `Load Builder`.
+- The editor does not show a redundant `Load Builder` title.
 - The editor left rail contains:
-  - `Load Builder` title
-  - `Profiles` back button
+  - `Profiles` back button aligned with the Library title column
   - `Library`
 - The editor workspace contains:
   - profile name
   - autosave status pill
-  - subtitle
-  - compact `Peak / Daily Energy / Loads` metrics in the header
+  - larger `Peak / Daily Energy / Load Layers` metrics in the header
   - `Aggregate Load`
   - `Layers`
 - New profiles start empty.
 - Library templates are hardcoded defaults for now.
 - Adding Library loads is drag/drop only.
 - Saving is automatic while editing an existing named profile.
-- Row overflow actions in MVP are:
-  - `Duplicate`
-  - `Lock` / `Unlock`
-  - `Delete`
-- Locked rows cannot be duplicated or deleted.
+- Selected row actions are discrete icon buttons for edit, copy, and delete.
+- Layer rename is triggered by clicking the layer name.
+- Lock controls are hidden while the product direction is reconsidered.
 - Load Builder is isolated for now and does not yet feed other product areas.
 
 ## Completed Build Areas
@@ -76,13 +77,23 @@
 ### UI and workflow
 
 - The original top-level builder header was removed from the editor in favor of a cleaner two-panel layout.
+- Editor panels are flush against the shell with divider lines rather than rounded buffered containers.
+- The editor and left navigation backgrounds match the app's dark blue page-shell treatment.
+- The template Library scrolls internally after eight preview cards; Layers use the page scrollbar.
+- Scrollbars are thinner, light blue, and arrowless, with dark blue tracks.
 - Aggregate and layer chart columns are aligned.
-- Aggregate dividers now span the full profile workspace width.
+- Aggregate and shell dividers use the same standard border treatment.
 - The aggregate legend aligns with the plot area, not the x-axis label row.
 - Individual layer fills stop at the true zero baseline.
 - Hover tooltips exist for aggregate and individual layer charts.
+- The aggregate chart always keeps its x-axis.
+- Unselected layer charts hide x-axis labels and collapse to the height of their compact info panels.
+- A selected layer expands vertically, shows an x-axis matching the aggregate chart, and pushes nearby layers down.
+- Selected layer info panels match the chart plot area height, excluding the x-axis label row.
+- Unselected layers hide Peak/Total stats and action buttons.
+- Layer titles can wrap to two lines.
 - Individual layer edit mode now includes:
-  - overflow-menu `Edit`
+  - selected-row icon-button `Edit`
   - double-click entry on the mini chart
   - adaptive extracted control points
   - `Done` / `Cancel`
@@ -139,8 +150,9 @@ Manual browser checks should continue to cover:
 - landing page open/create/open-switch flows
 - autosave and refresh persistence
 - drag/drop into empty and populated Layers states
-- row delete/duplicate/lock behavior
+- row select/deselect, selected-only actions, and edit/copy/delete behavior
 - aggregate/layer chart alignment
+- selected-layer x-axis and expansion behavior
 - tooltip rendering
 - left-nav and `projectId` preservation
 
@@ -173,17 +185,19 @@ This PRD has been updated to reflect the implementation we merged, while preserv
 - Read-only aggregate load chart.
 - Stacked aggregate area chart showing contribution from each individual load.
 - Individual load rows with mini-area charts.
-- Shared x-axis alignment between aggregate chart and all individual load charts.
+- Shared x-axis scale between aggregate chart and individual load charts.
+- Aggregate chart always displays x-axis tick marks and labels.
+- Individual layer x-axis tick marks and labels appear only on the selected layer.
 - Shared absolute y-axis max across individual load rows.
 - Autosave model, with visible status.
 - Up to 25 individual load rows.
 - Group/category metadata for loads.
 - Row selection state.
-- Row info panel with grabber, title, category/group, peak, total, and overflow menu.
+- Row info panel with grabber, title, category/group, selected-only peak/total values, and selected-only edit/copy/delete actions.
 - Hardcoded Library templates.
 - Drag/drop row creation from Library templates.
 - Row reordering.
-- Row overflow actions for delete, duplicate, and lock/unlock.
+- Selected-row icon actions for edit, copy, and delete.
 - Hover tooltips for aggregate and layer charts.
 - Point authoring in row edit mode:
   - double-click adds a point at the nearest 15-minute interval
@@ -229,7 +243,7 @@ Expected app frame:
 The feature now has two views:
 
 1. **Profiles landing view**
-2. **Load Builder editor view**
+2. **Profile editor view**
 
 ### Profiles landing view
 
@@ -265,8 +279,7 @@ The Library contains reusable load templates. These templates are previewed as n
 
 ### Contents
 
-- `Load Builder` title above the panel
-- `Profiles` back button beside the title
+- `Profiles` back button above the panel, aligned with the Library title
 - `Library` title
 - Add button placeholder
 - Search field
@@ -306,11 +319,10 @@ The editor workspace header includes:
 
 - Active profile name
 - Autosave status pill
-- Subtitle: `Generic day - absolute kW - wrap-around time shifts - aggregate is read-only`
 - Compact metrics in the same header area:
   - Peak
   - Daily Energy
-  - Loads
+  - Load Layers
 
 The previous page-level `SAVE PROFILE` button is no longer part of the MVP flow. Creation is handled with `New Profile` on the landing page, and edits autosave while the user works.
 
@@ -333,11 +345,11 @@ Shows the sum of all unmuted individual load rows at each 15-minute interval.
 - Legend width matches the individual row info panel width
 - Legend height aligns with the aggregate plot area
 - Chart on the right is a stacked area chart
-- Divider below aggregate spans the full profile workspace width
+- Divider below aggregate uses the same standard line treatment as the page shell
 
 ### Metrics
 
-Metrics are now shown in the profile header rather than in a separate strip above aggregate.
+Metrics are now shown in the profile header rather than in a separate strip above aggregate. The current count label is `Load Layers: N`.
 
 ### Hover tooltip
 
@@ -389,11 +401,10 @@ The info panel width matches the aggregate legend width.
 - Grabber icon
 - Color indicator
 - Load title
-- Lock indicator if locked
 - Group/category label
-- Peak value
-- Total `kWh`
-- Overflow menu button
+- Peak value, shown only when selected
+- Total `kWh`, shown only when selected
+- Edit, copy, and delete icon buttons, shown only when selected
 
 ### Chart panel
 
@@ -402,10 +413,12 @@ Each load row chart:
 - Uses a mini-area chart
 - Uses absolute `kW` values
 - Uses the same x-axis scale as the aggregate chart
+- Displays x-axis tick marks and labels only when selected
 - Shares a common y-axis max with all individual load rows
 - Has a y-axis overlay showing max and 0
 - Includes a thin zero baseline
 - Only shows fill above the zero baseline
+- Expands vertically when selected and collapses when unselected
 
 ### Hover tooltip
 
@@ -430,23 +443,22 @@ individualAxisMax = Math.ceil(Math.max(...rows.map((row) => row.peak), 1));
 ### Implemented MVP interactions
 
 - Select row by clicking it
+- Deselect a selected row with a single click after a 200 ms delay
 - Drag rows to reorder
-- Open row overflow menu
-- Click outside menu to dismiss it
+- Double-click the chart area to enter edit mode without triggering the delayed deselect
 - Add load from Library by drag/drop
 - Update aggregate automatically after changes
 - Autosave changes
 
-### Current row overflow actions
+### Current selected-row actions
 
 - Edit
-- Duplicate
-- Lock/unlock
+- Copy
 - Delete
 
 ### Future row/profile actions
 
-- Rename load
+- Lock/unlock
 - Change group/category
 - Edit peak `kW`
 - Mute/unmute
@@ -509,7 +521,7 @@ type LoadTemplate = {
 - Maximum rows: 25
 - Each row has exactly 96 interval values in MVP
 - Values are non-negative
-- Locked rows are protected from delete and duplicate
+- Lock controls are currently hidden in the UI while product direction is reconsidered.
 - Aggregate is not directly editable
 - Individual y-axis is shared across rows
 - X-axis extents remain consistent across aggregate and individual chart areas
@@ -556,7 +568,7 @@ Add direct curve editing for individual load layers so users can shape a load pr
 
 - We will start with a simpler smooth-curve editor first, not full bezier-handle editing on day one.
 - Users can enter edit mode by:
-  - choosing `Edit` from the row overflow menu
+  - choosing `Edit` from the selected row's icon buttons
   - double-clicking the row's mini-area chart
 - In edit mode, the row shows:
   - editable points on the curve
@@ -692,16 +704,16 @@ Tests / verification:
 ### Phase 1: Foundational edit mode
 
 - Only one row can be in edit mode at a time.
-- Locked rows cannot enter edit mode.
+- Locked rows cannot enter edit mode if legacy data contains locked rows.
 - Reorder drag/drop is disabled for the row being edited.
-- Row overflow menu adds an `Edit` action.
+- Selected rows expose an `Edit` icon button.
 - Double-clicking the mini-area chart enters edit mode.
 - Edit mode shows a stronger curve outline, anchor points, and `Done` / `Cancel` controls in the chart area.
 
 Tests / verification:
 
-- Browser smoke verifies entering edit mode from menu and double-click.
-- Browser smoke verifies locked rows cannot enter edit mode.
+- Browser smoke verifies entering edit mode from the selected-row button and double-click.
+- Browser smoke verifies legacy locked rows cannot enter edit mode.
 - Static/UI checks confirm only one row can be edited at once.
 
 ### Phase 2: Smooth curve point editing
@@ -794,7 +806,7 @@ Tests / verification:
 
 1. Default state
 - Current mini-area chart
-- Standard overflow menu
+- Selected-row edit/copy/delete icon buttons
 
 2. Selected state
 - Existing selected styling
@@ -849,7 +861,7 @@ Notes:
 - Whole-shape horizontal shift wraps around 24 hours.
 - Scaling preserves zero-valued samples as zero.
 - Only one row can be edited at a time in MVP.
-- Editing a locked row is not allowed.
+- Editing a locked row is not allowed if legacy data contains locked rows.
 
 ## Implementation Risks To Watch
 

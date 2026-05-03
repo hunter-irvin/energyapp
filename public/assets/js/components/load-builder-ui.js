@@ -175,7 +175,11 @@
   const EditControls = ({ onDone, onCancel }) =>
     e(
       "div",
-      { className: "load-builder-edit-controls" },
+      {
+        className: "load-builder-edit-controls",
+        onPointerDown: (event) => event.stopPropagation(),
+        onClick: (event) => event.stopPropagation(),
+      },
       e("button", { className: "btn btn--primary", type: "button", onClick: onDone }, "Done"),
       e("button", { className: "btn", type: "button", onClick: onCancel }, "Cancel")
     );
@@ -223,7 +227,20 @@
     );
   };
 
-  const MiniArea = ({ rowId, values, color, name, selected, maxValue, editSession, onEnterEditRow, onCancelEditRow, onDoneEditRow, onUpdateEditPoint }) => {
+  const MiniArea = ({
+    rowId,
+    values,
+    color,
+    name,
+    selected,
+    maxValue,
+    editSession,
+    onEnterEditRow,
+    onCancelEditRow,
+    onDoneEditRow,
+    onUpdateEditPoint,
+    onCancelPendingRowClick,
+  }) => {
     const [clipId] = ReactRef.useState(() => `load-builder-mini-plot-clip-${Math.random().toString(36).slice(2)}`);
     const chartRef = ReactRef.useRef(null);
     const dragStateRef = ReactRef.useRef(null);
@@ -311,6 +328,7 @@
         onPointerMove: isEditing ? undefined : handlePointerMove,
         onPointerLeave: isEditing ? undefined : () => setHover(null),
         onDoubleClick: (event) => {
+          onCancelPendingRowClick?.();
           if (!isEditing) {
             onEnterEditRow?.(rowId);
             return;
@@ -394,8 +412,20 @@
           })
         : null,
       isEditing ? e(SelectedPointValueGuide, { points: controlPoints, selectedPointIds, values: editSession?.draftValues || source, maxValue }) : null,
+      selected ? e(XAxisTicks, { count: source.length || 96, activeIndex: hover?.index ?? null }) : null,
       !isEditing ? e(ChartTooltip, { hover, rows: hoverRows }) : null,
-      isEditing ? e(EditControls, { onDone: onDoneEditRow, onCancel: onCancelEditRow }) : null,
+      isEditing
+        ? e(EditControls, {
+            onDone: () => {
+              onCancelPendingRowClick?.();
+              onDoneEditRow?.();
+            },
+            onCancel: () => {
+              onCancelPendingRowClick?.();
+              onCancelEditRow?.();
+            },
+          })
+        : null,
       e(YAxisLabels, { maxValue })
     );
   };
@@ -571,56 +601,72 @@
     );
   };
 
-  const RowMenu = ({ row, isEditingAnyRow, isEditing, onRequestRename, onEnterEditRow, onDuplicateRow, onDeleteRow, onToggleLock }) => {
-    const [open, setOpen] = ReactRef.useState(false);
-    const menuRef = ReactRef.useRef(null);
-
-    ReactRef.useEffect(() => {
-      if (!open) return undefined;
-      const handlePointerDown = (event) => {
-        if (!menuRef.current?.contains(event.target)) setOpen(false);
-      };
-      document.addEventListener("pointerdown", handlePointerDown);
-      return () => document.removeEventListener("pointerdown", handlePointerDown);
-    }, [open]);
-
-    const runAction = (action) => {
-      action?.(row.id);
-      setOpen(false);
-    };
-
-    return e(
-      "details",
-      {
-        ref: menuRef,
-        className: "load-builder-row-menu",
-        open,
-        onToggle: (event) => setOpen(event.currentTarget.open),
-      },
-      e(
-        "summary",
-        {
-          "aria-label": `${row.name} options`,
-          onClick: (event) => {
-            event.preventDefault();
-            setOpen((value) => !value);
-          },
-        },
-        "⋯"
-      ),
-      e(
-        "div",
-        { className: "load-builder-row-menu__panel" },
-        e("button", { type: "button", disabled: row.locked || isEditingAnyRow, onClick: () => runAction(onRequestRename) }, "Rename"),
-        e("button", { type: "button", disabled: row.locked || isEditingAnyRow, onClick: () => runAction(onEnterEditRow) }, "Edit"),
-        e("button", { type: "button", disabled: row.locked, onClick: () => runAction(onDuplicateRow) }, "Duplicate"),
-        e("button", { type: "button", onClick: () => runAction(onToggleLock) }, row.locked ? "Unlock" : "Lock"),
-        e("button", { type: "button", disabled: row.locked, onClick: () => runAction(onDeleteRow) }, "Delete")
-      )
-    );
+  const Icon = ({ name }) => {
+    const common = { fill: "none", stroke: "currentColor", strokeWidth: 1.8, strokeLinecap: "round", strokeLinejoin: "round" };
+    const children =
+      name === "edit"
+        ? [
+            e("path", { key: "body", ...common, d: "M12.5 3.5 16.5 7.5 7.5 16.5 3.5 17.5 4.5 13.5Z" }),
+            e("path", { key: "tip", ...common, d: "M11 5 15 9" }),
+          ]
+        : name === "copy"
+          ? [
+              e("rect", { key: "back", ...common, x: 6, y: 3, width: 10, height: 10, rx: 1.5 }),
+              e("rect", { key: "front", ...common, x: 3, y: 7, width: 10, height: 10, rx: 1.5 }),
+            ]
+          : [
+              e("path", { key: "lid", ...common, d: "M3.5 5.5H16.5" }),
+              e("path", { key: "can", ...common, d: "M6 5.5 6.8 17H13.2L14 5.5" }),
+              e("path", { key: "handle", ...common, d: "M8 5.5 8.5 3.5H11.5L12 5.5" }),
+              e("path", { key: "left", ...common, d: "M9 8.5V14" }),
+              e("path", { key: "right", ...common, d: "M11 8.5V14" }),
+            ];
+    return e("svg", { className: "load-builder-row-action-icon", viewBox: "0 0 20 20", "aria-hidden": "true" }, ...children);
   };
 
-  const RowHeader = ({ row, isEditingAnyRow, isEditing, onRenameRow, onEnterEditRow, onDuplicateRow, onDeleteRow, onToggleLock }) => {
+  const RowActionButton = ({ label, icon, disabled, onClick }) =>
+    e(
+      "button",
+      {
+        className: "load-builder-row-action",
+        type: "button",
+        disabled,
+        title: label,
+        "aria-label": label,
+        onPointerDown: (event) => event.stopPropagation(),
+        onClick: (event) => {
+          event.stopPropagation();
+          onClick?.();
+        },
+      },
+      e(Icon, { name: icon })
+    );
+
+  const RowActions = ({ row, isEditingAnyRow, onEnterEditRow, onDuplicateRow, onDeleteRow }) =>
+    e(
+      "div",
+      { className: "load-builder-row-actions", "aria-label": `${row.name || "Layer"} actions` },
+      e(RowActionButton, {
+        label: "Edit layer",
+        icon: "edit",
+        disabled: row.locked || isEditingAnyRow,
+        onClick: () => onEnterEditRow?.(row.id),
+      }),
+      e(RowActionButton, {
+        label: "Copy layer",
+        icon: "copy",
+        disabled: row.locked || isEditingAnyRow,
+        onClick: () => onDuplicateRow?.(row.id),
+      }),
+      e(RowActionButton, {
+        label: "Delete layer",
+        icon: "delete",
+        disabled: row.locked || isEditingAnyRow,
+        onClick: () => onDeleteRow?.(row.id),
+      })
+    );
+
+  const RowHeader = ({ row, isEditingAnyRow, onRenameRow, onEnterEditRow, onDuplicateRow, onDeleteRow }) => {
     const [renaming, setRenaming] = ReactRef.useState(false);
     const [draftName, setDraftName] = ReactRef.useState(row.name || "Load");
     const inputRef = ReactRef.useRef(null);
@@ -693,7 +739,7 @@
                   className: "load-builder-row-name",
                   type: "button",
                   disabled: row.locked || isEditingAnyRow,
-                  title: row.locked ? "Unlock this layer to rename it" : "Rename layer",
+                  title: "Rename layer",
                   onClick: (event) => {
                     event.stopPropagation();
                     startRename();
@@ -701,37 +747,44 @@
                   onDoubleClick: (event) => event.stopPropagation(),
                 },
                 row.name || "Load"
-              ),
-          row.locked ? e("span", { className: "load-builder-lock", title: "Locked" }, "LOCKED") : null
+          )
         ),
         e("span", { className: "load-builder-row-group" }, row.group || row.category || "Load"),
-        e(
-          "div",
-          { className: "load-builder-row-metrics" },
-          e("span", null, "Peak"),
-          e("b", null, `${formatNumber(row.peak, 0)} kW`),
-          e("span", null, "Total"),
-          e("b", null, `${formatNumber(row.kwh, 0)} kWh`)
-        )
-      ),
-      e(RowMenu, {
-        row,
-        isEditingAnyRow,
-        isEditing,
-        onRequestRename: startRename,
-        onEnterEditRow,
-        onDuplicateRow,
-        onDeleteRow,
-        onToggleLock,
-      })
+        row.selected
+          ? e(
+              "div",
+              { className: "load-builder-row-metrics" },
+              e("span", null, "Peak"),
+              e("b", null, `${formatNumber(row.peak, 0)} kW`),
+              e("span", null, "Total"),
+              e("b", null, `${formatNumber(row.kwh, 0)} kWh`)
+            )
+          : null,
+        row.selected
+          ? e(RowActions, {
+              row,
+              isEditingAnyRow,
+              onEnterEditRow,
+              onDuplicateRow,
+              onDeleteRow,
+            })
+          : null
+      )
     );
   };
 
   const LoadRows = (props) => {
     const rows = toArray(props.model?.rows);
     const [activeDropIndex, setActiveDropIndex] = ReactRef.useState(null);
+    const rowClickTimerRef = ReactRef.useRef(null);
     const axisMax = window.EnergyLoadBuilder?.getIndividualAxisMax ? window.EnergyLoadBuilder.getIndividualAxisMax(rows) : 1;
     const isEditingAnyRow = Boolean(props.editSession?.rowId);
+    const cancelPendingRowClick = () => {
+      if (!rowClickTimerRef.current) return;
+      window.clearTimeout(rowClickTimerRef.current);
+      rowClickTimerRef.current = null;
+    };
+    ReactRef.useEffect(() => () => cancelPendingRowClick(), []);
     const getDropIndex = (event) => {
       const rowRects = Array.from(event.currentTarget.querySelectorAll(".load-builder-row")).map((row) => {
         const rect = row.getBoundingClientRect();
@@ -767,6 +820,17 @@
     const handleListDragLeave = (event) => {
       if (!event.currentTarget.contains(event.relatedTarget)) setActiveDropIndex(null);
     };
+    const handleRowClick = (row) => {
+      cancelPendingRowClick();
+      if (!row?.selected) {
+        props.onSelectRow?.(row.id);
+        return;
+      }
+      rowClickTimerRef.current = window.setTimeout(() => {
+        rowClickTimerRef.current = null;
+        props.onSelectRow?.(null);
+      }, 200);
+    };
 
     if (!props.canEdit && !isEditingAnyRow) {
       return e(
@@ -794,8 +858,7 @@
           },
           e("h4", null, "Drop load here"),
           e("p", null, "Build the profile by layering templates from the Library.")
-        ),
-        e(ChartAxis)
+        )
       );
     }
 
@@ -820,7 +883,7 @@
               event.dataTransfer.setData("application/x-load-row", row.id);
               event.dataTransfer.effectAllowed = "move";
             },
-            onClick: () => props.onSelectRow?.(row.id),
+            onClick: () => handleRowClick(row),
           },
           e(RowHeader, {
             row,
@@ -829,12 +892,11 @@
             onEnterEditRow: props.onEnterEditRow,
             onDuplicateRow: props.onDuplicateRow,
             onDeleteRow: props.onDeleteRow,
-            onToggleLock: props.onToggleLock,
             onRenameRow: props.onRenameRow,
           }),
           e(
             "div",
-            { className: "load-builder-row-chart" },
+            { className: `load-builder-row-chart${row.selected ? " is-selected" : ""}` },
             e(MiniArea, {
               rowId: row.id,
               values: row.values,
@@ -847,12 +909,13 @@
               onCancelEditRow: props.onCancelEditRow,
               onDoneEditRow: props.onDoneEditRow,
               onUpdateEditPoint: props.onUpdateEditPoint,
-            })
+              onCancelPendingRowClick: cancelPendingRowClick,
+            }),
+            row.selected ? e(ChartAxis) : null
           )
         ),
       ]),
       e(DropZone, { key: "drop-end", index: rows.length, active: activeDropIndex === rows.length, onDrop: handleDrop }),
-      e("div", { className: "load-builder-row-axis", style: { gridTemplateColumns: `${INFO_PANEL_WIDTH}px minmax(0, 1fr)` } }, e("span"), e(ChartAxis))
     );
   };
 
@@ -1022,7 +1085,11 @@
         e(
           "header",
           { className: "load-builder-page-header" },
-          e("h1", null, "Load Profiles"),
+          e("h1", null, "Load Profiles")
+        ),
+        e(
+          "div",
+          { className: "load-builder-landing-actions" },
           e("button", { className: "btn btn--primary", type: "button", onClick: () => setNewOpen(true) }, "New Profile")
         ),
         props.notice ? e("div", { className: "status status--warning load-builder-notice" }, props.notice) : null,
@@ -1088,7 +1155,6 @@
     const rows = toArray(props.model?.rows);
     const aggregateRows = getAggregateLayerRows(rows);
     const aggregateStats = props.aggregateStats || {};
-    const loadCountText = `${rows.length}/${window.EnergyLoadBuilder?.MAX_LOAD_ROWS || 25}`;
 
     return e(
       ReactRef.Fragment,
@@ -1114,8 +1180,7 @@
             e(
               "header",
               { className: "load-builder-editor-heading" },
-              e("h1", null, "Load Builder"),
-              e("button", { className: "btn", type: "button", onClick: props.onReturnToProfiles }, "Profiles")
+              e("button", { className: "btn btn--primary", type: "button", onClick: props.onReturnToProfiles }, "Profiles")
             ),
             e(LibraryPanel, { templates: props.templates, canEdit: props.canEdit, onDropTemplate: props.onDropTemplate })
           ),
@@ -1153,7 +1218,7 @@
                 { className: "load-builder-metrics", "aria-label": "Aggregate metrics" },
                 e("span", null, "Peak ", e("b", null, `${formatNumber(aggregateStats.peak, 0)} kW`)),
                 e("span", null, "Daily Energy ", e("b", null, `${formatNumber(aggregateStats.kwh, 0)} kWh`)),
-                e("span", null, "Loads ", e("b", null, loadCountText))
+                e("span", null, "Load Layers: ", e("b", null, rows.length))
               )
             ),
             e(
