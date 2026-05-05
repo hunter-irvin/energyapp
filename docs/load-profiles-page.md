@@ -30,6 +30,9 @@
 | 24 | Completed | Layer actions and labels | Layer titles wrap to two lines, selected rows show discrete edit/copy/delete icon buttons, rename is triggered by clicking the layer name, and lock controls are hidden. | Static tests and browser smoke verified no overflow menu, selected-only controls, icon actions, and long-name wrapping. |
 | 25 | Completed | Selection/deselect interaction | Selected rows remain selected after `Done`; single-click deselect waits 200 ms so double-click chart editing still works. | Static test checks the delay/cancel plumbing; browser smoke verified double-click edit and single-click collapse behavior. |
 | 26 | Completed | Page navigation and metrics polish | The editor no longer shows a redundant `Load Builder` title, the primary nav order places Load Profiles between Storage and Rates, the Profiles button is aligned with the Library title, and aggregate metrics now show larger `Peak`, `Daily Energy`, and `Load Layers: N` stats. | Static tests and browser checks verified nav order, button alignment, and updated metrics text. |
+| 27 | Completed | AI-generated layer ordering | AI-generated rows are sorted at creation time by actual post-modifier shape characteristics, placing discrete/peaky event loads above broad baseline-like loads while keeping user drag/drop override available. | Assistant tests verify scrambled proposal loads are reordered into event-to-baseline stack order; full test suite passes. |
+| 28 | Completed | Layer hide/show | Rows support persisted hide/show through the existing `muted` field. Users can click legend items or the selected-row eye icon to hide/show a layer; aggregate math, aggregate chart, metrics, and layer charts exclude hidden rows while the row remains visible for reactivation. | Engine tests verify muted rows are excluded from aggregate math; static tests verify legend and eye icon hooks; full test suite passes. |
+| 29 | Completed | Residential template refinements | Residential templates now include hot tub/spa, well pump, sump/sewage pump, dehumidifier, and extra refrigeration. The clothes dryer template is a single 1.5-hour plateau at about `4 kWh` total instead of a two-pulse curve. | Engine tests verify template counts and dryer plateau duration/energy; assistant tests verify generated rows for missing medium loads. |
 
 ## Merged MVP State
 
@@ -53,8 +56,9 @@
 - Library templates are hardcoded defaults for now.
 - Adding Library loads is drag/drop only.
 - Saving is automatic while editing an existing named profile.
-- Selected row actions are discrete icon buttons for edit, copy, and delete.
+- Selected row actions are discrete icon buttons for hide/show, edit, copy, and delete; hide/show uses an eye / eye-off icon.
 - Layer rename is triggered by clicking the layer name.
+- Legend items are clickable hide/show controls and follow the same order as the Layers list.
 - Lock controls are hidden while the product direction is reconsidered.
 - Load Builder is isolated for now and does not yet feed other product areas.
 
@@ -71,7 +75,8 @@
 
 - Profiles use 15-minute intervals and 96 values per day.
 - Rows are created from normalized templates and scaled into absolute `kW` values.
-- Aggregate math, daily energy math, selection, duplication, delete, lock/unlock, and reorder all flow through pure helper functions.
+- Aggregate math, daily energy math, selection, duplication, delete, lock/unlock, hide/show, and reorder all flow through pure helper functions.
+- Hidden rows use `muted: true`; they remain in the profile JSON and layer list but are excluded from aggregate math and displayed as subdued/empty layer charts.
 - Drag/drop now supports dropping anywhere inside the Layers list, with insertion based on the nearest slot above or below the hovered row.
 
 ### UI and workflow
@@ -84,6 +89,8 @@
 - Aggregate and layer chart columns are aligned.
 - Aggregate and shell dividers use the same standard border treatment.
 - The aggregate legend aligns with the plot area, not the x-axis label row.
+- The aggregate legend follows the Layers list order; the aggregate chart keeps its own internal reversed stack order so the visual stack remains correct.
+- Clicking a legend item toggles that layer's hide/show state.
 - Individual layer fills stop at the true zero baseline.
 - Hover tooltips exist for aggregate and individual layer charts.
 - The aggregate chart always keeps its x-axis.
@@ -91,6 +98,7 @@
 - A selected layer expands vertically, shows an x-axis matching the aggregate chart, and pushes nearby layers down.
 - Selected layer info panels match the chart plot area height, excluding the x-axis label row.
 - Unselected layers hide Peak/Total stats and action buttons.
+- Hidden layers remain visible in the list with subdued styling and can be re-enabled from the legend or selected-row eye icon.
 - Layer titles can wrap to two lines.
 - Individual layer edit mode now includes:
   - selected-row icon-button `Edit`
@@ -117,6 +125,33 @@
   - This is intentional because the tooltip reports an instantaneous load value at a time sample.
   - `kWh` remains correct for total daily energy metrics, not point hover values.
 
+### Built-in residential templates
+
+The residential seed library currently includes:
+
+- Residential Base Load
+- Residential Lighting
+- Residential HVAC Cooling
+- Residential Heat Pump Heating
+- Residential EV Level 2
+- Electric Water Heater
+- Clothes Dryer
+- Dishwasher
+- Electric Range / Oven
+- Pool Pump
+- Furnace Fan
+- Hot Tub / Spa
+- Well Pump
+- Sump / Sewage Pump
+- Dehumidifier
+- Extra Refrigerator / Freezer
+
+Template notes:
+
+- Clothes Dryer is modeled as one 1.5-hour plateau at about `2.67 kW`, totaling about `4 kWh`.
+- Pool Pump supports runtime-style shaping through an `hours` modifier.
+- AI-generated WFH plug-load and occupancy-lighting shapes are created with modifiers on normal rows rather than as separate template families.
+
 ## Future Work To Preserve
 
 - Spline/profile editing
@@ -124,7 +159,6 @@
 - Rename profile from the switcher/landing workflow
 - Delete profile from the switcher/landing workflow
 - Editable peak scaling controls
-- Mute/unmute row actions
 - Change row color
 - Reset row to template
 - Scenario management beyond simple open/switch
@@ -151,6 +185,7 @@ Manual browser checks should continue to cover:
 - autosave and refresh persistence
 - drag/drop into empty and populated Layers states
 - row select/deselect, selected-only actions, and edit/copy/delete behavior
+- legend and eye-icon hide/show behavior, including aggregate metrics/chart updates
 - aggregate/layer chart alignment
 - selected-layer x-axis and expansion behavior
 - tooltip rendering
@@ -193,11 +228,14 @@ This PRD has been updated to reflect the implementation we merged, while preserv
 - Up to 25 individual load rows.
 - Group/category metadata for loads.
 - Row selection state.
-- Row info panel with grabber, title, category/group, selected-only peak/total values, and selected-only edit/copy/delete actions.
+- Row info panel with grabber, title, category/group, selected-only peak/total values, and selected-only hide/show/edit/copy/delete actions.
+- Selected-row hide/show action using an eye / eye-off icon.
 - Hardcoded Library templates.
 - Drag/drop row creation from Library templates.
 - Row reordering.
-- Selected-row icon actions for edit, copy, and delete.
+- Selected-row icon actions for hide/show, edit, copy, and delete.
+- Legend click toggles for layer hide/show, with hidden rows excluded from aggregate chart and metrics.
+- AI-generated row ordering by shape-derived baseline-ness before user edits.
 - Hover tooltips for aggregate and layer charts.
 - Point authoring in row edit mode:
   - double-click adds a point at the nearest 15-minute interval
@@ -454,6 +492,7 @@ individualAxisMax = Math.ceil(Math.max(...rows.map((row) => row.peak), 1));
 
 - Edit
 - Copy
+- Hide/show
 - Delete
 
 ### Future row/profile actions
@@ -461,7 +500,6 @@ individualAxisMax = Math.ceil(Math.max(...rows.map((row) => row.peak), 1));
 - Lock/unlock
 - Change group/category
 - Edit peak `kW`
-- Mute/unmute
 - Change color
 - Reset to Library template
 - Edit interval values numerically

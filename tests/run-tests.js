@@ -12,6 +12,7 @@ const { runNoLocalDomainFallbackTests } = require(path.join(__dirname, "client",
 const { runLoadProfilesServiceTests } = require(path.join(__dirname, "client", "load-profiles-service.test.js"));
 const { runLoadBuilderEngineTests } = require(path.join(__dirname, "frontend", "load-builder-engine.test.js"));
 const { runLoadBuilderStaticTests } = require(path.join(__dirname, "frontend", "load-builder-static.test.js"));
+const { runAiAssistantTests } = require(path.join(__dirname, "ai-assistant.test.js"));
 const { runRatesV4UiStateTests } = require(path.join(__dirname, "frontend", "rates-v4-ui-state.test.js"));
 const { runRatesV4CacheEngineTests } = require(path.join(__dirname, "frontend", "rates-v4-cache-engine.test.js"));
 const { runWeatherCoverageEngineTests } = require(path.join(__dirname, "frontend", "weather-coverage-engine.test.js"));
@@ -70,6 +71,7 @@ const run = async () => {
   runLoadProfilesServiceTests();
   runLoadBuilderEngineTests();
   runLoadBuilderStaticTests();
+  await runAiAssistantTests();
   runRatesV4UiStateTests();
   runRatesV4CacheEngineTests();
   runWeatherCoverageEngineTests();

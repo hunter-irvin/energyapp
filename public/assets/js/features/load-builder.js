@@ -149,9 +149,9 @@
       id: "residential-clothes-dryer",
       name: "Clothes Dryer",
       category: "Residential",
-      defaultPeakKw: 5,
+      defaultPeakKw: 2.67,
       color: "#f97316",
-      normalizedValues: combinedShape(() => 0.01, pulse(19.8, 0.55, 1), pulse(14, 0.55, 0.28)),
+      normalizedValues: buildTemplateValues((hour) => (hour >= 19 && hour < 20.5 ? 1 : 0)),
     },
     {
       id: "residential-dishwasher",
@@ -176,6 +176,54 @@
       defaultPeakKw: 1.5,
       color: "#38bdf8",
       normalizedValues: windowShape(10, 16, 0.01, 0.92, 0.4),
+    },
+    {
+      id: "residential-furnace-fan",
+      name: "Furnace Fan",
+      category: "Residential",
+      defaultPeakKw: 0.6,
+      color: "#c4b5fd",
+      normalizedValues: combinedShape(() => 0.03, pulse(6.5, 1.6, 0.75), pulse(20, 2.2, 0.62)),
+    },
+    {
+      id: "residential-hot-tub-spa",
+      name: "Hot Tub / Spa",
+      category: "Residential",
+      defaultPeakKw: 3.5,
+      color: "#f472b6",
+      normalizedValues: combinedShape(() => 0.18, pulse(18.8, 1.1, 0.74), pulse(22.2, 0.8, 0.38)),
+    },
+    {
+      id: "residential-well-pump",
+      name: "Well Pump",
+      category: "Residential",
+      defaultPeakKw: 1,
+      color: "#2dd4bf",
+      normalizedValues: combinedShape(() => 0.02, pulse(6.7, 0.35, 0.9), pulse(12.2, 0.32, 0.42), pulse(18.8, 0.4, 1)),
+    },
+    {
+      id: "residential-sump-sewage-pump",
+      name: "Sump / Sewage Pump",
+      category: "Residential",
+      defaultPeakKw: 0.8,
+      color: "#a78bfa",
+      normalizedValues: combinedShape(() => 0.01, pulse(4, 0.25, 0.58), pulse(11.5, 0.25, 0.44), pulse(21.5, 0.25, 0.68)),
+    },
+    {
+      id: "residential-dehumidifier",
+      name: "Dehumidifier",
+      category: "Residential",
+      defaultPeakKw: 0.6,
+      color: "#93c5fd",
+      normalizedValues: buildTemplateValues((hour) => 0.38 + 0.2 * smoothWindow(hour, 11, 23, 1.2) + 0.05 * Math.sin(hour * Math.PI * 2)),
+    },
+    {
+      id: "residential-extra-refrigeration",
+      name: "Extra Refrigerator / Freezer",
+      category: "Residential",
+      defaultPeakKw: 0.25,
+      color: "#86efac",
+      normalizedValues: buildTemplateValues((hour) => 0.54 + 0.12 * Math.sin((hour / 24) * Math.PI * 8) + 0.06 * smoothWindow(hour, 12, 21, 1)),
     },
     {
       id: "commercial-office-lighting",
@@ -415,6 +463,11 @@
       String(row.id) === String(rowId) ? { ...row, locked: !row.locked } : row
     );
 
+  const toggleRowMuted = (rows = [], rowId) =>
+    (Array.isArray(rows) ? rows : []).map((row) =>
+      String(row.id) === String(rowId) ? { ...row, muted: !row.muted } : row
+    );
+
   const renameRow = (rows = [], rowId, name = "") => {
     const trimmedName = String(name || "").trim();
     if (!trimmedName) return Array.isArray(rows) ? rows : [];
@@ -518,6 +571,50 @@
     });
     return segments;
   };
+
+  const getLoadStackBaselineScore = (row = {}) => {
+    const values = normalizeValues(row.values);
+    const peak = Math.max(...values, 0);
+    const kwh = calculateDailyEnergyKwh(values);
+    if (!peak || !kwh) return 0;
+    const activeThreshold = peak * 0.08;
+    const activeValues = values.filter((value) => value > activeThreshold);
+    const activeRatio = activeValues.length / Math.max(1, values.length);
+    const mean = values.reduce((sum, value) => sum + value, 0) / values.length;
+    const variance = values.reduce((sum, value) => sum + (value - mean) ** 2, 0) / values.length;
+    const coefficientOfVariation = mean ? Math.sqrt(variance) / mean : 0;
+    const sorted = values.slice().sort((left, right) => left - right);
+    const median = sorted[Math.floor(sorted.length / 2)] || 0;
+    const medianToPeak = peak ? median / peak : 0;
+    const segments = countActiveSegments(values, activeThreshold);
+    const peakToAverage = mean ? peak / mean : 0;
+
+    return (
+      activeRatio * 5 +
+      medianToPeak * 3 -
+      Math.min(coefficientOfVariation, 3) * 1.4 -
+      Math.min(Math.max(peakToAverage - 1, 0), 12) * 0.22 -
+      Math.min(Math.max(segments - 1, 0), 6) * 0.35
+    );
+  };
+
+  const sortRowsByLoadStackPosition = (rows = []) =>
+    (Array.isArray(rows) ? rows : [])
+      .map((row, index) => ({
+        row,
+        index,
+        baselineScore: getLoadStackBaselineScore(row),
+        kwh: calculateDailyEnergyKwh(row?.values),
+        peak: Math.max(...normalizeValues(row?.values), 0),
+      }))
+      .sort((left, right) => {
+        if (Math.abs(left.baselineScore - right.baselineScore) > 0.01) return left.baselineScore - right.baselineScore;
+        const leftPeaky = left.peak / Math.max(left.kwh, 0.001);
+        const rightPeaky = right.peak / Math.max(right.kwh, 0.001);
+        if (Math.abs(leftPeaky - rightPeaky) > 0.01) return rightPeaky - leftPeaky;
+        return left.index - right.index;
+      })
+      .map((item) => item.row);
 
   const findActiveEdgeIndices = (values = [], threshold = 0) => {
     const starts = [];
@@ -906,6 +1003,206 @@
   const scaleValues = (values = [], scaleFactor = 1) =>
     normalizeValues(values).map((value) => (value > 0 ? Math.max(0, value * Math.max(0, toNumber(scaleFactor, 1))) : 0));
 
+  const scaleValuesToDailyEnergy = (values = [], targetKwh = 0) => {
+    const source = normalizeValues(values);
+    const currentKwh = calculateDailyEnergyKwh(source);
+    const nextKwh = Math.max(0, toNumber(targetKwh, 0));
+    if (!currentKwh || !nextKwh) return source;
+    return scaleValues(source, nextKwh / currentKwh);
+  };
+
+  const shiftValuesByHours = (values = [], hours = 0) => wrapArray(values, Math.round(toNumber(hours, 0) * (60 / INTERVAL_MINUTES)));
+
+  const getTemplateById = (templateId) => BUILT_IN_TEMPLATES.find((template) => String(template.id) === String(templateId)) || null;
+
+  const getScheduledStartHour = (templateId, schedule) => {
+    const id = String(templateId || "");
+    const value = String(schedule || "");
+    if (id === "residential-ev-level-2") {
+      if (value === "daytime") return 10;
+      if (value === "evening") return 18;
+      return 21.5;
+    }
+    if (id === "residential-pool-pump") return 10;
+    if (id === "residential-clothes-dryer") {
+      if (value === "daytime") return 13;
+      if (value === "overnight") return 22;
+      return 19;
+    }
+    if (id === "residential-dishwasher") {
+      if (value === "daytime") return 12;
+      if (value === "overnight") return 23;
+      return 21;
+    }
+    return 10;
+  };
+
+  const buildRuntimeWindowValues = ({ templateId, peakKw = 0, hours = 0, schedule = "" } = {}) => {
+    const peak = Math.max(0, toNumber(peakKw, 0));
+    const runtimeHours = clamp(toNumber(hours, 0), 0, 24);
+    const values = Array.from({ length: INTERVALS_PER_DAY }, () => 0);
+    if (!peak || !runtimeHours) return values;
+    const startIndex = Math.round(getScheduledStartHour(templateId, schedule) * (60 / INTERVAL_MINUTES)) % INTERVALS_PER_DAY;
+    const fullIntervals = Math.floor(runtimeHours / INTERVAL_HOURS);
+    const partialHours = runtimeHours - fullIntervals * INTERVAL_HOURS;
+    for (let offset = 0; offset < fullIntervals; offset += 1) {
+      values[(startIndex + offset) % INTERVALS_PER_DAY] = peak;
+    }
+    if (partialHours > 0) {
+      values[(startIndex + fullIntervals) % INTERVALS_PER_DAY] = peak * (partialHours / INTERVAL_HOURS);
+    }
+    return values;
+  };
+
+  const buildCappedEnergyWindowValues = ({ templateId, peakKw = 0, kwh = 0, schedule = "" } = {}) => {
+    const peak = Math.max(0, toNumber(peakKw, 0));
+    let remainingKwh = Math.max(0, toNumber(kwh, 0));
+    const values = Array.from({ length: INTERVALS_PER_DAY }, () => 0);
+    if (!peak || !remainingKwh) return values;
+    const startIndex = Math.round(getScheduledStartHour(templateId, schedule) * (60 / INTERVAL_MINUTES)) % INTERVALS_PER_DAY;
+    for (let offset = 0; offset < INTERVALS_PER_DAY && remainingKwh > 0; offset += 1) {
+      const index = (startIndex + offset) % INTERVALS_PER_DAY;
+      const value = Math.min(peak, remainingKwh / INTERVAL_HOURS);
+      values[index] = value;
+      remainingKwh -= value * INTERVAL_HOURS;
+    }
+    return values;
+  };
+
+  const buildWorkdayWindowValues = (peakKw = 0) => {
+    const peak = Math.max(0, toNumber(peakKw, 0));
+    return buildTemplateValues((hour) => 0.06 + 0.94 * smoothWindow(hour, 8.5, 17.5, 1)).map((value) => value * peak);
+  };
+
+  const addOccupancyLighting = (values = [], occupancy = "") => {
+    const source = normalizeValues(values);
+    const peak = Math.max(...source, 0);
+    if (!peak) return source;
+    const daytimeFactor = {
+      away_weekdays: 0.03,
+      work_from_home: 0.18,
+      occupied_daytime: 0.24,
+    }[String(occupancy || "")] || 0;
+    if (!daytimeFactor) return source;
+    return source.map((value, index) => {
+      const hour = index / 4;
+      const daytimeValue = peak * daytimeFactor * smoothWindow(hour, 8, 17.75, 1.25);
+      return Math.max(value, daytimeValue);
+    });
+  };
+
+  const getScheduleShiftHours = (templateId, schedule) => {
+    const id = String(templateId || "");
+    if (id === "residential-ev-level-2") {
+      if (schedule === "daytime") return 12;
+      if (schedule === "evening") return -3;
+      return 0;
+    }
+    if (id === "residential-clothes-dryer") {
+      if (schedule === "daytime") return -6;
+      if (schedule === "overnight") return 3;
+      return 0;
+    }
+    if (id === "residential-dishwasher") {
+      if (schedule === "daytime") return -9;
+      if (schedule === "overnight") return 2;
+      return 0;
+    }
+    return 0;
+  };
+
+  const applyAssistantModifiers = (row = {}, modifiers = []) => {
+    let values = normalizeValues(row.values);
+    toArray(modifiers).forEach((modifier) => {
+      const type = String(modifier?.type || "");
+      if (type === "scale") values = scaleValues(values, toNumber(modifier.factor, 1));
+      if (type === "target_daily_energy") values = scaleValuesToDailyEnergy(values, modifier.kwh);
+      if (type === "time_shift") values = shiftValuesByHours(values, modifier.hours ?? modifier.shiftHours);
+      if (type === "schedule") values = shiftValuesByHours(values, getScheduleShiftHours(row.sourceTemplateId, modifier.value));
+      if (type === "hours") {
+        values = buildRuntimeWindowValues({
+          templateId: row.sourceTemplateId,
+          peakKw: Math.max(...values, toNumber(row.peak, 0)),
+          hours: modifier.hours,
+          schedule: modifier.value,
+        });
+      }
+      if (type === "ev_charging_profile") {
+        values = buildCappedEnergyWindowValues({
+          templateId: row.sourceTemplateId,
+          peakKw: modifier.peakKw || Math.max(...values, toNumber(row.peak, 0)),
+          kwh: modifier.kwh,
+          schedule: modifier.value || "overnight",
+        });
+      }
+      if (type === "workday_window") values = buildWorkdayWindowValues(Math.max(...values, toNumber(row.peak, 0)));
+      if (type === "occupancy_lighting") values = addOccupancyLighting(values, modifier.value);
+      if (type === "charging_concurrency" && modifier.value === "simultaneous" && row.aiFacts?.evCount > 1) {
+        values = scaleValues(values, row.aiFacts.evCount);
+      }
+      if (type === "climate_bucket" && row.sourceTemplateId === "residential-hvac-cooling" && modifier.value === "hot") {
+        values = scaleValues(values, 1.15);
+      }
+      if (type === "climate_bucket" && row.sourceTemplateId === "residential-heat-pump-heating" && modifier.value === "cold") {
+        values = scaleValues(values, 1.15);
+      }
+    });
+    return updateRowStats({ ...row, values });
+  };
+
+  const createRowsFromAssistantProposal = (proposal = {}, options = {}) => {
+    const loads = toArray(proposal.loads).slice(0, MAX_LOAD_ROWS);
+    const facts = proposal.facts && typeof proposal.facts === "object" ? proposal.facts : {};
+    const rows = [];
+    const errors = [];
+    loads.forEach((load, index) => {
+      const template = getTemplateById(load?.templateId);
+      if (!template) {
+        errors.push(`Unsupported template: ${load?.templateId || "unknown"}`);
+        return;
+      }
+      const row = createRowFromTemplate(template, {
+        id: options.idFactory ? options.idFactory(load, index) : uid("ai-load"),
+        name: load.name || template.name,
+        peakKw: load.peakKw ?? template.defaultPeakKw,
+        selected: false,
+      });
+      rows.push(
+        applyAssistantModifiers(
+          {
+            ...row,
+            group: template.category,
+            category: template.category,
+            aiAssisted: true,
+            aiReason: String(load.reason || "").trim(),
+            aiAssumption: String(load.assumption || "").trim(),
+            aiFacts: facts,
+            aiModifiers: toArray(load.modifiers),
+          },
+          load.modifiers
+        )
+      );
+    });
+    const sortedRows = sortRowsByLoadStackPosition(rows);
+    const selectedRowId = sortedRows[0]?.id || null;
+    return {
+      rows: selectedRowId ? selectRow(sortedRows, selectedRowId) : sortedRows,
+      selectedRowId,
+      errors,
+    };
+  };
+
+  const createProfileModelFromAssistantProposal = (proposal = {}, options = {}) => {
+    const converted = createRowsFromAssistantProposal(proposal, options);
+    return validateProfileModel({
+      ...createEmptyProfileModel(proposal.profileName || options.name || "AI Assisted Load Profile"),
+      rows: converted.rows,
+      selectedRowId: converted.selectedRowId,
+      aiAssisted: true,
+      aiGeneratedAt: new Date().toISOString(),
+    });
+  };
+
   const transformEditSession = (session = {}, transform = {}) => {
     const baseValues = normalizeValues(transform?.baseValues || session?.draftValues || session?.originalValues);
     const shiftIntervals = Math.round(toNumber(transform?.shiftIntervals, 0));
@@ -981,10 +1278,13 @@
     getIndividualAxisMax,
     updateRowStats,
     createRowFromTemplate,
+    createRowsFromAssistantProposal,
+    createProfileModelFromAssistantProposal,
     addRowFromTemplate,
     duplicateRow,
     deleteRow,
     toggleRowLocked,
+    toggleRowMuted,
     renameRow,
     reorderRows,
     getInsertionIndexFromPoint,

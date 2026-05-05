@@ -24,6 +24,7 @@ loadEnvFile(path.resolve(__dirname, ".env.local"));
 const { handleWeatherProxy, handleNrelCsvProxy } = require("./api/weather-proxy");
 const { handleLocationReverse } = require("./api/location-proxy");
 const { handleV4RatesProvider, handleV4RatesSeries } = require("./lib/rates/v4-rates-handlers");
+const { handleLoadProfileAssistant } = require("./lib/load-profile-assistant/assistant-handler");
 
 const SUPABASE_URL = process.env.ENERGYAPP_SUPABASE_URL || process.env.SUPABASE_URL || "";
 const SUPABASE_ANON_KEY = process.env.ENERGYAPP_SUPABASE_ANON_KEY || process.env.SUPABASE_ANON_KEY || "";
@@ -117,6 +118,10 @@ const server = http.createServer((req, res) => {
   }
   if (req.url.startsWith("/api/v4/rates/series")) {
     void handleV4RatesSeries(req, res);
+    return;
+  }
+  if (req.url.startsWith("/api/load-profile-assistant")) {
+    void handleLoadProfileAssistant(req, res);
     return;
   }
   if (req.url === "/api/runtime-config") {

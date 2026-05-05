@@ -9,7 +9,7 @@ const runLoadBuilderEngineTests = () => {
   assert.strictEqual(loadBuilder.MAX_LOAD_ROWS, 25);
   assert.strictEqual(loadBuilder.MIN_EDIT_POINTS, 2);
   assert.strictEqual(loadBuilder.MAX_EDIT_POINTS, 24);
-  assert.strictEqual(loadBuilder.BUILT_IN_TEMPLATES.length, 30, "Seed library should start with 30 templates.");
+  assert.strictEqual(loadBuilder.BUILT_IN_TEMPLATES.length, 36, "Seed library should include 36 templates after AI-18 residential additions.");
   assert.deepStrictEqual(
     Array.from(new Set(loadBuilder.BUILT_IN_TEMPLATES.map((template) => template.category))).sort(),
     ["Commercial", "Industrial", "Residential"],
@@ -23,13 +23,17 @@ const runLoadBuilderEngineTests = () => {
       assert.ok(value >= 0 && value <= 1, `${template.id} values should be normalized`);
     });
   });
-  ["Residential", "Commercial", "Industrial"].forEach((category) => {
-    assert.strictEqual(
-      loadBuilder.BUILT_IN_TEMPLATES.filter((template) => template.category === category).length,
-      10,
-      `${category} should start with 10 seed templates.`
-    );
-  });
+  assert.strictEqual(loadBuilder.BUILT_IN_TEMPLATES.filter((template) => template.category === "Residential").length, 16);
+  assert.strictEqual(loadBuilder.BUILT_IN_TEMPLATES.filter((template) => template.category === "Commercial").length, 10);
+  assert.strictEqual(loadBuilder.BUILT_IN_TEMPLATES.filter((template) => template.category === "Industrial").length, 10);
+  assert.ok(loadBuilder.BUILT_IN_TEMPLATES.some((template) => template.id === "residential-furnace-fan"));
+  assert.ok(loadBuilder.BUILT_IN_TEMPLATES.some((template) => template.id === "residential-hot-tub-spa"));
+  const dryerTemplate = loadBuilder.BUILT_IN_TEMPLATES.find((candidate) => candidate.id === "residential-clothes-dryer");
+  const dryerRow = loadBuilder.createRowFromTemplate(dryerTemplate, { id: "dryer" });
+  const dryerActiveValues = dryerRow.values.filter((value) => value > 0.01);
+  assert.strictEqual(dryerActiveValues.length, 6, "Dryer template should run for 1.5 hours at 15-minute intervals.");
+  assert.ok(dryerActiveValues.every((value) => Math.abs(value - dryerRow.peak) < 0.001), "Dryer template should be a plateau, not a smooth curve.");
+  assert.ok(Math.abs(loadBuilder.calculateDailyEnergyKwh(dryerRow.values) - 4) < 0.02, "Dryer template should total about 4 kWh.");
 
   const normalized = loadBuilder.normalizeValues([1, -2, "3", Number.NaN]);
   assert.strictEqual(normalized.length, 96);
@@ -92,6 +96,9 @@ const runLoadBuilderEngineTests = () => {
 
   const toggled = loadBuilder.toggleRowLocked([{ ...baseRow, id: "toggle", locked: false }], "toggle");
   assert.strictEqual(toggled[0].locked, true);
+  const mutedRows = loadBuilder.toggleRowMuted([{ ...baseRow, id: "mute", muted: false }], "mute");
+  assert.strictEqual(mutedRows[0].muted, true);
+  assert.strictEqual(loadBuilder.calculateAggregate(mutedRows)[0], 0);
 
   const renamed = loadBuilder.renameRow([{ ...baseRow, id: "rename-me", name: "Original" }], "rename-me", " New Name ");
   assert.strictEqual(renamed[0].name, "New Name");

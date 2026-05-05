@@ -144,6 +144,7 @@
       view: isBuilderOpen() ? "builder" : "landing",
       onCreateProfile: createProfile,
       onOpenProfile: openProfile,
+      onDeleteProfile: deleteProfile,
       onReturnToProfiles: returnToProfiles,
       onRenameProfile: renameProfile,
       onSelectRow: selectRow,
@@ -152,11 +153,14 @@
       onDuplicateRow: duplicateRow,
       onDeleteRow: deleteRow,
       onToggleLock: toggleLock,
+      onToggleRowMuted: toggleRowMuted,
       onRenameRow: renameRow,
       onEnterEditRow: enterEditRow,
       onCancelEditRow: cancelEditRow,
       onDoneEditRow: doneEditRow,
       onUpdateEditPoint: updateEditPoint,
+      onAssistantTurn: requestAssistantTurn,
+      onApplyAssistantProposal: applyAssistantProposal,
     });
   };
 
@@ -221,11 +225,36 @@
     scheduleAutosave();
   };
 
-  const createProfile = async (name) => {
+  const buildAssistantLocation = () => ({
+    lat: currentProject?.lat ?? null,
+    lng: currentProject?.lng ?? null,
+  });
+
+  const requestAssistantTurn = async (payload = {}) => {
+    const response = await fetch("/api/load-profile-assistant", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        ...payload,
+        projectId: currentProject?.id || "",
+        projectLocation: buildAssistantLocation(),
+      }),
+    });
+    const body = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      const message = Array.isArray(body.errors) ? body.errors.join(" ") : "AI generation failed.";
+      throw new Error(message);
+    }
+    return body;
+  };
+
+  const createProfile = async (name, assistantProposal = null) => {
     if (!currentProject?.id) return;
     await flushAutosave();
     editSession = null;
-    const model = loadBuilder.createEmptyProfileModel(name);
+    const model = assistantProposal?.loads?.length
+      ? loadBuilder.createProfileModelFromAssistantProposal(assistantProposal, { name })
+      : loadBuilder.createEmptyProfileModel(name);
     autosaveStatus = "Saving...";
     notice = "";
     render();
@@ -250,6 +279,19 @@
     }
   };
 
+  const applyAssistantProposal = async (name, assistantProposal = null) => {
+    if (!currentProfileId || !assistantProposal?.loads?.length) return;
+    editSession = null;
+    const nextModel = loadBuilder.createProfileModelFromAssistantProposal(assistantProposal, { name: name || currentModel.name });
+    currentModel = loadBuilder.validateProfileModel({
+      ...nextModel,
+      name: currentModel.name,
+    });
+    notice = "";
+    render();
+    scheduleAutosave();
+  };
+
   const openProfile = async (profileId) => {
     await flushAutosave();
     const profile = profiles.find((candidate) => String(candidate.id) === String(profileId));
@@ -261,6 +303,40 @@
     notice = "";
     setBrowserProfileUrl(profile.id);
     render();
+  };
+
+  const deleteProfile = async (profileId) => {
+    const profile = profiles.find((candidate) => String(candidate.id) === String(profileId));
+    if (!profile) return;
+    const profileName = profile.name || "Untitled Load Profile";
+    if (!window.confirm(`Delete "${profileName}"? This cannot be undone.`)) return;
+
+    if (autosaveTimer) {
+      clearTimeout(autosaveTimer);
+      autosaveTimer = null;
+    }
+    if (saveInFlight) await saveInFlight;
+
+    autosaveStatus = "Deleting...";
+    notice = "";
+    render();
+    try {
+      await withRetry(() => supabaseService.deleteLoadProfile(profile.id));
+      profiles = profiles.filter((candidate) => String(candidate.id) !== String(profile.id));
+      if (String(currentProfileId) === String(profile.id)) {
+        currentProfileId = null;
+        editSession = null;
+        currentModel = loadBuilder.createEmptyProfileModel("No Profile Selected");
+        setBrowserProfileUrl("");
+      }
+      autosaveStatus = profiles.length ? "Select a profile" : "No profile";
+      notice = `Deleted "${profileName}".`;
+      render();
+    } catch (error) {
+      autosaveStatus = currentProfileId ? "Autosaved" : profiles.length ? "Select a profile" : "No profile";
+      notice = "Could not delete the load profile.";
+      render();
+    }
   };
 
   const returnToProfiles = async () => {
@@ -361,6 +437,14 @@
     commitModel({
       ...currentModel,
       rows: loadBuilder.toggleRowLocked(currentModel.rows, rowId),
+    });
+  };
+
+  const toggleRowMuted = (rowId) => {
+    if (isEditingRow()) return;
+    commitModel({
+      ...currentModel,
+      rows: loadBuilder.toggleRowMuted(currentModel.rows, rowId),
     });
   };
 

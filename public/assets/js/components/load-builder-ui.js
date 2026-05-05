@@ -24,6 +24,12 @@
     const minutes = totalMinutes % 60;
     return `${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}`;
   };
+  const sentenceCase = (value = "") => {
+    const text = String(value || "");
+    const firstLetterIndex = text.search(/[A-Za-z]/);
+    if (firstLetterIndex < 0) return text;
+    return `${text.slice(0, firstLetterIndex)}${text.charAt(firstLetterIndex).toUpperCase()}${text.slice(firstLetterIndex + 1)}`;
+  };
   const getChartHoverIndex = (event, valueCount = 96) => {
     const count = Math.max(1, Number(valueCount) || 1);
     const rect = event.currentTarget.getBoundingClientRect();
@@ -233,6 +239,7 @@
     color,
     name,
     selected,
+    muted,
     maxValue,
     editSession,
     onEnterEditRow,
@@ -245,7 +252,7 @@
     const chartRef = ReactRef.useRef(null);
     const dragStateRef = ReactRef.useRef(null);
     const [hover, setHover] = ReactRef.useState(null);
-    const source = toArray(values);
+    const source = muted ? toArray(values).map(() => 0) : toArray(values);
     const isEditing = Boolean(editSession?.rowId) && String(editSession.rowId) === String(rowId);
     const controlPoints = toArray(editSession?.points);
     const selectedPointIds = toArray(editSession?.selectedPointIds);
@@ -324,7 +331,7 @@
       "div",
       {
         ref: chartRef,
-        className: `load-builder-mini-area${selected ? " is-selected" : ""}${isEditing ? " is-editing" : ""}`,
+        className: `load-builder-mini-area${selected ? " is-selected" : ""}${isEditing ? " is-editing" : ""}${muted ? " is-muted" : ""}`,
         onPointerMove: isEditing ? undefined : handlePointerMove,
         onPointerLeave: isEditing ? undefined : () => setHover(null),
         onDoubleClick: (event) => {
@@ -530,7 +537,7 @@
       },
     });
 
-  const LibraryPanel = ({ templates, canEdit, onDropTemplate }) => {
+  const LibraryPanel = ({ templates, canEdit, onDropTemplate, onOpenAiGen }) => {
     const [query, setQuery] = ReactRef.useState("");
     const [category, setCategory] = ReactRef.useState("All");
     const categories = ["All", "Residential", "Commercial", "Industrial"];
@@ -547,7 +554,7 @@
         "div",
         { className: "load-builder-panel-header" },
         e("h3", null, "Library"),
-        e("button", { className: "btn btn--icon", type: "button", disabled: true, title: "Custom templates arrive later" }, "+")
+        e("button", { className: "btn", type: "button", disabled: !canEdit, onClick: onOpenAiGen }, "AI Gen")
       ),
       e("input", {
         className: "load-builder-search",
@@ -614,13 +621,23 @@
               e("rect", { key: "back", ...common, x: 6, y: 3, width: 10, height: 10, rx: 1.5 }),
               e("rect", { key: "front", ...common, x: 3, y: 7, width: 10, height: 10, rx: 1.5 }),
             ]
-          : [
+          : name === "eye"
+            ? [
+                e("path", { key: "outline", ...common, d: "M2.5 10S5.3 5.5 10 5.5 17.5 10 17.5 10 14.7 14.5 10 14.5 2.5 10 2.5 10Z" }),
+                e("circle", { key: "pupil", ...common, cx: 10, cy: 10, r: 2.2 }),
+              ]
+            : name === "eye-off"
+              ? [
+                  e("path", { key: "slash", ...common, d: "M3.5 3.5 16.5 16.5" }),
+                  e("path", { key: "outline", ...common, d: "M2.5 10S5.3 5.5 10 5.5c1.1 0 2.1.25 3 .65M17.5 10s-2.8 4.5-7.5 4.5c-1.1 0-2.1-.24-3-.65" }),
+                ]
+              : [
               e("path", { key: "lid", ...common, d: "M3.5 5.5H16.5" }),
               e("path", { key: "can", ...common, d: "M6 5.5 6.8 17H13.2L14 5.5" }),
               e("path", { key: "handle", ...common, d: "M8 5.5 8.5 3.5H11.5L12 5.5" }),
               e("path", { key: "left", ...common, d: "M9 8.5V14" }),
               e("path", { key: "right", ...common, d: "M11 8.5V14" }),
-            ];
+              ];
     return e("svg", { className: "load-builder-row-action-icon", viewBox: "0 0 20 20", "aria-hidden": "true" }, ...children);
   };
 
@@ -642,10 +659,16 @@
       e(Icon, { name: icon })
     );
 
-  const RowActions = ({ row, isEditingAnyRow, onEnterEditRow, onDuplicateRow, onDeleteRow }) =>
+  const RowActions = ({ row, isEditingAnyRow, onEnterEditRow, onDuplicateRow, onDeleteRow, onToggleRowMuted }) =>
     e(
       "div",
       { className: "load-builder-row-actions", "aria-label": `${row.name || "Layer"} actions` },
+      e(RowActionButton, {
+        label: row.muted ? "Show layer" : "Hide layer",
+        icon: row.muted ? "eye-off" : "eye",
+        disabled: isEditingAnyRow,
+        onClick: () => onToggleRowMuted?.(row.id),
+      }),
       e(RowActionButton, {
         label: "Edit layer",
         icon: "edit",
@@ -666,7 +689,7 @@
       })
     );
 
-  const RowHeader = ({ row, isEditingAnyRow, onRenameRow, onEnterEditRow, onDuplicateRow, onDeleteRow }) => {
+  const RowHeader = ({ row, isEditingAnyRow, onRenameRow, onEnterEditRow, onDuplicateRow, onDeleteRow, onToggleRowMuted }) => {
     const [renaming, setRenaming] = ReactRef.useState(false);
     const [draftName, setDraftName] = ReactRef.useState(row.name || "Load");
     const inputRef = ReactRef.useRef(null);
@@ -761,13 +784,32 @@
             )
           : null,
         row.selected
-          ? e(RowActions, {
-              row,
-              isEditingAnyRow,
-              onEnterEditRow,
-              onDuplicateRow,
-              onDeleteRow,
-            })
+          ? e(
+              ReactRef.Fragment,
+              null,
+              row.aiReason
+                ? e(
+                    "button",
+                    {
+                      className: "load-builder-row-action load-builder-row-info-action",
+                      type: "button",
+                      title: row.aiReason,
+                      "aria-label": "AI reason",
+                      onPointerDown: (event) => event.stopPropagation(),
+                      onClick: (event) => event.stopPropagation(),
+                    },
+                    "i"
+                  )
+                : null,
+              e(RowActions, {
+                row,
+                isEditingAnyRow,
+                onEnterEditRow,
+                onDuplicateRow,
+                onDeleteRow,
+                onToggleRowMuted,
+              })
+            )
           : null
       )
     );
@@ -876,7 +918,7 @@
           "article",
           {
             key: row.id,
-            className: `load-builder-row${row.selected ? " is-selected" : ""}`,
+            className: `load-builder-row${row.selected ? " is-selected" : ""}${row.muted ? " is-muted" : ""}`,
             style: { gridTemplateColumns: `${INFO_PANEL_WIDTH}px minmax(0, 1fr)` },
             draggable: !isEditingAnyRow,
             onDragStart: (event) => {
@@ -892,6 +934,7 @@
             onEnterEditRow: props.onEnterEditRow,
             onDuplicateRow: props.onDuplicateRow,
             onDeleteRow: props.onDeleteRow,
+            onToggleRowMuted: props.onToggleRowMuted,
             onRenameRow: props.onRenameRow,
           }),
           e(
@@ -903,6 +946,7 @@
               color: row.color,
               name: row.name,
               selected: row.selected,
+              muted: row.muted,
               maxValue: axisMax,
               editSession: props.editSession,
               onEnterEditRow: props.onEnterEditRow,
@@ -919,39 +963,576 @@
     );
   };
 
-  const NewProfileModal = ({ open, onClose, onCreateProfile }) => {
-    const [name, setName] = ReactRef.useState("");
+  const ASSISTANT_MAX_UNCERTAINTY_SCORE = 360;
+  const getAssistantProgress = ({ description, facts, assistantResponse, interviewState }) => {
+    if (assistantResponse?.mode === "generate_profile" || interviewState?.recommendedStop) return 100;
+    if (!String(description || "").trim() && !Object.keys(facts || {}).length) return 0;
+    const progress = Number(interviewState?.progressPercent);
+    if (Number.isFinite(progress) && progress > 0) return Math.round(Math.min(98, Math.max(0, progress)));
+    const remaining = Number(interviewState?.remainingUncertaintyScore);
+    if (!Number.isFinite(remaining)) return 8;
+    return Math.round(Math.min(98, Math.max(8, (1 - remaining / ASSISTANT_MAX_UNCERTAINTY_SCORE) * 100)));
+  };
+  const ASSISTANT_FACILITY_TYPES = Object.freeze([
+    { id: "residential", label: "Residential", disabled: false },
+    { id: "commercial", label: "Commercial", disabled: true },
+    { id: "industrial", label: "Industrial", disabled: true },
+  ]);
+  const ASSISTANT_MAJOR_LOAD_OPTIONS = Object.freeze([
+    { id: "hvac", label: "Heat pump or AC", value: { hvacPresence: true } },
+    { id: "ev", label: "Electric vehicle charging", value: { hasEv: true } },
+    { id: "pool_spa", label: "Pool or hot tub", value: { hasPoolOrHotTub: true } },
+    { id: "electric_oven", label: "Electric oven", value: { electricCooking: true } },
+    { id: "electric_dryer", label: "Clothes dryer", value: { dryerType: "electric" } },
+    {
+      id: "none_of_these",
+      label: "None of these",
+      value: {
+        hvacPresence: false,
+        hasEv: false,
+        hasPoolOrHotTub: false,
+        hasPoolPump: false,
+        hasHotTubSpa: false,
+        electricCooking: false,
+        dryerType: "non_electric_or_none",
+      },
+    },
+  ]);
+  const mergeAssistantFacts = (...sources) =>
+    sources.reduce((merged, source) => {
+      Object.entries(source || {}).forEach(([key, value]) => {
+        if (value != null && value !== "") merged[key] = value;
+      });
+      return merged;
+    }, {});
+
+  const InlineEditableText = ({ value, placeholder, className, editing, multiline = false, onEdit, onChange, onBlur }) => {
+    const displayValue = String(value || "").trim();
+    if (!editing && displayValue) {
+      return e(
+        "button",
+        {
+          className,
+          type: "button",
+          onClick: onEdit,
+        },
+        displayValue
+      );
+    }
+    const sharedProps = {
+      value,
+      placeholder,
+      onChange,
+      onBlur,
+    };
+    return multiline ? e("textarea", { ...sharedProps, rows: 3 }) : e("input", { ...sharedProps, autoFocus: true });
+  };
+
+  const NewProfileModal = ({ open, onClose, onCreateProfile, onAssistantTurn, assistantOnly = false, initialName = "", actionLabel = "Create profile" }) => {
+    const [name, setName] = ReactRef.useState(initialName || "");
+    const [description, setDescription] = ReactRef.useState("");
+    const [facilityType, setFacilityType] = ReactRef.useState("residential");
+    const [majorLoadChecklist, setMajorLoadChecklist] = ReactRef.useState([]);
+    const [showAssistant, setShowAssistant] = ReactRef.useState(Boolean(assistantOnly));
+    const [editingName, setEditingName] = ReactRef.useState(true);
+    const [editingDescription, setEditingDescription] = ReactRef.useState(true);
+    const [answers, setAnswers] = ReactRef.useState([]);
+    const [facts, setFacts] = ReactRef.useState({});
+    const [interviewState, setInterviewState] = ReactRef.useState({});
+    const [assistantResponse, setAssistantResponse] = ReactRef.useState(null);
+    const [proposalLoads, setProposalLoads] = ReactRef.useState([]);
+    const [history, setHistory] = ReactRef.useState([]);
+    const [pendingAnswerText, setPendingAnswerText] = ReactRef.useState("");
+    const [selectedQuestionOptions, setSelectedQuestionOptions] = ReactRef.useState([]);
+    const [questionCustomSelected, setQuestionCustomSelected] = ReactRef.useState(false);
+    const [questionCustomText, setQuestionCustomText] = ReactRef.useState("");
+    const [loading, setLoading] = ReactRef.useState(false);
+    const [error, setError] = ReactRef.useState("");
     ReactRef.useEffect(() => {
-      if (open) setName("");
-    }, [open]);
+      if (!open) return;
+      setName(initialName || (assistantOnly ? "" : "Load Profile Name"));
+      setDescription("");
+      setFacilityType("residential");
+      setMajorLoadChecklist([]);
+      setShowAssistant(Boolean(assistantOnly));
+      setEditingName(true);
+      setEditingDescription(true);
+      setAnswers([]);
+      setFacts({});
+      setInterviewState({});
+      setAssistantResponse(null);
+      setProposalLoads([]);
+      setHistory([]);
+      setPendingAnswerText("");
+      setSelectedQuestionOptions([]);
+      setQuestionCustomSelected(false);
+      setQuestionCustomText("");
+      setLoading(false);
+      setError("");
+    }, [open, initialName]);
     if (!open) return null;
     const trimmed = name.trim();
+    const isReview = assistantResponse?.mode === "generate_profile";
+    const isQuestion = assistantResponse?.mode === "ask_followup";
+    const hasStartedAssistant = showAssistant && (Boolean(assistantResponse) || loading || answers.length > 0 || history.length > 0);
+    const assistantProgressValue = getAssistantProgress({ description, facts, assistantResponse, interviewState });
+    const modalTitle = hasStartedAssistant ? trimmed || assistantResponse?.profileName || initialName || "Load Profile Name" : assistantOnly ? "Generate with AI" : "New Load Profile";
+    const buildReviewSummary = () => {
+      const facts = assistantResponse?.facts || {};
+      const loads = proposalLoads.map((load) => load.name || load.templateId).filter(Boolean);
+      const descriptors = [
+        facts.squareFeet ? `${formatNumber(facts.squareFeet, 0)} sq ft` : "",
+        facts.occupancy === "work_from_home" ? "work-from-home" : "",
+        facts.evCount ? `${formatNumber(facts.evCount, 0)} EV` : "",
+        facts.waterHeating ? `${String(facts.waterHeating).replace(/_/g, " ")} water heating` : "",
+        facts.hvacType ? `${String(facts.hvacType).replace(/_/g, " ")} HVAC` : "",
+      ].filter(Boolean);
+      const loadText = loads.slice(0, 4).join(", ");
+      return `Thank you for your responses, based on your answers you have a ${descriptors.join(", ") || "residential"} profile with ${loadText || "typical residential loads"}.`;
+    };
+    const buildSnapshot = () => ({
+      answers,
+      facts,
+      interviewState,
+      assistantResponse,
+      proposalLoads,
+      description,
+      facilityType,
+      majorLoadChecklist,
+    });
+    const buildInitialIntakeFacts = () => {
+      const checklistDefaults = {
+        hvacPresence: false,
+        hasEv: false,
+        hasPoolOrHotTub: false,
+        hasPoolPump: false,
+        hasHotTubSpa: false,
+        electricCooking: false,
+        dryerType: "non_electric_or_none",
+      };
+      const checklistFacts = majorLoadChecklist.reduce((merged, optionId) => {
+        const option = ASSISTANT_MAJOR_LOAD_OPTIONS.find((item) => item.id === optionId);
+        return mergeAssistantFacts(merged, option?.value);
+      }, checklistDefaults);
+      return mergeAssistantFacts({ projectType: facilityType || "residential" }, checklistFacts);
+    };
+    const resetQuestionInputs = () => {
+      setSelectedQuestionOptions([]);
+      setQuestionCustomSelected(false);
+      setQuestionCustomText("");
+    };
+    const runAssistant = async ({ forceGenerate = false, answer = null } = {}) => {
+      if (!onAssistantTurn || loading) return;
+      const nextAnswers = answer ? [...answers, answer] : answers;
+      const requestFacts = mergeAssistantFacts(buildInitialIntakeFacts(), facts);
+      setHistory((items) => [...items, buildSnapshot()]);
+      setAnswers(nextAnswers);
+      setLoading(true);
+      setError("");
+      try {
+        const response = await onAssistantTurn({
+          profileName: trimmed || initialName || "Load Profile Name",
+          description,
+          facts: requestFacts,
+          answers: nextAnswers,
+          interviewState,
+          forceGenerate,
+        });
+        setAssistantResponse(response);
+        setFacts(mergeAssistantFacts(requestFacts, answer?.value, response?.facts, response?.interviewState?.facts));
+        setInterviewState(response?.interviewState || {});
+        setProposalLoads(toArray(response?.loads));
+        resetQuestionInputs();
+        if (response?.profileName && !trimmed) setName(response.profileName);
+      } catch (requestError) {
+        setError(requestError?.message || "Unable to generate profile.");
+      } finally {
+        setLoading(false);
+      }
+    };
+    const goBack = () => {
+      const previous = history[history.length - 1];
+      if (!previous) return;
+      setHistory((items) => items.slice(0, -1));
+      setAnswers(previous.answers || []);
+      setFacts(previous.facts || {});
+      setInterviewState(previous.interviewState || {});
+      setAssistantResponse(previous.assistantResponse || null);
+      setProposalLoads(previous.proposalLoads || []);
+      setDescription(previous.description || "");
+      setFacilityType(previous.facilityType || "residential");
+      setMajorLoadChecklist(previous.majorLoadChecklist || []);
+      setPendingAnswerText("");
+      resetQuestionInputs();
+      setError("");
+    };
+    const submitOption = (option) => {
+      setPendingAnswerText(option.label || option.id || "selected answer");
+      runAssistant({
+        answer: {
+          questionId: assistantResponse?.question?.id,
+          optionId: option.id,
+          value: option.value || {},
+        },
+      });
+    };
+    const submitCustom = () => {
+      const customText = String(questionCustomText || "").trim();
+      if (!customText) return;
+      setPendingAnswerText(customText);
+      runAssistant({
+        answer: {
+          questionId: assistantResponse?.question?.id,
+          customText,
+        },
+      });
+      setQuestionCustomText("");
+    };
+    const toggleMajorLoad = (optionId) => {
+      setMajorLoadChecklist((items) => {
+        if (optionId === "none_of_these") return items.includes(optionId) ? [] : ["none_of_these"];
+        const withoutNone = items.filter((item) => item !== "none_of_these");
+        return withoutNone.includes(optionId) ? withoutNone.filter((item) => item !== optionId) : [...withoutNone, optionId];
+      });
+    };
+    const toggleQuestionOption = (optionId) => {
+      setSelectedQuestionOptions((items) => {
+        if (optionId === "none_of_these") return items.includes(optionId) ? [] : ["none_of_these"];
+        const withoutNone = items.filter((item) => item !== "none_of_these");
+        return withoutNone.includes(optionId) ? withoutNone.filter((item) => item !== optionId) : [...withoutNone, optionId];
+      });
+    };
+    const submitMultipleOptions = () => {
+      const options = toArray(assistantResponse?.question?.options);
+      const selectedOptions = options.filter((option) => selectedQuestionOptions.includes(option.id));
+      const customText = questionCustomSelected ? String(questionCustomText || "").trim() : "";
+      const allowEmptySelection = ["major_load_screen", "medium_load_screen"].includes(assistantResponse?.question?.id);
+      if (!selectedOptions.length && !customText && !allowEmptySelection) return;
+      const value = selectedOptions.reduce((merged, option) => mergeAssistantFacts(merged, option.value), {});
+      const selectedText = [
+        ...selectedOptions.map((option) => option.label || option.id).filter(Boolean),
+        customText ? `Other: ${customText}` : "",
+      ].filter(Boolean);
+      if (assistantResponse?.question?.id === "major_load_screen") value.majorLoadScreenComplete = true;
+      if (assistantResponse?.question?.id === "medium_load_screen") value.mediumLoadScreenComplete = true;
+      setPendingAnswerText(selectedText.join(", ") || "None selected");
+      runAssistant({
+        answer: {
+          questionId: assistantResponse?.question?.id,
+          optionId: selectedOptions.map((option) => option.id).join(","),
+          selectedOptionIds: selectedOptions.map((option) => option.id),
+          customText,
+          value,
+        },
+      });
+    };
+    const skipToReview = () => {
+      setPendingAnswerText("skip");
+      runAssistant({ forceGenerate: true });
+    };
+    const createFromProposal = () => {
+      if (!isReview) return;
+      onCreateProfile?.(trimmed || assistantResponse.profileName || "Load Profile Name", {
+        ...assistantResponse,
+        profileName: trimmed || assistantResponse.profileName,
+        loads: proposalLoads,
+      });
+      onClose();
+    };
     return e(
       "div",
       { className: "load-builder-modal-backdrop", role: "presentation" },
       e(
         "section",
         { className: "load-builder-modal", role: "dialog", "aria-modal": "true", "aria-labelledby": "load-builder-new-profile-title" },
-        e("h3", { id: "load-builder-new-profile-title" }, "New Load Profile"),
-        e("label", null, "Profile name"),
-        e("input", { value: name, onChange: (event) => setName(event.target.value), autoFocus: true }),
         e(
           "div",
-          { className: "load-builder-modal__actions" },
-          e("button", { className: "btn", type: "button", onClick: onClose }, "Cancel"),
-          e(
-            "button",
-            {
-              className: "btn btn--primary",
-              type: "button",
-              disabled: !trimmed,
-              onClick: () => {
-                onCreateProfile?.(trimmed);
-                onClose();
+          { className: "load-builder-modal__header" },
+          e("h3", { id: "load-builder-new-profile-title" }, modalTitle),
+          hasStartedAssistant
+            ? e(
+                "div",
+                {
+                  className: "load-builder-ai-progress load-builder-ai-progress--header",
+                  role: "progressbar",
+                  "aria-valuemin": 0,
+                  "aria-valuemax": 100,
+                  "aria-valuenow": assistantProgressValue,
+                },
+                e("span", { style: { width: `${assistantProgressValue}%` } })
+              )
+            : null,
+          e("button", { className: "btn load-builder-modal__close", type: "button", onClick: onClose }, "Cancel")
+        ),
+        !hasStartedAssistant ? e("label", null, "Profile name") : null,
+        !hasStartedAssistant
+          ? e(InlineEditableText, {
+              value: name,
+              placeholder: "Load Profile Name",
+              className: "load-builder-modal-editable-text load-builder-modal-editable-text--title",
+              editing: editingName,
+              onEdit: () => setEditingName(true),
+              onChange: (event) => setName(event.target.value),
+              onBlur: () => {
+                if (String(name || "").trim()) setEditingName(false);
               },
-            },
-            "Create"
-          )
+            })
+          : null,
+        !assistantOnly && !showAssistant
+          ? e(
+              "div",
+              { className: "load-builder-modal__actions load-builder-modal__actions--inline load-builder-modal__choice-actions" },
+              e(
+                "button",
+                {
+                  className: "btn",
+                  type: "button",
+                  disabled: loading,
+                  onClick: () => setShowAssistant(true),
+                },
+                "AI Generated"
+              ),
+              e("span", { className: "load-builder-modal__choice-separator" }, "or"),
+              e(
+                "button",
+                {
+                  className: "btn",
+                  type: "button",
+                  disabled: !trimmed || loading,
+                  onClick: () => {
+                    onCreateProfile?.(trimmed);
+                    onClose();
+                  },
+                },
+                "Custom"
+              ),
+            )
+          : null,
+        showAssistant
+          ? e(
+              "div",
+              { className: "load-builder-ai-panel" },
+              !assistantResponse && !loading
+                ? e(
+                    "div",
+                    { className: "load-builder-ai-intake-controls" },
+                    e(
+                      "div",
+                      { className: "load-builder-ai-facility-toggle", role: "radiogroup", "aria-label": "Facility type" },
+                      ...ASSISTANT_FACILITY_TYPES.map((type) =>
+                        e(
+                          "button",
+                          {
+                            key: type.id,
+                            className: `btn load-builder-ai-facility-option${facilityType === type.id ? " is-selected" : ""}`,
+                            type: "button",
+                            role: "radio",
+                            "aria-checked": facilityType === type.id,
+                            disabled: type.disabled || loading,
+                            onClick: () => setFacilityType(type.id),
+                          },
+                          type.label
+                        )
+                      )
+                    ),
+                    e(
+                      "fieldset",
+                      { className: "load-builder-ai-checklist" },
+                      e("legend", null, "Check to confirm if your facility has any of the following:"),
+                      ...ASSISTANT_MAJOR_LOAD_OPTIONS.map((option) =>
+                        e(
+                          "label",
+                          { key: option.id, className: "load-builder-ai-checklist-option" },
+                          e("input", {
+                            type: "checkbox",
+                            checked: majorLoadChecklist.includes(option.id),
+                            disabled: loading,
+                            onChange: () => toggleMajorLoad(option.id),
+                          }),
+                          e("span", null, option.label)
+                        )
+                      )
+                    ),
+                    e("label", null, "Please describe any nuances about your daily electricity use"),
+                    e(InlineEditableText, {
+                      value: description,
+                      multiline: true,
+                      editing: editingDescription,
+                      className: "load-builder-modal-editable-text load-builder-modal-editable-text--description",
+                      placeholder: "Example: EV charging is usually overnight, someone works from home most weekdays, or laundry usually runs in the evening.",
+                      onEdit: () => setEditingDescription(true),
+                      onChange: (event) => setDescription(event.target.value),
+                      onBlur: () => {},
+                    })
+                  )
+                : null,
+              !assistantResponse
+                ? e(
+                    "button",
+                    {
+                      className: "btn btn--primary",
+                      type: "button",
+                      disabled: loading,
+                      onClick: () => runAssistant(),
+                    },
+                    loading ? "Thinking..." : "Start"
+                  )
+                : null,
+              isQuestion
+                ? e(
+                    "div",
+                    { className: "load-builder-ai-question" },
+                    e("h4", null, sentenceCase(assistantResponse.question.text)),
+                    assistantResponse.question.why ? e("p", { className: "load-builder-muted" }, sentenceCase(assistantResponse.question.why)) : null,
+                    loading
+                      ? e(
+                          "div",
+                          { className: "load-builder-ai-pending" },
+                          e("span", null, sentenceCase(pendingAnswerText || "Answer received")),
+                          e(
+                            "p",
+                            { className: "load-builder-ai-loading-text" },
+                            "Working on the next step",
+                            e("span", { className: "load-builder-ai-loading-dots", "aria-hidden": "true" }, e("i"), e("i"), e("i"))
+                          )
+                        )
+                      : assistantResponse.question.selectionType === "multiple"
+                        ? e(
+                            "div",
+                            { className: "load-builder-ai-options load-builder-ai-options--multiple" },
+                            ...toArray(assistantResponse.question.options).map((option) =>
+                              e(
+                                "label",
+                                { key: option.id, className: "load-builder-ai-option load-builder-ai-option--checkbox" },
+                                e("input", {
+                                  type: "checkbox",
+                                  checked: selectedQuestionOptions.includes(option.id),
+                                  disabled: loading,
+                                  onChange: () => toggleQuestionOption(option.id),
+                                }),
+                                e("span", null, sentenceCase(option.label))
+                              )
+                            ),
+                            assistantResponse.question.allowCustomResponse
+                              ? e(
+                                  "label",
+                                  { className: "load-builder-ai-option load-builder-ai-option--checkbox load-builder-ai-option--custom" },
+                                  e("input", {
+                                    type: "checkbox",
+                                    checked: questionCustomSelected,
+                                    disabled: loading,
+                                    onChange: () => setQuestionCustomSelected((selected) => !selected),
+                                  }),
+                                  e("span", null, "Other"),
+                                  e("input", {
+                                    id: "load-builder-ai-custom-answer",
+                                    value: questionCustomText,
+                                    disabled: loading || !questionCustomSelected,
+                                    placeholder: "Type a different answer...",
+                                    onChange: (event) => setQuestionCustomText(event.target.value),
+                                  })
+                                )
+                              : null,
+                            e(
+                              "button",
+                              {
+                                className: "btn btn--primary",
+                                type: "button",
+                                disabled:
+                                  loading ||
+                                  (!["major_load_screen", "medium_load_screen"].includes(assistantResponse?.question?.id) &&
+                                    !selectedQuestionOptions.length &&
+                                    !(questionCustomSelected && String(questionCustomText || "").trim())),
+                                onClick: submitMultipleOptions,
+                              },
+                              "Continue"
+                            )
+                          )
+                        : e(
+                          "div",
+                          { className: "load-builder-ai-options" },
+                          ...toArray(assistantResponse.question.options).map((option) =>
+                            e(
+                              "button",
+                              { key: option.id, className: "btn load-builder-ai-option", type: "button", disabled: loading, onClick: () => submitOption(option) },
+                              sentenceCase(option.label)
+                            )
+                          ),
+                          e(
+                            "div",
+                            { className: "load-builder-ai-option load-builder-ai-option--custom" },
+                            e("span", null, "Other"),
+                            e("input", {
+                              id: "load-builder-ai-custom-answer",
+                              value: questionCustomText,
+                              placeholder: "Type a different answer...",
+                              onChange: (event) => setQuestionCustomText(event.target.value),
+                            }),
+                            e("button", { className: "btn", type: "button", disabled: loading, onClick: submitCustom }, "Send")
+                          )
+                        )
+                  )
+                : null,
+              isReview
+                ? e(
+                    "div",
+                    { className: "load-builder-ai-review" },
+                    e("h4", null, "Load Preview:"),
+                    e("p", { className: "load-builder-muted" }, buildReviewSummary()),
+                    e(
+                      "div",
+                      { className: "load-builder-ai-loads" },
+                      ...proposalLoads.map((load, index) =>
+                        e(
+                          "article",
+                          { key: `${load.templateId}-${index}`, className: "load-builder-ai-load" },
+                          e(
+                            "div",
+                            { className: "load-builder-ai-load__body" },
+                            e("strong", null, load.name || load.templateId),
+                            load.assumption ? e("p", null, load.assumption) : null,
+                            load.templateId === "residential-ev-level-2" && assistantResponse.facts?.evEfficiencyKwhPerMile
+                              ? e("span", null, `EV efficiency: ${Number(assistantResponse.facts.evEfficiencyKwhPerMile).toFixed(2)} kWh/mile`)
+                              : null
+                          ),
+                          e(
+                            "button",
+                            {
+                              className: "load-builder-row-action load-builder-ai-load__remove",
+                              type: "button",
+                              title: `Remove ${load.name || "load"}`,
+                              "aria-label": `Remove ${load.name || "load"}`,
+                              onClick: () => setProposalLoads((loads) => loads.filter((_load, loadIndex) => loadIndex !== index)),
+                            },
+                            e(Icon, { name: "delete" })
+                          )
+                        )
+                      )
+                    )
+                  )
+                : null,
+              error ? e("div", { className: "status status--warning" }, error) : null
+            )
+          : null,
+        e(
+          "div",
+          { className: `load-builder-modal__actions${isQuestion ? " load-builder-modal__actions--split" : ""}` },
+          history.length ? e("button", { className: "btn", type: "button", disabled: loading, onClick: goBack }, "Back") : null,
+          isQuestion
+            ? e("button", { className: "btn btn--primary", type: "button", disabled: loading, title: "Start with that", onClick: skipToReview }, "Skip")
+            : null,
+          isReview
+            ? e(
+                "button",
+                {
+                  className: "btn btn--primary",
+                  type: "button",
+                  disabled: loading || !proposalLoads.length,
+                  onClick: createFromProposal,
+                },
+                actionLabel
+              )
+            : null
         )
       )
     );
@@ -1073,6 +1654,25 @@
     );
   };
 
+  const ProfileDeleteButton = ({ profile, onDeleteProfile }) =>
+    e(
+      "button",
+      {
+        className: "load-builder-profile-delete",
+        type: "button",
+        title: `Delete ${profile?.name || "profile"}`,
+        "aria-label": `Delete ${profile?.name || "profile"}`,
+        onClick: (event) => {
+          event.stopPropagation();
+          onDeleteProfile?.(profile?.id);
+        },
+        onKeyDown: (event) => {
+          event.stopPropagation();
+        },
+      },
+      e(Icon, { name: "delete" })
+    );
+
   const LoadProfilesLanding = (props) => {
     const [newOpen, setNewOpen] = ReactRef.useState(false);
     const profiles = toArray(props.profiles);
@@ -1138,14 +1738,29 @@
                     )
                   ),
                   e("td", null, profile.updatedAt ? new Date(profile.updatedAt).toLocaleString() : "Not saved yet"),
-                  e("td", null, e(ProfilePreview, { profile }))
+                  e(
+                    "td",
+                    null,
+                    e(
+                      "div",
+                      { className: "load-builder-profile-preview-actions" },
+                      e(ProfilePreview, { profile }),
+                      e(ProfileDeleteButton, { profile, onDeleteProfile: props.onDeleteProfile })
+                    )
+                  )
                 )
               )
             )
           )
         )
       ),
-      e(NewProfileModal, { open: newOpen, onClose: () => setNewOpen(false), onCreateProfile: props.onCreateProfile })
+      e(NewProfileModal, {
+        open: newOpen,
+        onClose: () => setNewOpen(false),
+        onCreateProfile: props.onCreateProfile,
+        onAssistantTurn: props.onAssistantTurn,
+        actionLabel: "Create profile",
+      })
     );
   };
 
@@ -1154,6 +1769,7 @@
     const [profilesOpen, setProfilesOpen] = ReactRef.useState(false);
     const rows = toArray(props.model?.rows);
     const aggregateRows = getAggregateLayerRows(rows);
+    const legendRows = rows;
     const aggregateStats = props.aggregateStats || {};
 
     return e(
@@ -1182,7 +1798,7 @@
               { className: "load-builder-editor-heading" },
               e("button", { className: "btn btn--primary", type: "button", onClick: props.onReturnToProfiles }, "Profiles")
             ),
-            e(LibraryPanel, { templates: props.templates, canEdit: props.canEdit, onDropTemplate: props.onDropTemplate })
+            e(LibraryPanel, { templates: props.templates, canEdit: props.canEdit, onDropTemplate: props.onDropTemplate, onOpenAiGen: () => setNewOpen(true) })
           ),
           e(
             "section",
@@ -1232,11 +1848,18 @@
                   "aside",
                   { className: "load-builder-legend" },
                   e("span", null, "Legend"),
-                  aggregateRows.length
-                    ? aggregateRows.map((row) =>
+                  legendRows.length
+                    ? legendRows.map((row) =>
                         e(
-                          "p",
-                          { key: row.id },
+                          "button",
+                          {
+                            key: row.id,
+                            className: `load-builder-legend-item${row.muted ? " is-muted" : ""}`,
+                            type: "button",
+                            title: row.muted ? `Show ${row.name || "load"}` : `Hide ${row.name || "load"}`,
+                            "aria-pressed": !row.muted,
+                            onClick: () => props.onToggleRowMuted?.(row.id),
+                          },
                           e("i", { style: { background: row.color || "currentColor" }, "aria-hidden": "true" }),
                           row.name || "Load"
                         )
@@ -1255,7 +1878,15 @@
           )
         )
       ),
-      e(NewProfileModal, { open: newOpen, onClose: () => setNewOpen(false), onCreateProfile: props.onCreateProfile })
+      e(NewProfileModal, {
+        open: newOpen,
+        onClose: () => setNewOpen(false),
+        onCreateProfile: props.onApplyAssistantProposal,
+        onAssistantTurn: props.onAssistantTurn,
+        assistantOnly: true,
+        initialName: props.currentProfile?.name || "",
+        actionLabel: "Replace loads",
+      })
             )
     );
   };
