@@ -114,34 +114,364 @@ let openMeteoTelemetry = {
 let selectionMode = false;
 let marker = null;
 let hoverMarker = null;
+let suppressMapMovePersistenceUntil = 0;
+let mapStatePersistTimer = null;
+let lastPersistedMapStateJson = "";
 
+const weatherMapState = window.EnergyWeatherMapState || {};
+const MAP_MODES = weatherMapState.MAP_MODES || {
+  STREET: "street",
+  SATELLITE: "satellite",
+  THREE_D: "3d",
+};
+const DEFAULT_MAP_MODE = weatherMapState.DEFAULT_MAP_MODE || MAP_MODES.SATELLITE;
+const DEFAULT_MAP_CENTER = [-105.1786, 39.742];
+const DEFAULT_MAP_ZOOM = 10;
+const OPENFREEMAP_STYLE_URL = "https://tiles.openfreemap.org/styles/liberty";
+const SATELLITE_SOURCE_ID = "esri-world-imagery";
+const SATELLITE_LAYER_ID = "esri-world-imagery-layer";
+const TERRAIN_SOURCE_ID = "terrain-dem";
+const BUILDING_3D_LAYER_ID = "building-3d";
+const BUILDING_3D_STREET_MIN_ZOOM = 14;
+const BUILDING_3D_MIN_ZOOM = 15;
+const DEFAULT_3D_PITCH = weatherMapState.DEFAULT_3D_PITCH || 55;
+const TERRAIN_EXAGGERATION = 1.1;
 
-const map = L.map("map", {
-  zoomControl: false,
-}).setView([39.742, -105.1786], 10);
+const normalizeMapMode =
+  weatherMapState.normalizeMapMode || ((mode) => (Object.values(MAP_MODES).includes(mode) ? mode : DEFAULT_MAP_MODE));
 
-const streetLayer = L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
-  attribution: "&copy; OpenStreetMap contributors",
+const suppressMapMovePersistence = (durationMs = 600) => {
+  suppressMapMovePersistenceUntil = Math.max(suppressMapMovePersistenceUntil, Date.now() + durationMs);
+};
+
+const queueMapStatePersist = (delayMs = 250) => {
+  if (mapStatePersistTimer) {
+    clearTimeout(mapStatePersistTimer);
+  }
+  mapStatePersistTimer = setTimeout(() => {
+    mapStatePersistTimer = null;
+    void persistMapState();
+  }, delayMs);
+};
+
+const toLngLatArray = ({ lat, lng }) => [Number(lng), Number(lat)];
+
+const toLocationObject = (lngLat) => ({
+  lat: Number(lngLat.lat),
+  lng: Number(lngLat.lng),
 });
 
-const satelliteLayer = L.tileLayer(
-  "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
-  {
-    attribution: "Tiles &copy; Esri",
+const createWeatherMapAdapter = () => {
+  if (!window.maplibregl) {
+    throw new Error("MapLibre GL JS is required for the weather map.");
   }
-);
 
-satelliteLayer.addTo(map);
-L.control
-  .layers(
-    {
-      Street: streetLayer,
-      Satellite: satelliteLayer,
+  let activeMode = DEFAULT_MAP_MODE;
+  let last3dCamera = {
+    pitch: DEFAULT_3D_PITCH,
+    bearing: 0,
+  };
+  let defaultVectorVisibility = new Map();
+
+  const mapInstance = new maplibregl.Map({
+    container: "map",
+    style: OPENFREEMAP_STYLE_URL,
+    center: DEFAULT_MAP_CENTER,
+    zoom: DEFAULT_MAP_ZOOM,
+    pitch: 0,
+    bearing: 0,
+    maxPitch: 75,
+    attributionControl: true,
+  });
+
+  mapInstance.addControl(
+    new maplibregl.NavigationControl({
+      showCompass: false,
+      showZoom: true,
+      visualizePitch: true,
+    }),
+    "top-right"
+  );
+
+  const updateModeButtons = () => {
+    document.querySelectorAll("[data-weather-map-mode]").forEach((button) => {
+      const selected = button.getAttribute("data-weather-map-mode") === activeMode;
+      button.classList.toggle("is-active", selected);
+      button.setAttribute("aria-pressed", String(selected));
+    });
+  };
+
+  const addModeControl = () => {
+    const control = {
+      onAdd() {
+        const container = document.createElement("div");
+        container.className = "maplibregl-ctrl maplibregl-ctrl-group weather-map-mode-control";
+        [
+          [MAP_MODES.SATELLITE, "Satellite"],
+          [MAP_MODES.STREET, "Street"],
+          [MAP_MODES.THREE_D, "3D"],
+        ].forEach(([mode, label]) => {
+          const button = document.createElement("button");
+          button.type = "button";
+          button.textContent = label;
+          button.setAttribute("data-weather-map-mode", mode);
+          button.setAttribute("aria-pressed", String(mode === activeMode));
+          button.addEventListener("click", () => setMode(mode, { persist: true }));
+          container.appendChild(button);
+        });
+        return container;
+      },
+      onRemove() {},
+    };
+    mapInstance.addControl(control, "top-left");
+  };
+
+  const getStyleLayers = () => mapInstance.getStyle().layers || [];
+
+  const rememberDefaultVectorVisibility = () => {
+    defaultVectorVisibility = new Map();
+    getStyleLayers().forEach((layer) => {
+      if (layer.id !== SATELLITE_LAYER_ID) {
+        defaultVectorVisibility.set(layer.id, layer.layout?.visibility || "visible");
+      }
+    });
+  };
+
+  const getFirstOverlayLayerId = () => {
+    const overlayLayer = getStyleLayers().find((layer) => isVectorOverlayLayer(layer));
+    return overlayLayer?.id || undefined;
+  };
+
+  const isLabelOverlayLayer = (layer) => {
+    if (!layer || layer.type !== "symbol") return false;
+    const id = String(layer.id || "");
+    return (
+      id.includes("label") ||
+      id.includes("name") ||
+      id.includes("shield") ||
+      id.startsWith("poi_") ||
+      id === "airport"
+    );
+  };
+
+  const isVectorOverlayLayer = (layer) => layer?.id === BUILDING_3D_LAYER_ID || isLabelOverlayLayer(layer);
+
+  const addSharedSources = () => {
+    if (!mapInstance.getSource(SATELLITE_SOURCE_ID)) {
+      mapInstance.addSource(SATELLITE_SOURCE_ID, {
+        type: "raster",
+        tiles: ["https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"],
+        tileSize: 256,
+        attribution: "Tiles &copy; Esri",
+      });
+    }
+    if (!mapInstance.getLayer(SATELLITE_LAYER_ID)) {
+      mapInstance.addLayer(
+        {
+          id: SATELLITE_LAYER_ID,
+          type: "raster",
+          source: SATELLITE_SOURCE_ID,
+          layout: {
+            visibility: [MAP_MODES.SATELLITE, MAP_MODES.THREE_D].includes(activeMode) ? "visible" : "none",
+          },
+        },
+        getFirstOverlayLayerId()
+      );
+    }
+    if (!mapInstance.getSource(TERRAIN_SOURCE_ID)) {
+      mapInstance.addSource(TERRAIN_SOURCE_ID, {
+        type: "raster-dem",
+        tiles: ["https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png"],
+        tileSize: 256,
+        encoding: "terrarium",
+        maxzoom: 15,
+        attribution:
+          '<a href="https://registry.opendata.aws/terrain-tiles/" target="_blank" rel="noopener">AWS Open Data Terrain Tiles</a>',
+      });
+    }
+  };
+
+  const setLayerVisibility = (layerId, visible) => {
+    if (mapInstance.getLayer(layerId)) {
+      mapInstance.setLayoutProperty(layerId, "visibility", visible ? "visible" : "none");
+    }
+  };
+
+  const restoreStreetVectorLayers = () => {
+    getStyleLayers().forEach((layer) => {
+      if (layer.id === SATELLITE_LAYER_ID) return;
+      setLayerVisibility(layer.id, defaultVectorVisibility.get(layer.id) !== "none");
+    });
+    restoreBuilding3dStyle();
+  };
+
+  const applySatelliteLabelLayers = () => {
+    getStyleLayers().forEach((layer) => {
+      if (layer.id === SATELLITE_LAYER_ID) return;
+      setLayerVisibility(layer.id, isLabelOverlayLayer(layer));
+    });
+    restoreBuilding3dStyle();
+  };
+
+  const restoreBuilding3dStyle = () => {
+    if (!mapInstance.getLayer(BUILDING_3D_LAYER_ID)) return;
+    mapInstance.setLayerZoomRange(BUILDING_3D_LAYER_ID, BUILDING_3D_STREET_MIN_ZOOM, 24);
+    mapInstance.setPaintProperty(BUILDING_3D_LAYER_ID, "fill-extrusion-color", "hsl(35,8%,85%)");
+    mapInstance.setPaintProperty(BUILDING_3D_LAYER_ID, "fill-extrusion-opacity", 0.8);
+  };
+
+  const applySatellite3dOverlayLayers = () => {
+    getStyleLayers().forEach((layer) => {
+      if (layer.id === SATELLITE_LAYER_ID) return;
+      setLayerVisibility(layer.id, isVectorOverlayLayer(layer));
+    });
+
+    if (mapInstance.getLayer(BUILDING_3D_LAYER_ID)) {
+      mapInstance.setLayerZoomRange(BUILDING_3D_LAYER_ID, BUILDING_3D_MIN_ZOOM, 24);
+      mapInstance.setPaintProperty(BUILDING_3D_LAYER_ID, "fill-extrusion-color", "rgba(221, 226, 232, 0.92)");
+      mapInstance.setPaintProperty(BUILDING_3D_LAYER_ID, "fill-extrusion-opacity", 0.56);
+    }
+  };
+
+  const applyLayerMode = (mode) => {
+    const showSatellite = [MAP_MODES.SATELLITE, MAP_MODES.THREE_D].includes(mode);
+    setLayerVisibility(SATELLITE_LAYER_ID, showSatellite);
+    if (mode === MAP_MODES.STREET) {
+      restoreStreetVectorLayers();
+    } else if (mode === MAP_MODES.SATELLITE) {
+      applySatelliteLabelLayers();
+    } else {
+      applySatellite3dOverlayLayers();
+    }
+  };
+
+  const applyCameraConstraints = (mode, options = {}) => {
+    const is3d = mode === MAP_MODES.THREE_D;
+    if (is3d) {
+      mapInstance.dragRotate.enable();
+      mapInstance.touchZoomRotate.enableRotation();
+      const pitch = Number.isFinite(options.pitch) ? options.pitch : last3dCamera.pitch;
+      const bearing = Number.isFinite(options.bearing) ? options.bearing : last3dCamera.bearing;
+      mapInstance.easeTo({ pitch, bearing, duration: options.animate === false ? 0 : 350 });
+      mapInstance.setTerrain({ source: TERRAIN_SOURCE_ID, exaggeration: TERRAIN_EXAGGERATION });
+      return;
+    }
+
+    mapInstance.dragRotate.disable();
+    mapInstance.touchZoomRotate.disableRotation();
+    mapInstance.easeTo({ pitch: 0, bearing: 0, duration: options.animate === false ? 0 : 250 });
+    mapInstance.setTerrain(null);
+  };
+
+  const applyMode = (mode, options = {}) => {
+    activeMode = normalizeMapMode(mode);
+    addSharedSources();
+    applyLayerMode(activeMode);
+    applyCameraConstraints(activeMode, options);
+    updateModeButtons();
+    if (options.persist) {
+      queueMapStatePersist(options.animate === false ? 0 : 450);
+    }
+  };
+
+  function setMode(mode, options = {}) {
+    const nextMode = normalizeMapMode(mode);
+    if (activeMode === MAP_MODES.THREE_D && nextMode !== MAP_MODES.THREE_D) {
+      last3dCamera = {
+        pitch: mapInstance.getPitch(),
+        bearing: mapInstance.getBearing(),
+      };
+    }
+    applyMode(nextMode, options);
+  }
+
+  mapInstance.on("style.load", () => {
+    rememberDefaultVectorVisibility();
+    addSharedSources();
+    applyMode(activeMode, { animate: false });
+  });
+  mapInstance.on("error", (event) => {
+    const message = event?.error?.message || "Map rendering error.";
+    setStatus({ loading: false, error: message });
+  });
+  mapInstance.dragRotate.disable();
+  mapInstance.touchZoomRotate.disableRotation();
+  addModeControl();
+  updateModeButtons();
+
+  return {
+    map: mapInstance,
+    getMode: () => activeMode,
+    setMode,
+    restoreState(state = {}) {
+      suppressMapMovePersistence();
+      const center =
+        state?.center && Number.isFinite(state.center.lat) && Number.isFinite(state.center.lng)
+          ? toLngLatArray(state.center)
+          : DEFAULT_MAP_CENTER;
+      const zoom = Number.isFinite(state?.zoom) ? state.zoom : DEFAULT_MAP_ZOOM;
+      const mode = normalizeMapMode(state?.mode);
+      if (Number.isFinite(state?.pitch) || Number.isFinite(state?.bearing)) {
+        last3dCamera = {
+          pitch: Number.isFinite(state.pitch) ? state.pitch : DEFAULT_3D_PITCH,
+          bearing: Number.isFinite(state.bearing) ? state.bearing : 0,
+        };
+      }
+      mapInstance.jumpTo({ center, zoom });
+      setMode(mode, {
+        animate: false,
+        pitch: mode === MAP_MODES.THREE_D ? last3dCamera.pitch : 0,
+        bearing: mode === MAP_MODES.THREE_D ? last3dCamera.bearing : 0,
+      });
     },
-    {},
-    { position: "topright", collapsed: false }
-  )
-  .addTo(map);
+    setView({ lat, lng }, zoom = DEFAULT_MAP_ZOOM) {
+      suppressMapMovePersistence();
+      mapInstance.jumpTo({ center: toLngLatArray({ lat, lng }), zoom });
+    },
+    createMarker(location, options = {}) {
+      return new maplibregl.Marker({
+        draggable: Boolean(options.draggable),
+        color: options.color || "#2563eb",
+      })
+        .setLngLat(toLngLatArray(location))
+        .addTo(mapInstance);
+    },
+    removeMarker(mapMarker) {
+      mapMarker?.remove?.();
+    },
+    getState() {
+      const center = mapInstance.getCenter();
+      const bounds = mapInstance.getBounds();
+      return {
+        center: { lat: center.lat, lng: center.lng },
+        zoom: mapInstance.getZoom(),
+        bounds: {
+          north: bounds.getNorth(),
+          south: bounds.getSouth(),
+          east: bounds.getEast(),
+          west: bounds.getWest(),
+        },
+        mode: activeMode,
+        pitch: activeMode === MAP_MODES.THREE_D ? mapInstance.getPitch() : last3dCamera.pitch,
+        bearing: activeMode === MAP_MODES.THREE_D ? mapInstance.getBearing() : last3dCamera.bearing,
+      };
+    },
+    toLocationObject,
+  };
+};
+
+const weatherMap = createWeatherMapAdapter();
+const map = weatherMap.map;
+if (window.location.search.includes("debug")) {
+  window.__weatherMapDebug = {
+    getState: () => weatherMap.getState(),
+    getCamera: () => ({
+      pitch: map.getPitch(),
+      bearing: map.getBearing(),
+      zoom: map.getZoom(),
+    }),
+  };
+}
 
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -163,29 +493,28 @@ const withRetry = async (operation, { retries = 2, delayMs = 400 } = {}) => {
 };
 
 const getMapState = () => {
-  const center = map.getCenter();
-  const bounds = map.getBounds();
-  return {
-    center: { lat: center.lat, lng: center.lng },
-    zoom: map.getZoom(),
-    bounds: {
-      north: bounds.getNorth(),
-      south: bounds.getSouth(),
-      east: bounds.getEast(),
-      west: bounds.getWest(),
-    },
-  };
+  return weatherMap.getState();
 };
 
 const persistMapState = async () => {
   if (!currentProject) {
     return;
   }
-  const state = getMapState();
+  const currentCity = currentProject?.mapState?.city;
+  const state = {
+    ...getMapState(),
+    ...(currentCity ? { city: currentCity } : {}),
+  };
+  const nextStateJson = JSON.stringify(state);
+  if (nextStateJson === lastPersistedMapStateJson) {
+    return;
+  }
+  lastPersistedMapStateJson = nextStateJson;
   currentProject = { ...currentProject, mapState: state };
   try {
     currentProject = await withRetry(() => supabaseService.updateProject(currentProject.id, { mapState: state }));
   } catch (error) {
+    lastPersistedMapStateJson = "";
     setStatus({ loading: false, error: "Could not save map position. Retrying may help." });
   }
 };
@@ -236,17 +565,17 @@ const applyProjectToUi = (project) => {
   if (project.lat != null && project.lng != null) {
     locationValue.textContent = formatLocationText(project);
     if (!marker) {
-      marker = L.marker([project.lat, project.lng], { draggable: true }).addTo(map);
+      marker = weatherMap.createMarker({ lat: project.lat, lng: project.lng }, { draggable: true });
       marker.on("dragend", (dragEvent) => {
-        void updateLocation(dragEvent.target.getLatLng());
+        void updateLocation(weatherMap.toLocationObject(dragEvent.target.getLngLat()));
       });
     } else {
-      marker.setLatLng([project.lat, project.lng]);
+      marker.setLngLat(toLngLatArray({ lat: project.lat, lng: project.lng }));
     }
   } else {
     locationValue.textContent = "No location selected";
     if (marker) {
-      map.removeLayer(marker);
+      weatherMap.removeMarker(marker);
       marker = null;
     }
   }
@@ -255,10 +584,13 @@ const applyProjectToUi = (project) => {
   }
 
   const mapState = project.mapState || null;
+  lastPersistedMapStateJson = mapState ? JSON.stringify(mapState) : "";
   if (mapState?.center && typeof mapState.zoom === "number") {
-    map.setView([mapState.center.lat, mapState.center.lng], mapState.zoom);
+    weatherMap.restoreState(mapState);
   } else if (project.lat != null && project.lng != null) {
-    map.setView([project.lat, project.lng], 10);
+    weatherMap.setView({ lat: project.lat, lng: project.lng }, 10);
+  } else {
+    weatherMap.restoreState({ mode: DEFAULT_MAP_MODE });
   }
 
   setProjectDate(project);
@@ -2588,11 +2920,11 @@ mapButton.addEventListener("click", () => {
   }
 
   if (selectionMode && !hoverMarker) {
-    hoverMarker = L.marker(map.getCenter(), { opacity: 0.6 }).addTo(map);
+    hoverMarker = weatherMap.createMarker(toLocationObject(map.getCenter()), { color: "#64748b" });
   }
 
   if (!selectionMode && hoverMarker) {
-    map.removeLayer(hoverMarker);
+    weatherMap.removeMarker(hoverMarker);
     hoverMarker = null;
   }
 });
@@ -2602,7 +2934,7 @@ map.on("mousemove", (event) => {
     return;
   }
 
-  hoverMarker.setLatLng(event.latlng);
+  hoverMarker.setLngLat(event.lngLat);
 });
 
 map.on("click", async (event) => {
@@ -2610,23 +2942,24 @@ map.on("click", async (event) => {
     return;
   }
 
+  const nextLocation = weatherMap.toLocationObject(event.lngLat);
   if (!marker) {
-    marker = L.marker(event.latlng, { draggable: true }).addTo(map);
+    marker = weatherMap.createMarker(nextLocation, { draggable: true });
     marker.on("dragend", (dragEvent) => {
-      void updateLocation(dragEvent.target.getLatLng());
+      void updateLocation(weatherMap.toLocationObject(dragEvent.target.getLngLat()));
     });
   } else {
-    marker.setLatLng(event.latlng);
+    marker.setLngLat(event.lngLat);
   }
 
-  await updateLocation(event.latlng);
+  await updateLocation(nextLocation);
   await persistMapState();
   selectionMode = false;
   mapButton.classList.remove("is-active");
   updateMapButtonLabel();
 
   if (hoverMarker) {
-    map.removeLayer(hoverMarker);
+    weatherMap.removeMarker(hoverMarker);
     hoverMarker = null;
   }
 
@@ -2638,7 +2971,10 @@ map.on("click", async (event) => {
 });
 
 map.on("moveend", () => {
-  persistMapState();
+  if (Date.now() < suppressMapMovePersistenceUntil) {
+    return;
+  }
+  queueMapStatePersist();
 });
 
 const loadProjectWeather = async () => {

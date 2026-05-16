@@ -17,6 +17,7 @@ const { runRatesV4UiStateTests } = require(path.join(__dirname, "frontend", "rat
 const { runRatesV4CacheEngineTests } = require(path.join(__dirname, "frontend", "rates-v4-cache-engine.test.js"));
 const { runWeatherCoverageEngineTests } = require(path.join(__dirname, "frontend", "weather-coverage-engine.test.js"));
 const { runWeatherSyncBusTests } = require(path.join(__dirname, "frontend", "weather-sync-bus.test.js"));
+const { runWeatherMapStateTests } = require(path.join(__dirname, "frontend", "weather-map-state.test.js"));
 const { runV4RatesAggregationTests } = require(path.join(__dirname, "rates", "v4-aggregation.test.js"));
 const { runV4RatesContractTests } = require(path.join(__dirname, "api", "v4", "rates-contracts.test.js"));
 const { runV4ProviderRouteTests } = require(path.join(__dirname, "api", "v4", "provider-route.test.js"));
@@ -76,6 +77,7 @@ const run = async () => {
   runRatesV4CacheEngineTests();
   runWeatherCoverageEngineTests();
   runWeatherSyncBusTests();
+  runWeatherMapStateTests();
   runV4RatesAggregationTests();
   await runV4RatesContractTests();
   await runV4ProviderRouteTests();

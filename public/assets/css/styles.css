@@ -548,6 +548,59 @@ h6 {
   border: 1px solid var(--color-border-default);
 }
 
+.weather-map-mode-control {
+  display: inline-flex;
+  align-items: stretch;
+  overflow: hidden;
+  background: var(--color-bg-panel-2);
+  border: 1px solid var(--color-border-strong);
+  border-radius: 0;
+  box-shadow: var(--shadow-sm);
+}
+
+.weather-map-mode-control.maplibregl-ctrl-group button,
+.weather-map-mode-control button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  width: auto;
+  height: 32px;
+  min-width: 58px;
+  margin: 0;
+  padding: 0 12px;
+  background: var(--color-bg-panel-2);
+  border: 0;
+  border-right: 1px solid var(--color-text-muted);
+  border-radius: 0;
+  color: var(--color-text-secondary);
+  font-family: var(--font-family-base);
+  font-size: var(--type-label-size);
+  font-weight: var(--font-weight-semibold);
+  line-height: 1;
+  letter-spacing: 0.05em;
+  text-align: center;
+  text-transform: uppercase;
+  transform: none;
+}
+
+.weather-map-mode-control.maplibregl-ctrl-group button:last-child,
+.weather-map-mode-control button:last-child {
+  border-right: 0;
+}
+
+.weather-map-mode-control.maplibregl-ctrl-group button:hover,
+.weather-map-mode-control button:hover {
+  background: var(--color-bg-muted);
+  color: var(--color-text-primary);
+}
+
+.weather-map-mode-control.maplibregl-ctrl-group button.is-active,
+.weather-map-mode-control button.is-active {
+  background: var(--color-accent-primary);
+  color: var(--color-accent-contrast);
+}
+
 .toolbar {
   display: flex;
   justify-content: space-between;
